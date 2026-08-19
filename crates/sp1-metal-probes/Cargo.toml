@@ -1,0 +1,23 @@
+[package]
+name = "sp1-metal-probes"
+version.workspace = true
+edition.workspace = true
+description = "Per-kernel parity and throughput probes for an SP1 Metal proving backend on Apple Silicon."
+publish = false
+
+[dependencies]
+metal.workspace = true
+rand.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slop-algebra.workspace = true
+slop-alloc.workspace = true
+slop-koala-bear.workspace = true
+slop-multilinear.workspace = true
+slop-symmetric.workspace = true
+slop-tensor.workspace = true
+
+[[bin]]
+name = "probes"
+path = "src/main.rs"

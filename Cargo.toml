@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/sp1-metal-probes"]
+exclude = ["crates/sp1-profile-host"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+slop-algebra = "=6.4.0"
+slop-alloc = "=6.4.0"
+slop-koala-bear = "=6.4.0"
+slop-multilinear = "=6.4.0"
+slop-symmetric = "=6.4.0"
+slop-tensor = "=6.4.0"
+metal = "0.29"
+rand = "0.8"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
