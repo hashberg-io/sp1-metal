@@ -12,10 +12,11 @@ Implemented 2026-08-19; throughput numbers are deliberately absent — no probe 
 
 ## The probes, in the order they should be run
 
-1. **Span profile** (the decisive one, no Metal involved): prove a real workload on the CPU prover with `RUST_LOGGER=flat RUST_LOG=debug`, then run `tools/span_profile.py` on the log.
+1. **Span profile** (the decisive one, no Metal involved): prove a real workload on the CPU prover with `RUST_LOGGER=flat RUST_LOG=debug`, capturing both streams (`> prove.log 2>&1` — the flat logger writes spans to stdout and colours them even into a file), then run `tools/span_profile.py` on the log.
    This yields the phase-fraction vector that determines the maximum achievable end-to-end speedup; everything else refines the per-phase factors.
    Most hosts do not call `setup_logger()`, so the profiling host is usually the way in, and it does not need the guest's source: run the real host once with `SP1_DUMP=1` and sp1-sdk writes `program.bin` and `stdin.bin` for the proof it was about to generate, then exits.
    Replaying that pair through `sp1-profile-host --elf program.bin --stdin-bin stdin.bin` proves the same workload under span timing, leaving the host that produced it untouched.
+   Span busy times are summed across threads, so they measure CPU work rather than wall time; reading the shares as wall-clock shares assumes every phase parallelises about equally.
 2. `probes triad` — streaming bandwidth on integer lanes; the hard ceiling for fold-shaped kernels, and the number to compare against the CPU's share of the same unified-memory pool.
 3. `probes imul` — register-resident add / 32×32-lo / mulhi / KoalaBear-Montgomery throughput; the mulhi rate is unpublished by Apple and decides the field-multiply ceiling.
    `--cpu` adds the CPU's own register-resident packed multiply ceiling, which is what tells you whether a kernel sitting at the GPU's roofline is beating the CPU's hardware or only beating one particular loop.

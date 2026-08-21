@@ -7,12 +7,13 @@
 //! that exact workload under span timing, without touching the host that
 //! produced them.
 //!
-//! Run with `RUST_LOGGER=flat RUST_LOG=debug` and capture stderr:
+//! Run with `RUST_LOGGER=flat RUST_LOG=debug`. The flat logger writes its span
+//! lines to stdout, not stderr, so capture both:
 //!
 //! ```sh
 //! SP1_DUMP=1 path/to/real-host              # writes program.bin, stdin.bin
 //! RUST_LOGGER=flat RUST_LOG=debug cargo run --release -- \
-//!     --elf program.bin --stdin-bin stdin.bin --mode compressed 2> prove.log
+//!     --elf program.bin --stdin-bin stdin.bin --mode compressed > prove.log 2>&1
 //! python3 ../../tools/span_profile.py prove.log --json profile.json
 //! ```
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Aggregate tracing span timings from an SP1 CPU prover log into phase buckets.
 
-Feed it the stderr/stdout of an SP1 host built with `sp1_sdk::utils::setup_logger()` and run with `RUST_LOGGER=flat RUST_LOG=debug`.
+Feed it the output of an SP1 host built with `sp1_sdk::utils::setup_logger()` and run with `RUST_LOGGER=flat RUST_LOG=debug`.
+The flat logger writes to stdout and colours its output even when that is a file, so capture with `> prove.log 2>&1`; this script strips the escape codes itself.
 The flat logger emits one `close time.busy=.. time.idle=..` line per completed span; busy time includes time spent in child spans entered on the same thread, so this script reports exclusive time per span path (total minus direct children) before bucketing.
 Phase fractions from this profile are the main input to tools/fit_model.py.
 """
@@ -12,6 +13,7 @@ import re
 import sys
 from collections import defaultdict
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 LINE_RE = re.compile(
     r"^\S+\s+(?:INFO|DEBUG|TRACE|WARN|ERROR)\s+(?P<path>.+?):\s+close\s+"
     r"time\.busy=(?P<busy>\S+)\s+time\.idle=(?P<idle>\S+)\s*$"
@@ -84,7 +86,7 @@ def span_path(raw: str) -> tuple[str, ...]:
 def parse_log(lines: list[str]) -> dict[tuple[str, ...], float]:
     totals: dict[tuple[str, ...], float] = defaultdict(float)
     for line in lines:
-        match = LINE_RE.match(line.rstrip())
+        match = LINE_RE.match(ANSI_RE.sub("", line).rstrip())
         if match is None:
             continue
         path = span_path(match.group("path"))
