@@ -192,10 +192,19 @@ def main() -> int:
         print(f"  {phase:<12}{span:<18}{why}")
     if args.factors:
         stem = args.factors.removesuffix(".json")
-        for label, index in (("low", 0), ("high", 1)):
+        import math
+
+        vectors = {
+            "low": {k: v[0] for k, v in f.items()},
+            # The geometric mean of the two ends: the number to plan against,
+            # since neither end is a likely outcome on its own.
+            "mid": {k: math.sqrt(v[0] * v[1]) for k, v in f.items()},
+            "high": {k: v[1] for k, v in f.items()},
+        }
+        for label, vector in vectors.items():
             path = f"{stem}-{label}.json"
             with open(path, "w", encoding="utf-8") as out:
-                json.dump({k: v[index] for k, v in f.items()}, out, indent=2, sort_keys=True)
+                json.dump(vector, out, indent=2, sort_keys=True)
                 out.write("\n")
             print(f"wrote {path}")
     return 0
