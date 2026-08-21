@@ -50,6 +50,8 @@ def table(results: list[dict[str, Any]]) -> list[tuple[str, str, float]]:
         for kernel, node in r.get("kernels", {}).items():
             if (v := ratio(node)) is not None:
                 rows.append((name, kernel, v))
+        if "butterfly_stage" in r and (v := ratio(r["butterfly_stage"])) is not None:
+            rows.append((name, "ntt_stage", v))
     return rows
 
 
@@ -83,7 +85,10 @@ def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]
     if zc is not None:
         out["zerocheck"] = (zc, zc, "zerocheck probe vs packed cache-tiled CPU")
     p2 = rows.get(("poseidon2", "poseidon2"))
-    if p2 is not None:
+    encode = probe(results, "encode")
+    if p2 is not None and encode is not None:
+        out["commit"] = commit_factor(results, encode, p2, rows)
+    elif p2 is not None:
         out["commit"] = (stream, p2, "ENCODE UNPRICED: streaming ratio to Poseidon2 ratio")
     fold = [rows[k] for k in [("fold", n) for n in ("fold_ext", "flv_ext", "fold_base", "flv_base")] if k in rows]
     if fold:
@@ -94,6 +99,37 @@ def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]
     if zc is not None:
         out["recursion"] = (min(zc, stream), zc, "same shapes as a shard proof, at a fraction of the size")
     return out
+
+
+def commit_factor(
+    results: list[dict[str, Any]],
+    encode: dict[str, Any],
+    p2_ratio: float,
+    rows: dict[tuple[str, str], float],
+) -> tuple[float, float, str]:
+    """Committing a trace is a Reed-Solomon encode followed by a Merkle tree, so
+    its factor is the two factors mixed in the proportion the CPU spends on
+    them. The encode's own factor is bounded rather than measured: the butterfly
+    stage is the floor (no block kept resident across stages) and the register
+    multiply roofline is the ceiling (perfectly blocked).
+    """
+    enc_ns = float(encode["cpu"]["nanoseconds_per_input_cell"])
+    p2 = probe(results, "poseidon2")
+    perms_per_s = float(p2["cpu_packed"]["mega_perms_per_s_best"]) * 1e6
+    # The tree is built over the codeword, which the blowup makes twice the
+    # trace; a padding-free sponge of rate 8 hashes eight cells per permutation.
+    blowup = 1 << int(encode["params"]["log_blowup"])
+    hash_ns = blowup / 8.0 / perms_per_s * 1e9
+    w_enc = enc_ns / (enc_ns + hash_ns)
+    lo_enc = float(encode["butterfly_stage"]["gpu_over_cpu_packed"])
+    hi_enc = rows.get(("imul", "imul"), lo_enc)
+    lo = 1.0 / (w_enc / lo_enc + (1.0 - w_enc) / p2_ratio)
+    hi = 1.0 / (w_enc / hi_enc + (1.0 - w_enc) / p2_ratio)
+    return (
+        lo,
+        hi,
+        f"encode {w_enc:.0%} of the phase at {lo_enc:.2f}x..{hi_enc:.2f}x, hashing at {p2_ratio:.1f}x",
+    )
 
 
 def main() -> int:

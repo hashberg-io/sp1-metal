@@ -14,9 +14,13 @@ import sys
 from collections import defaultdict
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# A close line may carry trailing span fields (proof_id, task_id, idx, ...)
+# after the timings, and the spans that carry them are exactly the ones that
+# describe execution and shard orchestration — so anchoring at end of line
+# silently drops half the prover.
 LINE_RE = re.compile(
     r"^\S+\s+(?:INFO|DEBUG|TRACE|WARN|ERROR)\s+(?P<path>.+?):\s+close\s+"
-    r"time\.busy=(?P<busy>\S+)\s+time\.idle=(?P<idle>\S+)\s*$"
+    r"time\.busy=(?P<busy>\S+)\s+time\.idle=(?P<idle>\S+)(?:\s|$)"
 )
 FIELDS_RE = re.compile(r"\{[^{}]*\}")
 DUR_RE = re.compile(r"^(\d+(?:\.\d+)?)(ns|µs|us|ms|s|m)$")
