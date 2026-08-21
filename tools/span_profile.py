@@ -28,6 +28,42 @@ UNIT_SECONDS: dict[str, float] = {
     "s": 1.0,
     "m": 60.0,
 }
+# Spans whose busy time is a thread blocked on a queue or a lock rather than
+# work being done. Their time is still subtracted from their parent's exclusive
+# time — which is the point: it should not be counted as work anywhere.
+WAIT_SPANS: tuple[str, ...] = (
+    "waiting for a worker",
+    "waiting to enter input queue",
+    "acquire prover",
+    "acquire setup",
+)
+
+# Where a span sits matters more than what its leaf is called: "generate full
+# traces" is trace generation, but "splicing" is trace generation too, and only
+# its path says so. Matched against the lower-cased full span path, in order,
+# first match wins.
+PATH_BUCKETS: list[tuple[str, str]] = [
+    ("coreexecute:minimal executor:splicing", "tracegen"),
+    ("coreexecute", "execute"),
+    ("proveshard:into_record", "tracegen"),
+    ("proveshard:generate dependencies", "tracegen"),
+    ("proveshard:core setup and prove:generate full traces", "tracegen"),
+    ("proveshard:core setup and prove:setup_from_preprocessed", "setup"),
+    ("proveshard:normalize prove shard", "recursion"),
+    ("proveshard:get recursion program", "recursion"),
+    ("proveshard:deferred upload", "recursion"),
+    ("proveshard:verify shard", "verify"),
+    ("prove shard with data:commit traces", "commit"),
+    ("prove shard with data:logup gkr", "gkr"),
+    ("prove shard with data:zerocheck", "zerocheck"),
+    ("prove shard with data:prove evaluation claims", "pcs"),
+    ("compile compress program", "setup"),
+    ("build compress program", "setup"),
+    ("build shrink program", "setup"),
+    ("compile deferred program", "setup"),
+    ("compile shrink program", "setup"),
+]
+
 EXACT_BUCKETS: dict[str, str] = {
     "execute_program": "execute",
     "runtime.run(...)": "execute",
@@ -58,6 +94,7 @@ SUBSTRING_BUCKETS: list[tuple[str, str]] = [
     ("shrink", "recursion"),
     ("wrap", "recursion"),
     ("deferred", "recursion"),
+    ("verify", "verify"),
     ("merkle", "commit"),
     ("poseidon", "commit"),
     ("commit", "commit"),
@@ -103,7 +140,16 @@ def exclusive_times(totals: dict[tuple[str, ...], float]) -> dict[tuple[str, ...
     return {path: max(0.0, busy - child_sums.get(path, 0.0)) for path, busy in totals.items()}
 
 
-def bucket_of(name: str) -> str:
+def is_wait(path: tuple[str, ...]) -> bool:
+    return path[-1].lower() in WAIT_SPANS
+
+
+def bucket_of(path: tuple[str, ...]) -> str:
+    joined = ":".join(path).lower()
+    for needle, bucket in PATH_BUCKETS:
+        if joined.startswith(needle):
+            return bucket
+    name = path[-1]
     if name in EXACT_BUCKETS:
         return EXACT_BUCKETS[name]
     lowered = name.lower()
@@ -113,14 +159,19 @@ def bucket_of(name: str) -> str:
     return "other"
 
 
-def aggregate(exclusive: dict[tuple[str, ...], float]) -> tuple[dict[str, float], dict[str, float]]:
+def aggregate(
+    exclusive: dict[tuple[str, ...], float],
+) -> tuple[dict[str, float], dict[str, float], float]:
     phases: dict[str, float] = defaultdict(float)
     by_span: dict[str, float] = defaultdict(float)
+    waited = 0.0
     for path, seconds in exclusive.items():
-        leaf = path[-1]
-        phases[bucket_of(leaf)] += seconds
-        by_span[leaf] += seconds
-    return dict(phases), dict(by_span)
+        if is_wait(path):
+            waited += seconds
+            continue
+        phases[bucket_of(path)] += seconds
+        by_span[f"{bucket_of(path)}\t{path[-1]}"] += seconds
+    return dict(phases), dict(by_span), waited
 
 
 def main() -> int:
@@ -135,19 +186,26 @@ def main() -> int:
         print("no `close time.busy=` span lines found; was the host run with RUST_LOGGER=flat RUST_LOG=debug?", file=sys.stderr)
         return 1
     exclusive = exclusive_times(totals)
-    phases, by_span = aggregate(exclusive)
+    phases, by_span, waited = aggregate(exclusive)
     grand_total = sum(phases.values())
     print(f"total accounted span time: {grand_total:.1f}s over {len(totals)} span paths")
+    print(f"excluded as queueing/blocking: {waited:.1f}s")
     print()
     print(f"{'phase':<12} {'seconds':>12} {'share':>8}")
     for phase, seconds in sorted(phases.items(), key=lambda kv: -kv[1]):
         print(f"{phase:<12} {seconds:>12.1f} {seconds / grand_total:>7.1%}")
     print()
     print(f"top {args.top} spans by exclusive time:")
-    for name, seconds in sorted(by_span.items(), key=lambda kv: -kv[1])[: args.top]:
-        print(f"  {seconds:>10.1f}s  [{bucket_of(name):<9}] {name}")
+    for key, seconds in sorted(by_span.items(), key=lambda kv: -kv[1])[: args.top]:
+        bucket, name = key.split("\t", 1)
+        print(f"  {seconds:>10.1f}s  [{bucket:<9}] {name}")
     if args.json_out:
-        payload = {"phases": phases, "spans": by_span, "total_seconds": grand_total}
+        payload = {
+            "phases": phases,
+            "spans": {k.split("\t", 1)[1]: v for k, v in by_span.items()},
+            "total_seconds": grand_total,
+            "excluded_waiting_seconds": waited,
+        }
         with open(args.json_out, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
         print(f"\nwrote {args.json_out}")

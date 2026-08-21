@@ -53,41 +53,47 @@ def table(results: list[dict[str, Any]]) -> list[tuple[str, str, float]]:
     return rows
 
 
-def factors(results: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, str]]:
-    """Per-phase speedup factors, with the measurement each one came from.
+def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]]:
+    """Per-phase speedup factors as (conservative, optimistic, provenance).
 
-    execute and tracegen stay at 1.0: they are CPU-resident work that no probe
-    in this suite prices, and claiming a speedup for them would be inventing
-    one. The pipelined model is where their cost gets recovered, by overlapping
-    them with GPU phases, not by pretending they run on the GPU.
+    A phase gets a single number only where a probe measures the work that
+    phase actually does. Where it does not, the phase gets a range whose ends
+    are both measured quantities, and the provenance says what is missing:
+
+    - `commit` is a Reed-Solomon encode (a radix-2 DFT) followed by Merkle
+      hashing. The suite prices the hashing and not the encode, so the range
+      runs from the streaming-bandwidth ratio to the Poseidon2 ratio.
+    - `gkr` is sumcheck over the extension field. Its rounds have the shape the
+      zerocheck probe measures but over extension values, so the range runs
+      from the streamed extension multiply to the zerocheck round.
+    - `execute` and `tracegen` stay at 1.0: CPU-resident work no probe prices,
+      and claiming a speedup for them would be inventing one. The pipelined
+      model recovers their cost by overlapping them, not by moving them.
     """
     rows = {(p, k): v for p, k, v in table(results)}
-    out: dict[str, float] = {"execute": 1.0, "tracegen": 1.0, "setup": 1.0, "other": 1.0}
-    why: dict[str, str] = {
-        "execute": "CPU-resident (RISC-V emulation), unpriced",
-        "tracegen": "CPU-resident witness generation, unpriced",
-        "setup": "one-off, unpriced",
-        "other": "unattributed span time, unpriced",
+    stream = rows.get(("triad", "triad"), 1.0)
+    out: dict[str, tuple[float, float, str]] = {
+        "execute": (1.0, 1.0, "CPU-resident (RISC-V emulation), unpriced"),
+        "tracegen": (1.0, 1.0, "CPU-resident witness generation, unpriced"),
+        "setup": (1.0, 1.0, "one-off, unpriced"),
+        "other": (1.0, 1.0, "unattributed span time, unpriced"),
+        "verify": (1.0, 1.0, "proof checking, unpriced"),
     }
-    if (v := rows.get(("zerocheck", "zerocheck"))) is not None:
-        out["zerocheck"] = v
-        why["zerocheck"] = "zerocheck probe vs packed cache-tiled CPU"
-    if (v := rows.get(("poseidon2", "poseidon2"))) is not None:
-        out["commit"] = v
-        why["commit"] = "poseidon2 probe vs packed CPU permutation"
-    fold_keys = [("fold", k) for k in ("fold_ext", "flv_ext", "fold_base", "flv_base")]
-    fold = [rows[k] for k in fold_keys if k in rows]
+    zc = rows.get(("zerocheck", "zerocheck"))
+    if zc is not None:
+        out["zerocheck"] = (zc, zc, "zerocheck probe vs packed cache-tiled CPU")
+    p2 = rows.get(("poseidon2", "poseidon2"))
+    if p2 is not None:
+        out["commit"] = (stream, p2, "ENCODE UNPRICED: streaming ratio to Poseidon2 ratio")
+    fold = [rows[k] for k in [("fold", n) for n in ("fold_ext", "flv_ext", "fold_base", "flv_base")] if k in rows]
     if fold:
-        out["pcs"] = min(fold)
-        why["pcs"] = f"slowest of the fold kernels vs packed CPU ({min(fold):.2f} of {len(fold)})"
-    gkr = [rows[k] for k in (("fieldops", "ext_mul"), ("fold", "fold_ext")) if k in rows]
-    if gkr:
-        out["gkr"] = min(gkr)
-        why["gkr"] = "slowest of extension multiply and extension fold vs packed CPU"
-    if "zerocheck" in out:
-        out["recursion"] = out["zerocheck"]
-        why["recursion"] = "same shapes as a shard proof; borrows the zerocheck factor"
-    return out, why
+        out["pcs"] = (min(fold), max(fold), "slowest to fastest fold kernel vs packed CPU")
+    ext = rows.get(("fieldops", "ext_mul"))
+    if ext is not None and zc is not None:
+        out["gkr"] = (min(ext, zc), max(ext, zc), "SHAPE UNPRICED: streamed extension multiply to zerocheck round")
+    if zc is not None:
+        out["recursion"] = (min(zc, stream), zc, "same shapes as a shard proof, at a fraction of the size")
+    return out
 
 
 def main() -> int:
@@ -119,15 +125,20 @@ def main() -> int:
             f"({batched['speedup_over_round_trips']:.1f}x)"
         )
 
-    f, why = factors(results)
-    print("\nper-phase factors:")
+    f = factors(results)
+    print("\nper-phase factors (conservative .. optimistic):")
     for phase in sorted(f):
-        print(f"  {phase:<12}{f[phase]:>6.2f}x   {why[phase]}")
+        lo, hi, why = f[phase]
+        span = f"{lo:.2f}x" if lo == hi else f"{lo:.2f}x .. {hi:.2f}x"
+        print(f"  {phase:<12}{span:<18}{why}")
     if args.factors:
-        with open(args.factors, "w", encoding="utf-8") as out:
-            json.dump(f, out, indent=2, sort_keys=True)
-            out.write("\n")
-        print(f"\nwrote {args.factors}")
+        stem = args.factors.removesuffix(".json")
+        for label, index in (("low", 0), ("high", 1)):
+            path = f"{stem}-{label}.json"
+            with open(path, "w", encoding="utf-8") as out:
+                json.dump({k: v[index] for k, v in f.items()}, out, indent=2, sort_keys=True)
+                out.write("\n")
+            print(f"wrote {path}")
     return 0
 
 
