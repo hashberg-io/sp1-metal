@@ -240,6 +240,20 @@ pub fn bench(gpu: &Gpu, n: usize, reps: usize, with_cpu: bool) -> Result<Value, 
         "gbytes_per_s_best": bytes / times.best / 1e9,
     });
     if with_cpu {
+        // The scalar version is not a straw man: sp1-hypercube's own GKR round
+        // is written on scalar extension elements over rayon, so this is the
+        // arithmetic the prover runs today. The distance between it and the
+        // packed baseline below is CPU headroom sitting in the largest phase of
+        // the proof.
+        let t_scalar = cpu_bench(reps, || {
+            std::hint::black_box(cpu_reference(&layer));
+        });
+        result["cpu_scalar"] = json!({
+            "times": times_json(&t_scalar),
+            "mega_rows_per_s_best": n as f64 / t_scalar.best / 1e6,
+            "giga_base_muls_per_s_best": base_muls / t_scalar.best / 1e9,
+            "note": "scalar extension elements over rayon, as sp1-hypercube writes it",
+        });
         let packed = PackedLayer::new(&layer);
         let t = cpu_bench(reps, || {
             std::hint::black_box(cpu_packed(&packed));
@@ -253,6 +267,7 @@ pub fn bench(gpu: &Gpu, n: usize, reps: usize, with_cpu: bool) -> Result<Value, 
             "note": "packed (NEON) lanes, deinterleaved once up front, rayon on all cores",
         });
         result["gpu_over_cpu_packed"] = json!(t.best / times.best);
+        result["packed_over_scalar_cpu"] = json!(t_scalar.best / t.best);
     }
     Ok(result)
 }
