@@ -11,7 +11,7 @@ Commands:
   info                       Report Metal device information.
   check                      Run all GPU-vs-CPU parity checks (small inputs, fast).
   triad      [--n4 N] [--reps R] [--cpu]         Streaming bandwidth (uint4 triad).
-  imul       [--grid N] [--iters I] [--reps R]   Integer op throughput (add/mul/mulhi/kb_mul).
+  imul       [--grid N] [--iters I] [--reps R] [--cpu]  Integer op throughput (add/mul/mulhi/kb_mul).
   fieldops   [--n N] [--reps R] [--cpu]          Streamed base/ext field multiplication.
   fold       [--n-out N] [--reps R] [--cpu]      BaseFold fold + fix-last-variable.
   poseidon2  [--n N] [--reps R] [--cpu]          Poseidon2 width-16 permutations.
@@ -95,6 +95,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             flag_usize(flags, "grid", 1 << 20)?,
             flag_usize(flags, "iters", 4096)? as u32,
             reps,
+            with_cpu,
         ),
         "launch" => probes::launch::bench(gpu, flag_usize(flags, "n", 1 << 24)?, reps),
         "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps, with_cpu),
@@ -113,7 +114,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
         "all" => {
             let results = vec![
                 probes::triad::bench(gpu, 1 << 26, reps, with_cpu)?,
-                probes::imul::bench(gpu, 1 << 20, 4096, reps)?,
+                probes::imul::bench(gpu, 1 << 20, 4096, reps, with_cpu)?,
                 probes::fieldops::bench(gpu, 1 << 27, reps, with_cpu)?,
                 probes::fold::bench(gpu, 1 << 25, reps, with_cpu)?,
                 probes::poseidon2::bench(gpu, 1 << 21, reps, with_cpu)?,

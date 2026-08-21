@@ -18,6 +18,7 @@ Implemented 2026-08-19; throughput numbers are deliberately absent — no probe 
    Replaying that pair through `sp1-profile-host --elf program.bin --stdin-bin stdin.bin` proves the same workload under span timing, leaving the host that produced it untouched.
 2. `probes triad` — streaming bandwidth on integer lanes; the hard ceiling for fold-shaped kernels, and the number to compare against the CPU's share of the same unified-memory pool.
 3. `probes imul` — register-resident add / 32×32-lo / mulhi / KoalaBear-Montgomery throughput; the mulhi rate is unpublished by Apple and decides the field-multiply ceiling.
+   `--cpu` adds the CPU's own register-resident packed multiply ceiling, which is what tells you whether a kernel sitting at the GPU's roofline is beating the CPU's hardware or only beating one particular loop.
 4. `probes fieldops` — streamed base- and extension-field multiplication (bandwidth-bound shape, real field ops).
 5. `probes fold` — BaseFold fold and sumcheck fix-last-variable, base and extension variants, exactly mirroring `slop-multilinear`.
 6. `probes poseidon2` — width-16 KoalaBear Poseidon2 (the Merkle/hashing workhorse; compute-bound).
