@@ -4,6 +4,11 @@ The question this project set out to answer was whether an SP1 Metal backend is 
 
 **It is not, on this hardware.** A complete port of every GPU-able phase predicts **3.3×** on an M4 Max, with a plausible range of 2.2× to 4.7×. The evidence is in [measurements.md](measurements.md); the suite that produced it is described in [probes.md](probes.md).
 
+That answer measures the GPU against a *packed* CPU baseline, which is the fair comparison between two pieces of silicon but not the one D7 asks for.
+D7's bar is 5× "the same machine's CPU prover", and the prover on this machine is scalar.
+Against the prover as it ships, the same port predicts **6.5×**, and [backend-plan.md](backend-plan.md) sets out what that reading rests on, where the code seam is, and in what order the work would go.
+The whole difference between the two answers is the packing headroom described below.
+
 Two things outrank that verdict, and both were found while establishing it.
 
 ## Why it falls short
