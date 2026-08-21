@@ -1,10 +1,11 @@
 //! STREAM-style triad on integer lanes: pins the streaming-bandwidth ceiling,
 //! which is the hard limit for fold-shaped (bandwidth-bound) prover kernels.
 
+use rayon::prelude::*;
 use serde_json::{json, Value};
 
 use crate::gpu::{dispatch_1d, set_bytes, Gpu};
-use crate::probes::times_json;
+use crate::probes::{cpu_bench, times_json};
 
 const SCALE: u32 = 3;
 
@@ -45,7 +46,7 @@ pub fn check(gpu: &Gpu) -> Result<(), String> {
     Ok(())
 }
 
-pub fn bench(gpu: &Gpu, n4: usize, reps: usize) -> Result<Value, String> {
+pub fn bench(gpu: &Gpu, n4: usize, reps: usize, with_cpu: bool) -> Result<Value, String> {
     let a = fill(n4, 1);
     let b = fill(n4, 2);
     let buf_a = gpu.buffer_from(&a);
@@ -61,11 +62,28 @@ pub fn bench(gpu: &Gpu, n4: usize, reps: usize) -> Result<Value, String> {
         dispatch_1d(enc, n4 as u64);
     });
     let bytes_per_pass = (3 * n4 * 16) as f64;
-    Ok(json!({
+    let mut result = json!({
         "probe": "triad",
         "params": { "n_uint4": n4, "reps": reps },
         "times": times_json(&times),
         "gbytes_per_s_best": bytes_per_pass / times.best / 1e9,
         "gbytes_per_s_mean": bytes_per_pass / times.mean / 1e9,
-    }))
+    });
+    if with_cpu {
+        let mut c = vec![[0u32; 4]; n4];
+        let t = cpu_bench(reps, || {
+            c.par_iter_mut().zip(a.par_iter()).zip(b.par_iter()).for_each(|((c, a), b)| {
+                for lane in 0..4 {
+                    c[lane] = a[lane].wrapping_add(SCALE.wrapping_mul(b[lane]));
+                }
+            });
+        });
+        result["cpu"] = json!({
+            "times": times_json(&t),
+            "gbytes_per_s_best": bytes_per_pass / t.best / 1e9,
+            "note": "same triad over rayon on all cores",
+        });
+        result["gpu_over_cpu"] = json!(t.best / times.best);
+    }
+    Ok(result)
 }

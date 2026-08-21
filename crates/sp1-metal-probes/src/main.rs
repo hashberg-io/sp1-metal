@@ -87,15 +87,15 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
     let reps = flag_usize(flags, "reps", 10)?;
     let with_cpu = flags.contains_key("cpu");
     match command {
-        "triad" => probes::triad::bench(gpu, flag_usize(flags, "n4", 1 << 26)?, reps),
+        "triad" => probes::triad::bench(gpu, flag_usize(flags, "n4", 1 << 26)?, reps, with_cpu),
         "imul" => probes::imul::bench(
             gpu,
             flag_usize(flags, "grid", 1 << 20)?,
             flag_usize(flags, "iters", 4096)? as u32,
             reps,
         ),
-        "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps),
-        "fold" => probes::fold::bench(gpu, flag_usize(flags, "n-out", 1 << 25)?, reps),
+        "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps, with_cpu),
+        "fold" => probes::fold::bench(gpu, flag_usize(flags, "n-out", 1 << 25)?, reps, with_cpu),
         "poseidon2" => {
             probes::poseidon2::bench(gpu, flag_usize(flags, "n", 1 << 21)?, reps, with_cpu)
         }
@@ -105,15 +105,16 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             flag_usize(flags, "cols", 64)?,
             flag_usize(flags, "terms", 128)?,
             reps,
+            with_cpu,
         ),
         "all" => {
             let results = vec![
-                probes::triad::bench(gpu, 1 << 26, reps)?,
+                probes::triad::bench(gpu, 1 << 26, reps, with_cpu)?,
                 probes::imul::bench(gpu, 1 << 20, 4096, reps)?,
-                probes::fieldops::bench(gpu, 1 << 27, reps)?,
-                probes::fold::bench(gpu, 1 << 25, reps)?,
+                probes::fieldops::bench(gpu, 1 << 27, reps, with_cpu)?,
+                probes::fold::bench(gpu, 1 << 25, reps, with_cpu)?,
                 probes::poseidon2::bench(gpu, 1 << 21, reps, with_cpu)?,
-                probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps)?,
+                probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps, with_cpu)?,
             ];
             Ok(Value::Array(results))
         }

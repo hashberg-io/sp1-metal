@@ -9,11 +9,12 @@ use serde_json::{json, Value};
 use slop_koala_bear::{
     my_kb_16_perm, KoalaBear_BEGIN_EXT_CONSTS, KoalaBear_END_EXT_CONSTS, KoalaBear_PARTIAL_CONSTS,
 };
+use slop_algebra::{Field, PackedValue};
 use slop_symmetric::Permutation;
 
 use crate::gpu::{dispatch_1d, set_bytes, Gpu};
 use crate::kb::{f_of_monty, monty_of_f, F};
-use crate::probes::times_json;
+use crate::probes::{cpu_bench, times_json};
 
 /// Round constants in kernel layout: 4 beginning full rounds (16 each), then
 /// 4 ending full rounds (16 each), then 20 partial-round constants; all in
@@ -86,14 +87,50 @@ pub fn bench(gpu: &Gpu, n: usize, reps: usize, with_cpu: bool) -> Result<Value, 
     if with_cpu {
         let perm = my_kb_16_perm();
         let mut cpu_states = states;
-        let t0 = std::time::Instant::now();
-        cpu_states.par_iter_mut().for_each(|s| *s = perm.permute(*s));
-        let cpu_s = t0.elapsed().as_secs_f64();
-        result["cpu"] = json!({
-            "seconds": cpu_s,
-            "mega_perms_per_s": n as f64 / cpu_s / 1e6,
-            "note": "rayon over all cores via slop my_kb_16_perm",
+        let t = cpu_bench(reps, || {
+            cpu_states.par_iter_mut().for_each(|s| *s = perm.permute(*s));
         });
+        // A single-thread pass over a slice large enough to be steady-state but
+        // small enough to stay cheap: this separates "how fast is one core" from
+        // "how well does rayon scale", which the all-core figure conflates.
+        let n_serial = n.min(1 << 17);
+        let mut serial_states = cpu_states[..n_serial].to_vec();
+        let ts = cpu_bench(reps, || {
+            for s in serial_states.iter_mut() {
+                *s = perm.permute(*s);
+            }
+        });
+        result["cpu"] = json!({
+            "times": times_json(&t),
+            "mega_perms_per_s_best": n as f64 / t.best / 1e6,
+            "single_thread": {
+                "n_perms": n_serial,
+                "times": times_json(&ts),
+                "mega_perms_per_s_best": n_serial as f64 / ts.best / 1e6,
+            },
+            "note": "slop my_kb_16_perm, rayon over all cores; single_thread is one core",
+        });
+        result["gpu_over_cpu"] = json!(t.best / times.best);
+        // p3's Poseidon2 permutes `[AF; 16]` for any abstract field, so the packed
+        // (NEON) field permutes WIDTH states at once — this is how the CPU prover
+        // actually hashes, and the only fair opponent for the kernel.
+        type P = <F as Field>::Packing;
+        let lanes = P::WIDTH;
+        let n_groups = n / lanes;
+        let mut packed: Vec<[P; 16]> = (0..n_groups)
+            .map(|g| std::array::from_fn(|i| P::from_fn(|lane| cpu_states[g * lanes + lane][i])))
+            .collect();
+        let tp = cpu_bench(reps, || {
+            packed.par_iter_mut().for_each(|s| perm.permute_mut(s));
+        });
+        result["cpu_packed"] = json!({
+            "times": times_json(&tp),
+            "lanes": lanes,
+            "n_perms": n_groups * lanes,
+            "mega_perms_per_s_best": (n_groups * lanes) as f64 / tp.best / 1e6,
+            "note": "same slop permutation over KoalaBear::Packing (NEON), rayon on all cores",
+        });
+        result["gpu_over_cpu_packed"] = json!(tp.best / times.best);
     }
     Ok(result)
 }
