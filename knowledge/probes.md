@@ -1,7 +1,7 @@
 # Probe suite
 
 The first deliverable required by [desiderata](desiderata.md) D8: per-kernel parity and throughput harnesses, plus a cost model fitted from cheap measurements, so every backend decision is priced before it is made.
-Implemented 2026-08-19; throughput numbers are deliberately absent — no probe has been run yet (the machine was busy with a CPU proving job), and per house discipline no number is citable until measured end to end.
+Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what they imply are in [measurements.md](measurements.md).
 
 ## Layout
 
