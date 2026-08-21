@@ -1,5 +1,6 @@
 pub mod encode;
 pub mod fieldops;
+pub mod gkr;
 pub mod fold;
 pub mod imul;
 pub mod launch;

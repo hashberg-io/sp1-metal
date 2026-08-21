@@ -65,9 +65,11 @@ def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]
     - `commit` is a Reed-Solomon encode (a radix-2 DFT) followed by Merkle
       hashing. The suite prices the hashing and not the encode, so the range
       runs from the streaming-bandwidth ratio to the Poseidon2 ratio.
-    - `gkr` is sumcheck over the extension field. Its rounds have the shape the
-      zerocheck probe measures but over extension values, so the range runs
-      from the streamed extension multiply to the zerocheck round.
+    - Compute-bound phases carry a range whose low end is the hardware's own
+      multiply ratio and whose high end is what the kernel measured. The two
+      differ because the kernels sit at the GPU's multiply roofline while the
+      CPU baselines sit well below theirs: the low end is what the hardware
+      says, the high end is what today's CPU code allows.
     - `execute` and `tracegen` stay at 1.0: CPU-resident work no probe prices,
       and claiming a speedup for them would be inventing one. The pipelined
       model recovers their cost by overlapping them, not by moving them.
@@ -81,9 +83,21 @@ def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]
         "other": (1.0, 1.0, "unattributed span time, unpriced"),
         "verify": (1.0, 1.0, "proof checking, unpriced"),
     }
+    compute = rows.get(("imul", "imul"), 1.0)
     zc = rows.get(("zerocheck", "zerocheck"))
     if zc is not None:
-        out["zerocheck"] = (zc, zc, "zerocheck probe vs packed cache-tiled CPU")
+        out["zerocheck"] = (
+            min(compute, zc),
+            zc,
+            "multiply roofline ratio to the measured zerocheck round",
+        )
+    gkr = rows.get(("gkr", "gkr"))
+    if gkr is not None:
+        out["gkr"] = (
+            min(compute, gkr),
+            gkr,
+            "multiply roofline ratio to the measured GKR round",
+        )
     p2 = rows.get(("poseidon2", "poseidon2"))
     encode = probe(results, "encode")
     if p2 is not None and encode is not None:
@@ -93,11 +107,20 @@ def factors(results: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]
     fold = [rows[k] for k in [("fold", n) for n in ("fold_ext", "flv_ext", "fold_base", "flv_base")] if k in rows]
     if fold:
         out["pcs"] = (min(fold), max(fold), "slowest to fastest fold kernel vs packed CPU")
-    ext = rows.get(("fieldops", "ext_mul"))
-    if ext is not None and zc is not None:
-        out["gkr"] = (min(ext, zc), max(ext, zc), "SHAPE UNPRICED: streamed extension multiply to zerocheck round")
+    if "gkr" not in out:
+        ext = rows.get(("fieldops", "ext_mul"))
+        if ext is not None and zc is not None:
+            out["gkr"] = (
+                min(ext, zc),
+                max(ext, zc),
+                "SHAPE UNPRICED: streamed extension multiply to zerocheck round",
+            )
     if zc is not None:
-        out["recursion"] = (min(zc, stream), zc, "same shapes as a shard proof, at a fraction of the size")
+        out["recursion"] = (
+            min(zc, stream),
+            zc,
+            "same shapes as a shard proof, at a fraction of the size",
+        )
     return out
 
 

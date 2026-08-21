@@ -16,7 +16,7 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    This yields the phase-fraction vector that determines the maximum achievable end-to-end speedup; everything else refines the per-phase factors.
    Most hosts do not call `setup_logger()`, so the profiling host is usually the way in, and it does not need the guest's source: run the real host once with `SP1_DUMP=1` and sp1-sdk writes `program.bin` and `stdin.bin` for the proof it was about to generate, then exits.
    Replaying that pair through `sp1-profile-host --elf program.bin --stdin-bin stdin.bin` proves the same workload under span timing, leaving the host that produced it untouched.
-   Span busy times are summed across threads, so they measure CPU work rather than wall time; reading the shares as wall-clock shares assumes every phase parallelises about equally.
+   A span's busy time is wall time on the thread that entered it, and work the span fans out to rayon is counted once rather than per worker — so these are not CPU-seconds, and with several shards proving at once they sum to well over the wall clock. Reading the shares as wall-clock shares assumes every phase parallelises about equally.
 2. `probes triad` — streaming bandwidth on integer lanes; the hard ceiling for fold-shaped kernels, and the number to compare against the CPU's share of the same unified-memory pool.
 3. `probes imul` — register-resident add / 32×32-lo / mulhi / KoalaBear-Montgomery throughput; the mulhi rate is unpublished by Apple and decides the field-multiply ceiling.
    `--cpu` adds the CPU's own register-resident packed multiply ceiling, which is what tells you whether a kernel sitting at the GPU's roofline is beating the CPU's hardware or only beating one particular loop.
@@ -29,7 +29,9 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    It times slop's own CPU encoder, and separately runs one radix-2 butterfly stage — the DFT's inner loop — GPU against packed CPU.
    A DFT is a sequence of those stages, so the stage ratio is the floor the encode gets when neither side keeps a block resident across stages; a blocked implementation moves both sides toward their compute rooflines, and the encode's true factor lies between.
    A full Metal encode matching slop's bit-reversed convention is still missing.
-9. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+9. `probes gkr` — one sumcheck round of a logup GKR layer, in the shape `sp1_hypercube::logup_gkr` computes it: over each pair of consecutive entries, a numerator term `eq·(den_0·num_1 + den_1·num_0)` and a denominator term `eq·(den_0·den_1)` at each of two evaluation points, all in the degree-4 extension.
+   This is the prover's largest phase, and the round's arithmetic intensity — five extension multiplies per row against eighty bytes read — puts both the GPU and the CPU on the compute side of their rooflines.
+10. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
 
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.
@@ -75,5 +77,5 @@ The speedup factors fed to the model must come from the probe measurements above
 - The zerocheck probe prices the *shape* of constraint evaluation, not a real chip's constraint set; the symbolic-constraint-to-Metal transpiler is deliberately deferred to the backend phase.
 - There is no full Metal Reed-Solomon encode, only its butterfly stage, so the largest single piece of the commit phase is bounded rather than measured. This is the suite's biggest remaining gap.
 - The zerocheck baselines compare like with like on arithmetic, but the CPU one reads a column-major trace with the same random column indices as the kernel; a real chip's constraint set has far more structure, and both sides would benefit from it.
-- Span busy-times include same-thread child time; the parser subtracts direct children per span path, which is exact for single-threaded phases and approximate where the prover multi-threads within one span.
+- Span busy times include same-thread child time; the parser subtracts direct children per span path, which is exact for single-threaded phases and approximate where the prover multi-threads within one span.
 - Throughput timings are host-clock and include command-buffer overhead; at the default ~1 GiB sizes this overhead is noise, but do not shrink sizes without moving to GPU timestamps.

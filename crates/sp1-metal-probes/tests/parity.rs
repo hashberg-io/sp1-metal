@@ -48,3 +48,8 @@ fn fold_tail_round_trip_parity() {
 fn ntt_butterfly_stage_parity() {
     probes::encode::check(&gpu()).unwrap();
 }
+
+#[test]
+fn gkr_round_parity() {
+    probes::gkr::check(&gpu()).unwrap();
+}

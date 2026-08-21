@@ -405,3 +405,60 @@ kernel void ntt_stage(device uint* a [[buffer(0)]],
     a[i] = kb_add(u, t);
     a[i + m] = kb_sub(u, t);
 }
+
+// One sumcheck round of a logup GKR layer, in the shape sp1-hypercube's
+// `sum_as_poly_in_last_t_variables` computes it: over each pair of consecutive
+// entries, the round polynomial's evaluation at the first point uses the even
+// entry, and its evaluation at the second uses the pair's sum. Five extension
+// accumulators come out — numerator and denominator at each of the two points,
+// plus the eq sum — and the caller combines them with lambda.
+kernel void gkr_round(device const uint4* num_0 [[buffer(0)]],
+                      device const uint4* num_1 [[buffer(1)]],
+                      device const uint4* den_0 [[buffer(2)]],
+                      device const uint4* den_1 [[buffer(3)]],
+                      device const uint4* eq [[buffer(4)]],
+                      constant uint& pairs [[buffer(5)]],
+                      device uint4* partials [[buffer(6)]],
+                      uint gid [[thread_position_in_grid]],
+                      uint tid [[thread_index_in_threadgroup]],
+                      uint tgid [[threadgroup_position_in_grid]]) {
+    threadgroup uint4 shared[256];
+    uint4 acc[5];
+    for (uint k = 0u; k < 5u; k++) {
+        acc[k] = uint4(0u);
+    }
+    if (gid < pairs) {
+        uint i = 2u * gid;
+        uint4 n0a = num_0[i], n0b = num_0[i + 1u];
+        uint4 n1a = num_1[i], n1b = num_1[i + 1u];
+        uint4 d0a = den_0[i], d0b = den_0[i + 1u];
+        uint4 d1a = den_1[i], d1b = den_1[i + 1u];
+        uint4 qa = eq[i], qb = eq[i + 1u];
+        uint4 numer = ext_add(ext_mul(d0a, n1a), ext_mul(d1a, n0a));
+        acc[0] = ext_mul(qa, numer);
+        acc[1] = ext_mul(qa, ext_mul(d0a, d1a));
+        uint4 n0h = ext_add(n0a, n0b);
+        uint4 n1h = ext_add(n1a, n1b);
+        uint4 d0h = ext_add(d0a, d0b);
+        uint4 d1h = ext_add(d1a, d1b);
+        uint4 qh = ext_add(qa, qb);
+        uint4 numer_h = ext_add(ext_mul(d0h, n1h), ext_mul(d1h, n0h));
+        acc[2] = ext_mul(qh, numer_h);
+        acc[3] = ext_mul(qh, ext_mul(d0h, d1h));
+        acc[4] = qh;
+    }
+    for (uint k = 0u; k < 5u; k++) {
+        shared[tid] = acc[k];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+            if (tid < stride) {
+                shared[tid] = ext_add(shared[tid], shared[tid + stride]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (tid == 0u) {
+            partials[tgid * 5u + k] = shared[0];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
