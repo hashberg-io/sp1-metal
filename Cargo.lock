@@ -763,6 +763,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "slop-dft"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f508dd516fa67da538d2efd61fafc70164786953b032d0ce7558288ec8df1"
+dependencies = [
+ "p3-dft",
+ "serde",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-matrix",
+ "slop-tensor",
+]
+
+[[package]]
 name = "slop-futures"
 version = "6.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,6 +885,7 @@ dependencies = [
  "serde_json",
  "slop-algebra",
  "slop-alloc",
+ "slop-dft",
  "slop-koala-bear",
  "slop-multilinear",
  "slop-symmetric",

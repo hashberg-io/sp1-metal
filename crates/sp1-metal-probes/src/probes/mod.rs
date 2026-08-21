@@ -1,3 +1,4 @@
+pub mod encode;
 pub mod fieldops;
 pub mod fold;
 pub mod imul;

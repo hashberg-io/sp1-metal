@@ -17,6 +17,7 @@ Commands:
   poseidon2  [--n N] [--reps R] [--cpu]          Poseidon2 width-16 permutations.
   zerocheck  [--n N] [--cols C] [--terms T] [--reps R] [--cpu]  Synthetic zerocheck round.
   launch     [--n N] [--reps R]                  Dispatch, round-trip and fold-tail fixed costs.
+  encode     [--rows N] [--cols C] [--reps R]    Reed-Solomon encode inside a BaseFold commitment (CPU only).
   all        [--reps R] [--cpu]                  All throughput probes at default sizes.
 
 Flags take `--key value` form. Default sizes are chosen for a ~1 GiB working
@@ -97,6 +98,11 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             reps,
             with_cpu,
         ),
+        "encode" => probes::encode::bench(
+            flag_usize(flags, "rows", 1 << 20)?,
+            flag_usize(flags, "cols", 64)?,
+            reps,
+        ),
         "launch" => probes::launch::bench(gpu, flag_usize(flags, "n", 1 << 24)?, reps),
         "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps, with_cpu),
         "fold" => probes::fold::bench(gpu, flag_usize(flags, "n-out", 1 << 25)?, reps, with_cpu),
@@ -120,6 +126,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
                 probes::poseidon2::bench(gpu, 1 << 21, reps, with_cpu)?,
                 probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps, with_cpu)?,
                 probes::launch::bench(gpu, 1 << 24, reps)?,
+                probes::encode::bench(1 << 20, 64, reps)?,
             ];
             Ok(Value::Array(results))
         }

@@ -25,7 +25,9 @@ Implemented 2026-08-19; throughput numbers are deliberately absent — no probe 
 6. `probes poseidon2` — width-16 KoalaBear Poseidon2 (the Merkle/hashing workhorse; compute-bound).
 7. `probes launch` — what a kernel costs before it computes anything: the marginal cost of one more dispatch inside a command buffer, the cost of a command buffer of its own, and the end-to-end cost of folding a vector down to a single element one round trip at a time.
    Sumcheck and BaseFold rounds halve every round and each round's challenge comes from the previous round's output, so the tail of a fold is a sequence of ever-smaller kernels each paying a full host round trip; the probe also runs the same rounds batched into one submission, which is the ceiling a GPU-side challenger would unlock.
-8. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+8. `probes encode` — the Reed-Solomon encode inside a BaseFold commitment, which is a radix-2 DFT at the FRI blowup and is most of what `commit traces` spends its time on.
+   This one has no Metal kernel behind it yet: it times slop's own CPU encoder so the commit phase's cost is attributed to the right work, and it is the clearest gap in the suite — until there is a kernel, the commit phase can only be given a range.
+9. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
 
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.
@@ -69,6 +71,7 @@ The speedup factors fed to the model must come from the probe measurements above
 ## Known limitations
 
 - The zerocheck probe prices the *shape* of constraint evaluation, not a real chip's constraint set; the symbolic-constraint-to-Metal transpiler is deliberately deferred to the backend phase.
+- There is no Metal Reed-Solomon encode, so the largest single piece of the commit phase has a CPU number and no ratio. This is the suite's biggest remaining gap.
 - The zerocheck baselines compare like with like on arithmetic, but the CPU one reads a column-major trace with the same random column indices as the kernel; a real chip's constraint set has far more structure, and both sides would benefit from it.
 - Span busy-times include same-thread child time; the parser subtracts direct children per span path, which is exact for single-threaded phases and approximate where the prover multi-threads within one span.
 - Throughput timings are host-clock and include command-buffer overhead; at the default ~1 GiB sizes this overhead is noise, but do not shrink sizes without moving to GPU timestamps.
