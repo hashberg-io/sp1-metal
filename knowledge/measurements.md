@@ -91,19 +91,22 @@ Two smaller findings from the same audit. Building with `lto = "fat"` and `codeg
 
 ## Where the time goes
 
-Profiled by replaying the ProofofSeed snark-lifter's compressed proof at n=8 through the span-timing host: 1007 s wall, proved and verified, 4578 s of span time over 105 span paths.
+Profiled by replaying the ProofofSeed snark-lifter's compressed proof at n=8 through the span-timing host: 1007 s wall, proved and verified, 3997 s of accounted span time over 105 span paths.
 
 | phase | seconds | share |
 |---|---|---|
-| GKR (logup) | 1872 | **40.9%** |
-| PCS opening (jagged / BaseFold) | 761 | 16.6% |
-| zerocheck | 600 | 13.1% |
-| execution | 583 | 12.7% |
-| commit (encode + Merkle) | 546 | 11.9% |
-| recursion scaffolding | 88 | 1.9% |
-| trace generation | 75 | 1.6% |
-| setup | 48 | 1.0% |
-| verify, unattributed | 6 | 0.1% |
+| GKR (logup) | 1872 | **46.8%** |
+| PCS opening (jagged / BaseFold) | 761 | 19.0% |
+| zerocheck | 600 | 15.0% |
+| commit (encode + Merkle) | 546 | 13.7% |
+| recursion scaffolding | 88 | 2.2% |
+| trace generation | 75 | 1.9% |
+| setup | 48 | 1.2% |
+| execution, verify, unattributed | 7 | 0.2% |
+
+A further 581 s is excluded as blocking. It arrives as a span called `collect global memory events`, which sounds like work and is not: it runs in a `spawn_blocking` closure sitting in `blocking_recv()` while the splicers feed it, and tracing counts a blocked thread inside an entered span as busy. It reported 581 s while emitting a single memory shard of 158k events, and the splicers upstream of it spent 1062 s "waiting for a worker". What it actually measured was the four-worker default throttling the pipeline. Counting it as execution put the host-resident share at 15% and the ceiling for any accelerator at 6.4×; excluding it puts them at **3.3% and 31×**.
+
+That the prover is not host-bound also shows in the shape of the run. `prove shard with data` concurrency sits at 3.9 from the first minute to the last — pinned exactly at `DEFAULT_NUM_CORE_WORKERS = 4` — so the machine was never waiting for the front end, and 79 shard proofs went through a queue that never drained. There is more parallelism in the proof than four workers can take.
 
 The recursion layers of a compressed proof are shard proofs themselves, so their internals land in the same buckets; the "recursion scaffolding" row is only the work of building and setting up the recursion programs.
 
@@ -119,12 +122,14 @@ Feeding the phase shares and the per-phase factors into the model:
 
 | | conservative | central | optimistic |
 |---|---|---|---|
-| serial port (GPU phases compress, CPU phases unchanged) | 1.84× | **2.42×** | 3.03× |
-| pipelined (CPU-resident work overlapped across shards) | 2.52× | **3.72×** | 5.41× |
+| serial port (GPU phases compress, CPU phases unchanged) | 2.10× | **3.05×** | 4.30× |
+| pipelined (CPU-resident work overlapped across shards) | 2.20× | **3.25×** | 4.72× |
+
+Pipelining buys almost nothing now that the host-resident share is 3.3%: there is nothing left to hide behind.
 
 The conservative column gives every compute-bound phase the hardware's own multiply ratio, which is what a CPU implementation at its roofline would leave. The optimistic column gives each phase its measured ratio against a packed CPU baseline. The central column is the geometric mean, and is the number to plan against.
 
-[Desiderata](desiderata.md) D7 asks for 5× end to end. Only the optimistic column reaches it, and it assumes every bracketed factor lands at its upper end, the pipelining is perfect, the port is complete — every phase moved, including the constraint transpiler that has not been designed — and the CPU prover stays exactly as unoptimised as it is today. Any of those going the other way puts 5× out of reach.
+[Desiderata](desiderata.md) D7 asks for 5× end to end. No column reaches it. The optimistic one assumes every bracketed factor lands at its upper end, the pipelining is perfect, the port is complete — every phase moved, including the constraint transpiler that has not been designed — and the CPU prover stays exactly as unoptimised as it is today. and even then it stops at 4.7×.
 
 The reason is not a weak GPU or a bad kernel. The zerocheck and GKR kernels both run within a few percent of the machine's measured multiply roofline; there is nothing left to extract from them. The reason is the machine: a 40-core GPU and twelve NEON performance cores are only 3.3× apart on field multiplies and 1.5× apart on memory, because they share one pool of it. On a discrete GPU with its own 1 TB/s of memory both those numbers would be several times larger, and the same port would clear 5× comfortably. On this machine it cannot, unless the CPU it is measured against stays as unvectorised as it is now — which is a strange thing to build a target on.
 
@@ -136,4 +141,4 @@ What would move the numbers, in order of leverage:
 
 And one that competes with the whole project rather than helping it: **pack the CPU prover's hot loops**. GKR, zerocheck and the folds are 70% of prover time and run scalar today; the measured gains from packing the same algorithms are 2.3× to 4.7×. That is a smaller, safer piece of work with much of the same payoff, and it is worth doing first if only to know what the GPU is really being compared against.
 
-The honest reading of D7 on this hardware is that 5× is the ceiling rather than the target, 3.5× is the realistic figure for a complete port, and roughly half of even that is available from the CPU without any GPU at all. Whether the rest is worth the work is a judgement about what the prover is for, not a measurement.
+The honest reading of D7 on this hardware is that 5× is out of reach, 3.3× is the realistic figure for a complete port, and roughly half of even that is available from the CPU without any GPU at all. Whether the rest is worth the work is a judgement about what the prover is for, not a measurement.

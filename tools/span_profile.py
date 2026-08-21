@@ -40,6 +40,15 @@ WAIT_SPANS: tuple[str, ...] = (
     "waiting to enter input queue",
     "acquire prover",
     "acquire setup",
+    # This one is not named like a wait, but is one. It runs in a
+    # `spawn_blocking` closure that sits in `blocking_recv()` waiting for the
+    # splicers, and tracing counts a blocked thread inside an entered span as
+    # busy — so it reports the wall time of the whole execute pipeline rather
+    # than its own work. On the profiled run it reported 581s while emitting a
+    # single memory shard of 158k events, and the splicers upstream of it spent
+    # 1062s "waiting for a worker": the pipeline was throttled by the four
+    # default core workers, and this span measured the throttling.
+    "collect global memory events",
 )
 
 # Where a span sits matters more than what its leaf is called: "generate full
