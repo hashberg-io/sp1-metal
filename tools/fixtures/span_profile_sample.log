@@ -1,0 +1,10 @@
+2026-08-19T10:00:01.000000Z  INFO execute_program: close time.busy=30s time.idle=1ms
+2026-08-19T10:00:02.000000Z DEBUG prove core:prove shard with data{idx=0}:generate main traces: close time.busy=12.5s time.idle=200ms
+2026-08-19T10:00:03.000000Z DEBUG prove core:prove shard with data{idx=0}:zerocheck: close time.busy=40s time.idle=3s
+2026-08-19T10:00:04.000000Z DEBUG prove core:prove shard with data{idx=0}:commit traces: close time.busy=18s time.idle=100µs
+2026-08-19T10:00:05.000000Z DEBUG prove core:prove shard with data{idx=0}:jagged evaluation proof: close time.busy=9s time.idle=50ms
+2026-08-19T10:00:06.000000Z DEBUG prove core:prove shard with data{idx=0}:logup gkr proof: close time.busy=11s time.idle=10ms
+2026-08-19T10:00:07.000000Z  INFO prove core:prove shard with data{idx=0}: close time.busy=95s time.idle=5s
+2026-08-19T10:00:08.000000Z  INFO prove core: close time.busy=100s time.idle=2s
+2026-08-19T10:00:09.000000Z  INFO RecursionReduce: close time.busy=45s time.idle=500ms
+2026-08-19T10:00:10.000000Z  INFO not-a-span-line here
