@@ -8,36 +8,39 @@ Numbers below are best-of-ten. The machine was not quite idle — a background t
 
 | | GPU | CPU (packed, all cores) | ratio |
 |---|---|---|---|
-| Streaming (triad) | 465 GB/s | 327 GB/s | **1.42×** |
-| KoalaBear multiply, register-resident | 332 G/s | 107 G/s | **3.11×** |
+| Streaming (triad) | 466 GB/s | 313 GB/s | **1.49×** |
+| KoalaBear multiply, register-resident | 332 G/s | 101 G/s | **3.29×** |
 
 These bracket the whole project.
 Unified memory is the reason the first number is so low: the GPU and the CPU draw on the same pool, and the CPU's twelve performance cores can already saturate two thirds of it.
-The second is set by `mulhi`, which the GPU issues at 996 Gop/s — one sixth of its 5.89 Top/s add rate — and a Montgomery multiply needs two of them plus two low multiplies.
+The second is set by `mulhi`, which the GPU issues at 996 Gop/s — one sixth of its 5.8 Top/s add rate — and a Montgomery multiply needs two of them plus two low multiplies.
 The measured multiply rate matches that composition to within one percent, so there is no headroom in this formulation of the arithmetic.
 
-Nothing in the prover can beat 3.11× except by exploiting something other than raw throughput, and anything memory-bound is capped near 1.42×.
+Nothing in the prover can beat 3.3× except by exploiting something other than raw throughput, and anything memory-bound is capped near 1.5×.
 
 ## Per-kernel results
 
 | kernel | GPU | CPU (packed) | ratio | shape |
 |---|---|---|---|---|
-| Poseidon2-16 permutation | 603 M/s | 37.6 M/s | **16.03×** | compute, latency-bound on CPU |
-| zerocheck round | 420 M rows/s (329 G muls/s) | 87.6 M rows/s (69 G muls/s) | **4.79×** | compute |
-| extension fix-last-variable | 459 GB/s | 148 GB/s | **3.10×** | GPU bandwidth, CPU compute |
-| extension fold | 460 GB/s | 174 GB/s | **2.64×** | as above |
-| extension multiply, streamed | 9.55 G/s (459 GB/s) | 3.71 G/s (178 GB/s) | **2.58×** | as above |
-| base fix-last-variable | 388 GB/s | 299 GB/s | **1.30×** | bandwidth on both sides |
-| base fold | 356 GB/s | 278 GB/s | **1.28×** | bandwidth on both sides |
-| base multiply, streamed | 32.1 G/s (386 GB/s) | 26.4 G/s (317 GB/s) | **1.22×** | bandwidth on both sides |
-| NTT butterfly stage | 441 GB/s | 400 GB/s | **1.10×** | bandwidth on both sides |
+| Poseidon2-16 permutation | 604 M/s | 38.2 M/s | **15.83×** | compute, latency-bound on CPU |
+| logup GKR round | 3689 M rows/s (295 G muls/s) | 553 M rows/s (44 G muls/s) | **6.67×** | compute |
+| zerocheck round | 417 M rows/s (327 G muls/s) | 90 M rows/s (71 G muls/s) | **4.63×** | compute |
+| extension fix-last-variable | 457 GB/s | 154 GB/s | **2.97×** | GPU bandwidth, CPU compute |
+| extension fold | 458 GB/s | 168 GB/s | **2.73×** | as above |
+| extension multiply, streamed | 9.22 G/s (442 GB/s) | 3.55 G/s (170 GB/s) | **2.60×** | as above |
+| base multiply, streamed | 32.1 G/s (385 GB/s) | 25.0 G/s (300 GB/s) | **1.28×** | bandwidth on both sides |
+| NTT butterfly stage | 442 GB/s | 399 GB/s | **1.11×** | bandwidth on both sides |
+| base fix-last-variable | 385 GB/s | 354 GB/s | **1.09×** | bandwidth on both sides |
+| base fold | 304 GB/s | 300 GB/s | **1.01×** | bandwidth on both sides |
 
 Two of these deserve comment.
 
 The zerocheck kernel runs at 329 G multiplies per second against a measured ceiling of 332, so it is at its roofline and cannot be improved without changing the arithmetic.
-Its CPU opponent reaches 69 of a possible 107, so the 4.79× is if anything generous to the GPU: a better CPU zerocheck would close it toward 3.1×.
+Its CPU opponent reaches 71 of a possible 101, so the 4.63× is if anything generous to the GPU: a better CPU zerocheck would close it toward 3.3×.
 
-Poseidon2's 16× is the one result that beats the compute ratio, and it does so because the CPU side is latency-bound rather than throughput-bound.
+The GKR round is the same story one step further. It is the prover's largest phase, and its arithmetic — five extension multiplies per row against eighty bytes read — lands both sides on the compute half of their rooflines. The kernel reaches 295 of the machine's 332 G multiplies per second; the packed CPU baseline reaches 44 of its 101. So the measured **6.67×** is again the ratio between a kernel at its ceiling and a CPU implementation at 44% of its own, and the hardware's own answer is 3.3×.
+
+Poseidon2's 15.8× is the one result that beats the compute ratio by a wide margin, and it does so because the CPU side is latency-bound rather than throughput-bound.
 The permutation's cube S-box is two dependent multiplies, and the twenty partial rounds apply it to a single lane of the state; p3's packed permutation reaches only about a fifth of the CPU's multiply roofline, while the kernel reaches over half of the GPU's by running thousands of permutations concurrently.
 That gap is real today — it is what SP1's CPU prover does — but it is soft: a CPU implementation that interleaved several independent permutations to fill the vector pipelines would take a large bite out of it.
 
@@ -62,6 +65,28 @@ The ceiling is the register multiply roofline, 3.11×, for one that blocks perfe
 Mixing those with the hashing ratio puts the commit phase between **1.96× and 5.00×**.
 
 One thing that measurement makes plain: slop's CPU encoder reaches about 42 GB/s per pass, against the 400 GB/s a hand-written packed stage manages. Comparing a Metal encode against slop's encoder as it ships would show a large ratio, and almost all of it would be CPU headroom rather than GPU advantage.
+
+## The CPU prover is not using this machine's vector units
+
+The SP1 Hypercube prover does almost all of its field arithmetic on scalar `KoalaBear` and `BinomialExtensionField` values spread over rayon. Packing appears in the dependency graph only where Plonky3 puts it — inside `p3-merkle-tree`, whose Poseidon2 sponge and compression really do run on `PackedKoalaBearNeon` four states at a time, and inside `p3-dft`. Of `sp1-hypercube`'s fifty-eight source files exactly one mentions a packed type, and it is not on a hot path; `slop-sumcheck`, `slop-multilinear`, `slop-jagged`, `slop-basefold-prover` and `slop-dft` mention none at all.
+
+That is not a build problem. On `aarch64-apple-darwin`, `target_feature = "neon"` is on by default, which is the only condition `p3-koala-bear` gates its NEON module and `KoalaBear::Packing` on; no flags, no features, nothing to configure. The packed path is available and unused.
+
+The probes measure what it is worth, by running the same computation both ways:
+
+| | scalar, as the prover writes it | packed | gain |
+|---|---|---|---|
+| logup GKR round | 172 M rows/s | 553 M rows/s | **3.22×** |
+| BaseFold fold, extension | 49 GB/s | 168 GB/s | **3.41×** |
+| BaseFold fold, base | 125 GB/s | 300 GB/s | **2.41×** |
+| fix-last-variable, base | 75 GB/s | 354 GB/s | **4.72×** |
+| Poseidon2 permutation | 23.4 M/s | 38.2 M/s | 1.63× |
+
+The fold rows compare against slop's shipped `fold_mle` and `mle_fix_last_variable_constant_padding`, so they include layout as well as packing; the GKR row is the same algorithm in the same order, differing only in scalar versus packed lanes.
+
+This matters twice over. It means roughly seventy percent of prover time — GKR, zerocheck and the PCS opening — is running at a third to a half of what this CPU can do, so a couple of person-weeks spent packing those loops would buy something in the same range as the whole Metal port. And it means any ratio quoted against the prover as it stands is charging the GPU for work the CPU declined to do: the GKR kernel is 6.67× a packed CPU round but 21× the round the prover actually runs, and only the first number is about the GPU.
+
+Two smaller findings from the same audit. Building with `lto = "fat"` and `codegen-units = 1` instead of the release defaults moves nothing: +9% on the packed GKR round, −4% on the scalar one, within noise everywhere else. And `sp1-prover`'s worker counts are fixed constants — four core workers, two setup, two splicing, eight recursion provers — with a `TODO: base default values on system information` beside them; the profiled run held about fourteen of sixteen cores, so there is some headroom in the `SP1_WORKER_*` environment variables but not a great deal.
 
 ## Where the time goes
 
@@ -91,20 +116,23 @@ And the profile was taken with one to two foreign cores busy on the machine, whi
 
 Feeding the phase shares and the per-phase factors into the model:
 
-| | conservative | optimistic |
-|---|---|---|
-| serial port (GPU phases compress, CPU phases unchanged) | **1.83×** | 2.86× |
-| pipelined (CPU-resident work overlapped across shards) | **2.50×** | **4.89×** |
+| | conservative | central | optimistic |
+|---|---|---|---|
+| serial port (GPU phases compress, CPU phases unchanged) | 1.79× | **2.40×** | 3.05× |
+| pipelined (CPU-resident work overlapped across shards) | 2.42× | **3.68×** | 5.47× |
 
-[Desiderata](desiderata.md) D7 asks for 5× end to end. The optimistic column does not reach it, and the optimistic column assumes every bracketed factor lands at its upper end, the pipelining is perfect, and the port is complete — every phase moved, including the constraint transpiler that has not been designed.
+The conservative column gives every compute-bound phase the hardware's own multiply ratio, which is what a CPU implementation at its roofline would leave. The optimistic column gives each phase its measured ratio against a packed CPU baseline. The central column is the geometric mean, and is the number to plan against.
 
-The reason is not a weak GPU or a bad kernel. The zerocheck kernel runs at 99% of the machine's measured multiply roofline; there is nothing left to extract from it. The reason is the machine: a 40-core GPU and twelve NEON performance cores are only 3.1× apart on field multiplies and 1.4× apart on memory, because they share one pool of it. On a discrete GPU with its own 1 TB/s of memory both those numbers would be several times larger, and the same port would clear 5× comfortably. On this machine it cannot.
+[Desiderata](desiderata.md) D7 asks for 5× end to end. Only the optimistic column reaches it, and it assumes every bracketed factor lands at its upper end, the pipelining is perfect, the port is complete — every phase moved, including the constraint transpiler that has not been designed — and the CPU prover stays exactly as unoptimised as it is today. Any of those going the other way puts 5× out of reach.
+
+The reason is not a weak GPU or a bad kernel. The zerocheck and GKR kernels both run within a few percent of the machine's measured multiply roofline; there is nothing left to extract from them. The reason is the machine: a 40-core GPU and twelve NEON performance cores are only 3.3× apart on field multiplies and 1.5× apart on memory, because they share one pool of it. On a discrete GPU with its own 1 TB/s of memory both those numbers would be several times larger, and the same port would clear 5× comfortably. On this machine it cannot, unless the CPU it is measured against stays as unvectorised as it is now — which is a strange thing to build a target on.
 
 What would move the numbers, in order of leverage:
 
-1. **Price GKR properly.** It is 41% of the total and its factor spans 2.58× to 4.79×; that range alone is most of the gap between the two columns above. A probe reproducing a GKR layer's sumcheck round would settle it.
-2. **Write the Metal encode.** It is worth up to 3× on 12% of the total, and the butterfly stage measurement says the memory-bound floor is only 1.10×, so the answer depends entirely on how well a blocked implementation holds a working set in threadgroup memory.
-3. **Derive challenges on the GPU.** At 86 µs per command-buffer round trip, the sumcheck and BaseFold tails are latency-bound; batching the rounds of one fold into a single submission was 3–5× faster in the probe.
-4. **Do not port the base-field folds.** At 1.28× and 1.30× they are not worth the transfer, and PCS opening is 17% of the total spent mostly on them.
+1. **Write the Metal encode.** It is worth up to 3× on 12% of the total, and the butterfly stage measurement says the memory-bound floor is only 1.11×, so the answer depends entirely on how well a blocked implementation holds a working set in threadgroup memory.
+2. **Derive challenges on the GPU.** At 83 µs per command-buffer round trip, the sumcheck and BaseFold tails are latency-bound; batching the rounds of one fold into a single submission was 3–5× faster in the probe.
+3. **Do not port the base-field folds.** At 1.01× and 1.09× they are not worth the transfer, and PCS opening is 17% of the total spent mostly on them.
 
-The honest reading of D7 on this hardware is that 5× is out of reach and 2.5–3× is the realistic target for a complete port. Whether that is worth the work is a judgement about what the prover is for, not a measurement.
+And one that competes with the whole project rather than helping it: **pack the CPU prover's hot loops**. GKR, zerocheck and the folds are 70% of prover time and run scalar today; the measured gains from packing the same algorithms are 2.4× to 4.7×. That is a smaller, safer piece of work with much of the same payoff, and it is worth doing first if only to know what the GPU is really being compared against.
+
+The honest reading of D7 on this hardware is that 5× is the ceiling rather than the target, 3.5× is the realistic figure for a complete port, and roughly half of even that is available from the CPU without any GPU at all. Whether the rest is worth the work is a judgement about what the prover is for, not a measurement.
