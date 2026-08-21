@@ -10,12 +10,13 @@ Usage: probes <command> [flags]
 Commands:
   info                       Report Metal device information.
   check                      Run all GPU-vs-CPU parity checks (small inputs, fast).
-  triad      [--n4 N] [--reps R]                 Streaming bandwidth (uint4 triad).
+  triad      [--n4 N] [--reps R] [--cpu]         Streaming bandwidth (uint4 triad).
   imul       [--grid N] [--iters I] [--reps R]   Integer op throughput (add/mul/mulhi/kb_mul).
-  fieldops   [--n N] [--reps R]                  Streamed base/ext field multiplication.
-  fold       [--n-out N] [--reps R]              BaseFold fold + fix-last-variable.
+  fieldops   [--n N] [--reps R] [--cpu]          Streamed base/ext field multiplication.
+  fold       [--n-out N] [--reps R] [--cpu]      BaseFold fold + fix-last-variable.
   poseidon2  [--n N] [--reps R] [--cpu]          Poseidon2 width-16 permutations.
-  zerocheck  [--n N] [--cols C] [--terms T] [--reps R]  Synthetic zerocheck round.
+  zerocheck  [--n N] [--cols C] [--terms T] [--reps R] [--cpu]  Synthetic zerocheck round.
+  launch     [--n N] [--reps R]                  Dispatch, round-trip and fold-tail fixed costs.
   all        [--reps R] [--cpu]                  All throughput probes at default sizes.
 
 Flags take `--key value` form. Default sizes are chosen for a ~1 GiB working
@@ -58,13 +59,14 @@ fn info(gpu: &Gpu) -> Value {
 }
 
 fn run_checks(gpu: &Gpu) -> Result<(), String> {
-    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 6] = [
+    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 7] = [
         ("triad", probes::triad::check),
         ("imul", probes::imul::check),
         ("fieldops", probes::fieldops::check),
         ("fold", probes::fold::check),
         ("poseidon2", probes::poseidon2::check),
         ("zerocheck", probes::zerocheck::check),
+        ("launch", probes::launch::check),
     ];
     let mut failed = false;
     for (name, check) in checks {
@@ -94,6 +96,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             flag_usize(flags, "iters", 4096)? as u32,
             reps,
         ),
+        "launch" => probes::launch::bench(gpu, flag_usize(flags, "n", 1 << 24)?, reps),
         "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps, with_cpu),
         "fold" => probes::fold::bench(gpu, flag_usize(flags, "n-out", 1 << 25)?, reps, with_cpu),
         "poseidon2" => {
@@ -115,6 +118,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
                 probes::fold::bench(gpu, 1 << 25, reps, with_cpu)?,
                 probes::poseidon2::bench(gpu, 1 << 21, reps, with_cpu)?,
                 probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps, with_cpu)?,
+                probes::launch::bench(gpu, 1 << 24, reps)?,
             ];
             Ok(Value::Array(results))
         }

@@ -378,3 +378,12 @@ kernel void zc_round(device const uint* trace [[buffer(0)]],
         partials[tgid] = shared[0];
     }
 }
+
+// A kernel that does almost nothing: used to price the fixed cost of a
+// dispatch, separately from the fixed cost of a command-buffer round trip.
+kernel void noop(device uint* out [[buffer(0)]],
+                 uint gid [[thread_position_in_grid]]) {
+    if (gid == 0) {
+        out[0] = out[0] + 1u;
+    }
+}

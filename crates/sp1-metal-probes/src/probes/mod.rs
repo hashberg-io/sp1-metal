@@ -1,6 +1,7 @@
 pub mod fieldops;
 pub mod fold;
 pub mod imul;
+pub mod launch;
 pub mod poseidon2;
 pub mod triad;
 pub mod zerocheck;

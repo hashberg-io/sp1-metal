@@ -85,6 +85,41 @@ impl Gpu {
         t0.elapsed().as_secs_f64()
     }
 
+    /// Encode and submit `count` command buffers one at a time, waiting for each
+    /// before building the next. This is the shape a sumcheck round tail is
+    /// forced into: every round's challenge depends on the previous round's
+    /// output, so the rounds cannot be batched into one submission.
+    pub fn time_round_trips<F: Fn(&ComputeCommandEncoderRef, usize)>(
+        &self,
+        count: usize,
+        encode: F,
+    ) -> f64 {
+        let t0 = Instant::now();
+        for round in 0..count {
+            let cb = self.queue.new_command_buffer();
+            let enc = cb.new_compute_command_encoder();
+            encode(enc, round);
+            enc.end_encoding();
+            cb.commit();
+            cb.wait_until_completed();
+        }
+        t0.elapsed().as_secs_f64()
+    }
+
+    /// One warmup pass, then `reps` timed passes of `count` round trips each.
+    pub fn bench_round_trips<F: Fn(&ComputeCommandEncoderRef, usize)>(
+        &self,
+        reps: usize,
+        count: usize,
+        encode: F,
+    ) -> BenchTimes {
+        let _ = self.time_round_trips(count, &encode);
+        let times: Vec<f64> = (0..reps).map(|_| self.time_round_trips(count, &encode)).collect();
+        let best = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+        BenchTimes { best, mean, times }
+    }
+
     /// One warmup pass, then `reps` timed passes of `encodes` encodings each.
     pub fn bench_encoded<F: Fn(&ComputeCommandEncoderRef)>(
         &self,

@@ -38,3 +38,8 @@ fn poseidon2_parity() {
 fn zerocheck_parity() {
     probes::zerocheck::check(&gpu()).unwrap();
 }
+
+#[test]
+fn fold_tail_round_trip_parity() {
+    probes::launch::check(&gpu()).unwrap();
+}
