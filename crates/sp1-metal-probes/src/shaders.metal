@@ -387,3 +387,21 @@ kernel void noop(device uint* out [[buffer(0)]],
         out[0] = out[0] + 1u;
     }
 }
+
+// One radix-2 decimation-in-time butterfly stage, the inner loop of an NTT and
+// so of the Reed-Solomon encode inside a BaseFold commitment. Each thread owns
+// one butterfly: the pair it touches is `m` apart, and `tw` holds the `m`
+// twiddles for this stage.
+kernel void ntt_stage(device uint* a [[buffer(0)]],
+                      device const uint* tw [[buffer(1)]],
+                      constant uint& log_m [[buffer(2)]],
+                      uint gid [[thread_position_in_grid]]) {
+    uint m = 1u << log_m;
+    uint j = gid & (m - 1u);
+    uint block = gid >> log_m;
+    uint i = (block << (log_m + 1u)) + j;
+    uint u = a[i];
+    uint t = kb_mul(a[i + m], tw[j]);
+    a[i] = kb_add(u, t);
+    a[i + m] = kb_sub(u, t);
+}

@@ -60,7 +60,7 @@ fn info(gpu: &Gpu) -> Value {
 }
 
 fn run_checks(gpu: &Gpu) -> Result<(), String> {
-    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 7] = [
+    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 8] = [
         ("triad", probes::triad::check),
         ("imul", probes::imul::check),
         ("fieldops", probes::fieldops::check),
@@ -68,6 +68,7 @@ fn run_checks(gpu: &Gpu) -> Result<(), String> {
         ("poseidon2", probes::poseidon2::check),
         ("zerocheck", probes::zerocheck::check),
         ("launch", probes::launch::check),
+        ("encode", probes::encode::check),
     ];
     let mut failed = false;
     for (name, check) in checks {
@@ -99,6 +100,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             with_cpu,
         ),
         "encode" => probes::encode::bench(
+            gpu,
             flag_usize(flags, "rows", 1 << 20)?,
             flag_usize(flags, "cols", 64)?,
             reps,
@@ -126,7 +128,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
                 probes::poseidon2::bench(gpu, 1 << 21, reps, with_cpu)?,
                 probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps, with_cpu)?,
                 probes::launch::bench(gpu, 1 << 24, reps)?,
-                probes::encode::bench(1 << 20, 64, reps)?,
+                probes::encode::bench(gpu, 1 << 20, 64, reps)?,
             ];
             Ok(Value::Array(results))
         }

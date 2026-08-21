@@ -43,3 +43,8 @@ fn zerocheck_parity() {
 fn fold_tail_round_trip_parity() {
     probes::launch::check(&gpu()).unwrap();
 }
+
+#[test]
+fn ntt_butterfly_stage_parity() {
+    probes::encode::check(&gpu()).unwrap();
+}
