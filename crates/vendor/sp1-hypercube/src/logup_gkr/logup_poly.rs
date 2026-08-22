@@ -41,6 +41,27 @@ pub trait LogupRoundOps<F: Field, K: ExtensionField<F>>: Sized + Send + Sync + '
     fn fix_denominator(mle: &PaddedMle<K>, alpha: K) -> PaddedMle<K> {
         mle.fix_last_variable(alpha)
     }
+
+    /// Fixes the last variable of a whole layer at once.
+    ///
+    /// A layer has one polynomial per chip and there are of the order of a
+    /// hundred chips, so a backend that has to synchronise per polynomial pays
+    /// that cost a few hundred times per round. Folding at layer granularity
+    /// lets it pay once. The default does exactly what folding them one at a
+    /// time did.
+    #[allow(clippy::type_complexity)]
+    fn fix_layer(
+        numerators: (&[PaddedMle<F>], &[PaddedMle<F>]),
+        denominators: (&[PaddedMle<K>], &[PaddedMle<K>]),
+        alpha: K,
+    ) -> (Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>) {
+        (
+            numerators.0.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
+            denominators.0.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
+            numerators.1.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
+            denominators.1.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
+        )
+    }
 }
 
 /// The reduction as the CPU prover performs it, over rayon.
@@ -466,20 +487,11 @@ impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps<F, K> + LogupRoundOps<K, K
             }
             PolynomialLayer::CircuitLayer(layer) => {
                 if layer.num_row_variables == 1 {
-                    let numerator_0: Vec<_> =
-                        layer.numerator_0.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
-                    let denominator_0: Vec<_> = layer
-                        .denominator_0
-                        .iter()
-                        .map(|mle| B::fix_denominator(mle, alpha))
-                        .collect();
-                    let numerator_1: Vec<_> =
-                        layer.numerator_1.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
-                    let denominator_1: Vec<_> = layer
-                        .denominator_1
-                        .iter()
-                        .map(|mle| B::fix_denominator(mle, alpha))
-                        .collect();
+                    let (numerator_0, denominator_0, numerator_1, denominator_1) = B::fix_layer(
+                        (&layer.numerator_0, &layer.numerator_1),
+                        (&layer.denominator_0, &layer.denominator_1),
+                        alpha,
+                    );
 
                     let mut numerator_0_interactions: Vec<_> = numerator_0
                         .into_iter()
@@ -534,23 +546,11 @@ impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps<F, K> + LogupRoundOps<K, K
                         ops: PhantomData,
                     }
                 } else {
-                    let numerator_0: Vec<_> =
-                        layer.numerator_0.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
-
-                    let denominator_0: Vec<_> = layer
-                        .denominator_0
-                        .iter()
-                        .map(|mle| B::fix_denominator(mle, alpha))
-                        .collect();
-
-                    let numerator_1: Vec<_> =
-                        layer.numerator_1.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
-
-                    let denominator_1: Vec<_> = layer
-                        .denominator_1
-                        .iter()
-                        .map(|mle| B::fix_denominator(mle, alpha))
-                        .collect();
+                    let (numerator_0, denominator_0, numerator_1, denominator_1) = B::fix_layer(
+                        (&layer.numerator_0, &layer.numerator_1),
+                        (&layer.denominator_0, &layer.denominator_1),
+                        alpha,
+                    );
 
                     let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
 

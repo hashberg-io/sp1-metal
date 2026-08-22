@@ -197,6 +197,8 @@ fn circuit_layer<N: slop_algebra::Field>(
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
     let mut totals = (EF::zero(), EF::zero(), EF::zero());
+    let cb = ctx.queue.new_command_buffer();
+    let mut held: Vec<(Buffer, usize, [Buffer; 6])> = Vec::new();
     for (((n0, n1), d0), d1) in
         numerators.0.iter().zip(numerators.1).zip(denominators.0).zip(denominators.1)
     {
@@ -206,9 +208,21 @@ fn circuit_layer<N: slop_algebra::Field>(
         let d0_inner = chip_inner(d0).expect("paired denominator");
         let d1_inner = chip_inner(d1).expect("paired denominator");
         let len = n0_inner.guts().as_slice().len();
+        if width == 0 || len == 0 {
+            continue;
+        }
         let rows = len / width;
         let n_pairs = rows.div_ceil(2);
-        let n_full = rows / 2;
+        if n_pairs == 0 {
+            continue;
+        }
+        // The CPU zips eq_row with the row pairs and stops at the shorter of
+        // the two, so a kernel must not read past what eq_row has.
+        let n_pairs = n_pairs.min(eq_row.len() / 2);
+        if n_pairs == 0 {
+            continue;
+        }
+        let n_full = (rows / 2).min(n_pairs);
         let groups = n_pairs.div_ceil(THREADS as usize);
         let partials = ctx.take_partials(groups);
 
@@ -229,7 +243,6 @@ fn circuit_layer<N: slop_algebra::Field>(
         let params =
             Params { n_pairs: n_pairs as u32, n_full_pairs: n_full as u32, width: width as u32 };
 
-        let cb = ctx.queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
         for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1, &b_eqi, &b_eqr].into_iter().enumerate() {
@@ -243,9 +256,17 @@ fn circuit_layer<N: slop_algebra::Field>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
-        cb.commit();
-        cb.wait_until_completed();
-
+        // Keep the buffers alive until the whole layer has run.
+        held.push((partials, groups, [b_n0, b_n1, b_d0, b_d1, b_eqi, b_eqr]));
+        interaction_offset += width;
+        let _ = numerator_words;
+    }
+    if held.is_empty() {
+        return totals;
+    }
+    cb.commit();
+    cb.wait_until_completed();
+    for (partials, groups, _) in held {
         let raw = partials.contents().cast::<EF>();
         for g in 0..groups {
             // SAFETY: the kernel wrote 3 extension elements per threadgroup.
@@ -255,8 +276,6 @@ fn circuit_layer<N: slop_algebra::Field>(
             totals.2 += c;
         }
         ctx.return_partials(partials);
-        interaction_offset += width;
-        let _ = numerator_words;
     }
     totals
 }
@@ -311,6 +330,64 @@ where
             }
         }
         mle.fix_last_variable(alpha)
+    }
+
+    fn fix_layer(
+        numerators: (&[PaddedMle<F>], &[PaddedMle<F>]),
+        denominators: (&[PaddedMle<K>], &[PaddedMle<K>]),
+        alpha: K,
+    ) -> (Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>) {
+        let handled = is::<K, EF>() && (is::<F, BaseField>() || is::<F, EF>());
+        if !handled {
+            return (
+                numerators.0.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
+                denominators.0.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
+                numerators.1.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
+                denominators.1.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
+            );
+        }
+        // SAFETY: the type ids match, so these are the same types.
+        let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
+        let ctx = context();
+        let cb = ctx.queue.new_command_buffer();
+        let num_pso = if is::<F, BaseField>() { &ctx.fold_base } else { &ctx.fold_ext };
+        let stage_num = |ms: &[PaddedMle<F>]| -> Vec<Fold> {
+            ms.iter()
+                .map(|m| {
+                    if is::<F, BaseField>() {
+                        let m: &PaddedMle<BaseField> = unsafe { &*std::ptr::from_ref(m).cast() };
+                        stage_fold(cb, num_pso, m, a)
+                    } else {
+                        let m: &PaddedMle<EF> = unsafe { &*std::ptr::from_ref(m).cast() };
+                        stage_fold(cb, num_pso, m, a)
+                    }
+                })
+                .collect()
+        };
+        let stage_den = |ms: &[PaddedMle<K>]| -> Vec<Fold> {
+            ms.iter()
+                .map(|m| {
+                    let m: &PaddedMle<EF> = unsafe { &*std::ptr::from_ref(m).cast() };
+                    stage_fold(cb, &ctx.fold_ext, m, a)
+                })
+                .collect()
+        };
+        let staged = (
+            stage_num(numerators.0),
+            stage_den(denominators.0),
+            stage_num(numerators.1),
+            stage_den(denominators.1),
+        );
+        cb.commit();
+        cb.wait_until_completed();
+        let out = (
+            finish_all(staged.0),
+            finish_all(staged.1),
+            finish_all(staged.2),
+            finish_all(staged.3),
+        );
+        // SAFETY: K is EF, checked above.
+        unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) }
     }
 
     fn fix_denominator(mle: &PaddedMle<K>, alpha: K) -> PaddedMle<K> {
@@ -369,6 +446,14 @@ fn fix_ext(mle: &PaddedMle<EF>, alpha: EF) -> PaddedMle<EF> {
     fix_padded(&context().fold_ext, mle, alpha, padding, as_words(&words))
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FoldParams {
+    out_rows: u32,
+    rows: u32,
+    width: u32,
+}
+
 /// Fixes a padded MLE's last variable on the GPU.
 ///
 /// The result is an ordinary CPU-side `Mle`: unified memory means the kernel
@@ -395,6 +480,9 @@ where
     let rows = inner.guts().sizes()[0];
     let out_rows = rows.div_ceil(2);
     let total = out_rows * width;
+    if total == 0 {
+        return mle.fix_last_variable(alpha);
+    }
 
     let mut values: Vec<EF> = Vec::with_capacity(total);
     // SAFETY: the kernel writes every element before anything reads them.
@@ -421,27 +509,11 @@ where
     let pad_buf = upload(padding_words);
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct FoldParams {
-        out_rows: u32,
-        rows: u32,
-        width: u32,
-    }
     let params =
         FoldParams { out_rows: out_rows as u32, rows: rows as u32, width: width as u32 };
 
     let cb = ctx.queue.new_command_buffer();
-    let enc = cb.new_compute_command_encoder();
-    enc.set_compute_pipeline_state(pso);
-    enc.set_buffer(0, Some(&in_buf), 0);
-    enc.set_buffer(1, Some(&pad_buf), 0);
-    enc.set_buffer(2, Some(&out_buf), 0);
-    enc.set_bytes(3, std::mem::size_of::<FoldParams>() as u64, (&params as *const FoldParams).cast());
-    enc.set_bytes(4, 16, alpha_words.as_ptr().cast());
-    let threads = total as u64;
-    enc.dispatch_threads(MTLSize::new(threads, 1, 1), MTLSize::new(THREADS.min(threads.max(1)), 1, 1));
-    enc.end_encoding();
+    encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
     cb.commit();
     cb.wait_until_completed();
 
@@ -468,4 +540,142 @@ where
     let values: Vec<T> = padding.into();
     let lifted: Vec<EF> = values.iter().copied().map(<EF as AbstractExtensionField<T>>::from_base).collect();
     (Padding::Generic(Arc::new(lifted.into())), values)
+}
+
+
+/// Encodes one fold into an existing command buffer.
+#[allow(clippy::too_many_arguments)]
+fn encode_fold(
+    cb: &metal::CommandBufferRef,
+    pso: &ComputePipelineState,
+    in_buf: &Buffer,
+    pad_buf: &Buffer,
+    out_buf: &Buffer,
+    params: FoldParams,
+    alpha_words: [u32; 4],
+    total: usize,
+) {
+    let enc = cb.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(pso);
+    enc.set_buffer(0, Some(in_buf), 0);
+    enc.set_buffer(1, Some(pad_buf), 0);
+    enc.set_buffer(2, Some(out_buf), 0);
+    enc.set_bytes(3, std::mem::size_of::<FoldParams>() as u64, (&params as *const FoldParams).cast());
+    enc.set_bytes(4, 16, alpha_words.as_ptr().cast());
+    let threads = total as u64;
+    enc.dispatch_threads(
+        MTLSize::new(threads, 1, 1),
+        MTLSize::new(THREADS.min(threads.max(1)), 1, 1),
+    );
+    enc.end_encoding();
+}
+
+/// A fold whose dispatch has been encoded but not yet awaited.
+struct PendingFold {
+    values: Vec<EF>,
+    out_buf: Buffer,
+    direct: bool,
+    out_rows: usize,
+    width: usize,
+    out_vars: u32,
+    padding: Padding<EF, CpuBackend>,
+    held: Vec<Buffer>,
+}
+
+impl PendingFold {
+    fn finish(mut self) -> PaddedMle<EF> {
+        if !self.direct {
+            let bytes = self.out_rows * self.width * std::mem::size_of::<EF>();
+            // SAFETY: the kernel wrote that many bytes of extension elements.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.out_buf.contents().cast::<u8>(),
+                    self.values.as_mut_ptr().cast::<u8>(),
+                    bytes,
+                );
+            }
+        }
+        drop(self.held);
+        let guts = slop_tensor::Tensor::from(self.values).reshape([self.out_rows, self.width]);
+        PaddedMle::padded(Arc::new(Mle::new(guts)), self.out_vars, self.padding)
+    }
+}
+
+/// Either a fold that needed no GPU work, or one encoded into the batch.
+enum Fold {
+    Done(PaddedMle<EF>),
+    Pending(PendingFold),
+}
+
+/// Encodes one padded MLE's fold into `cb`, or completes it outright when there
+/// is nothing to compute.
+fn stage_fold<T: slop_algebra::Field>(
+    cb: &metal::CommandBufferRef,
+    pso: &ComputePipelineState,
+    mle: &PaddedMle<T>,
+    alpha: EF,
+) -> Fold
+where
+    EF: slop_algebra::ExtensionField<T>,
+{
+    let (padding, pad_values) = lift_padding(mle);
+    let out_vars = mle.num_variables() - 1;
+    let Some(inner) = chip_inner(mle) else {
+        return Fold::Done(PaddedMle::dummy(out_vars, padding));
+    };
+    let ctx = context();
+    let width = inner.num_polynomials();
+    let rows = inner.guts().sizes()[0];
+    let out_rows = rows.div_ceil(2);
+    let total = out_rows * width;
+    if total == 0 {
+        return Fold::Done(mle.fix_last_variable(alpha));
+    }
+    let mut values: Vec<EF> = Vec::with_capacity(total);
+    // SAFETY: the kernel writes every element before anything reads them.
+    unsafe { values.set_len(total) };
+    let out_bytes = total * std::mem::size_of::<EF>();
+    let page = 16 * 1024usize;
+    let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
+    STATS.with_borrow(direct);
+    let out_buf = if direct {
+        // SAFETY: borrowed until the batch is awaited, which happens before the
+        // values are read.
+        unsafe {
+            ctx.device.new_buffer_with_bytes_no_copy(
+                values.as_ptr().cast(),
+                out_bytes as u64,
+                MTLResourceOptions::StorageModeShared,
+                None,
+            )
+        }
+    } else {
+        ctx.device.new_buffer(out_bytes as u64, MTLResourceOptions::StorageModeShared)
+    };
+    let in_buf = upload(as_words(inner.guts().as_slice()));
+    let pad_buf = upload(as_words(&pad_values));
+    let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
+    let params =
+        FoldParams { out_rows: out_rows as u32, rows: rows as u32, width: width as u32 };
+    encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
+    Fold::Pending(PendingFold {
+        values,
+        out_buf,
+        direct,
+        out_rows,
+        width,
+        out_vars,
+        padding,
+        held: vec![in_buf, pad_buf],
+    })
+}
+
+fn finish_all(folds: Vec<Fold>) -> Vec<PaddedMle<EF>> {
+    folds
+        .into_iter()
+        .map(|f| match f {
+            Fold::Done(m) => m,
+            Fold::Pending(p) => p.finish(),
+        })
+        .collect()
 }

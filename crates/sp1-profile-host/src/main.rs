@@ -10,6 +10,8 @@
 //! Run with `RUST_LOGGER=flat RUST_LOG=debug`. The flat logger writes its span
 //! lines to stdout, not stderr, so capture both:
 //!
+//! A guest that reads a single `u32` can be driven with `--stdin-u32 N` instead.
+//!
 //! ```sh
 //! SP1_DUMP=1 path/to/real-host              # writes program.bin, stdin.bin
 //! RUST_LOGGER=flat RUST_LOG=debug cargo run --release -- \
@@ -28,6 +30,7 @@ struct Args {
     mode: String,
     stdin_file: Option<String>,
     stdin_bin: Option<String>,
+    stdin_u32: Option<u32>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -35,6 +38,7 @@ fn parse_args() -> Result<Args> {
     let mut mode = "compressed".to_string();
     let mut stdin_file = None;
     let mut stdin_bin = None;
+    let mut stdin_u32 = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -42,10 +46,21 @@ fn parse_args() -> Result<Args> {
             "--mode" => mode = args.next().context("--mode needs core|compressed")?,
             "--stdin-file" => stdin_file = Some(args.next().context("--stdin-file needs a path")?),
             "--stdin-bin" => stdin_bin = Some(args.next().context("--stdin-bin needs a path")?),
+            "--stdin-u32" => {
+                stdin_u32 = Some(
+                    args.next().context("--stdin-u32 needs a number")?.parse().context("parsing --stdin-u32")?,
+                );
+            }
             other => bail!("unknown argument `{other}`"),
         }
     }
-    Ok(Args { elf: elf.context("--elf <path> is required")?, mode, stdin_file, stdin_bin })
+    Ok(Args {
+        elf: elf.context("--elf <path> is required")?,
+        mode,
+        stdin_file,
+        stdin_bin,
+        stdin_u32,
+    })
 }
 
 #[tokio::main]
@@ -61,6 +76,9 @@ async fn main() -> Result<()> {
         }
         None => SP1Stdin::new(),
     };
+    if let Some(n) = args.stdin_u32 {
+        stdin.write(&n);
+    }
     if let Some(path) = &args.stdin_file {
         let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
         stdin.write_slice(&bytes);
