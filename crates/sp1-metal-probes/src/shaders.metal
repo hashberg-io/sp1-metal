@@ -201,6 +201,23 @@ inline uint4 ext_neg(uint4 a) {
     return uint4(kb_neg(a.x), kb_neg(a.y), kb_neg(a.z), kb_neg(a.w));
 }
 
+// A column's value with the last variable set to 2 or 4, read straight from the
+// two rows of a pair rather than staged into an array: a wide chip's row would
+// not fit in registers. When the pair has no odd row the partner is zero, which
+// is what the CPU does with a short final chunk.
+inline uint4 zc_at_2(device const uint4* m, uint b0, uint b1, uint i, bool has1) {
+    uint4 a = m[b0 + i];
+    uint4 s = has1 ? ext_sub(m[b1 + i], a) : ext_neg(a);
+    return ext_add(a, ext_add(s, s));
+}
+
+inline uint4 zc_at_4(device const uint4* m, uint b0, uint b1, uint i, bool has1) {
+    uint4 a = m[b0 + i];
+    uint4 s = has1 ? ext_sub(m[b1 + i], a) : ext_neg(a);
+    uint4 s2 = ext_add(s, s);
+    return ext_add(a, ext_add(s2, s2));
+}
+
 // ---- end of shared field arithmetic ----
 
 // ---------------------------------------------------------------------------

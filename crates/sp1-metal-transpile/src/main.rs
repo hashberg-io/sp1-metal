@@ -91,6 +91,15 @@ struct Codegen {
     /// Set if any constraint reads a row other than the current one. The
     /// zerocheck folder hands the AIR a single row, so this must stay clear.
     reads_next_row: bool,
+    /// Distinguishes the three copies of a body emitted for the interpolation
+    /// points, so their temporaries do not collide.
+    prefix: &'static str,
+    /// Which interpolation point this copy reads its columns at.
+    point: u8,
+    /// Whether this is a zerocheck round body, whose trace is row-major and
+    /// read a row pair at a time, rather than the single-point kernel the
+    /// spike measured, whose synthetic trace is column-major.
+    round: bool,
 }
 
 impl Codegen {
@@ -105,12 +114,20 @@ impl Codegen {
             loads: 0,
             ext_columns,
             reads_next_row: false,
+            prefix: "t",
+            point: 0,
+            round: false,
         }
+    }
+
+    /// A copy that reads its columns interpolated to `point`.
+    fn at_point(ext_columns: bool, prefix: &'static str, point: u8) -> Self {
+        Self { prefix, point, round: true, ..Self::new(ext_columns) }
     }
 
     fn fresh(&mut self) -> String {
         self.next += 1;
-        format!("t{}", self.next - 1)
+        format!("{}{}", self.prefix, self.next - 1)
     }
 
     fn bind(&mut self, ty: Ty, expr: &str) -> (String, Ty) {
@@ -125,7 +142,14 @@ impl Codegen {
             self.reads_next_row = true;
         }
         let ty = if self.ext_columns { Ty::Ext } else { Ty::Base };
-        let expr = format!("{table}[{index}u * n + r{}]", offset.min(1));
+        let expr = if !self.round {
+            format!("{table}[{index}u * n + r{}]", offset.min(1))
+        } else if self.point == 0 {
+            format!("{table}[{table}_b0 + {index}u]")
+        } else {
+            let pt = self.point;
+            format!("zc_at_{pt}({table}, {table}_b0, {table}_b1, {index}u, has1)")
+        };
         self.bind(ty, &expr)
     }
 
@@ -458,6 +482,121 @@ fn measure(
     })
 }
 
+/// One chip's zerocheck round reduction, as a Metal kernel.
+///
+/// The reduction is a sum over row pairs of the constraint polynomial evaluated
+/// at three interpolation points, weighted by eq. Only the constraint
+/// evaluation is chip-specific; the interpolation, the interaction adjustment
+/// and the reduction are the same for every chip, so the body is generated
+/// three times — once per point — and dropped into a fixed wrapper.
+///
+/// Columns are read interpolated rather than staged into a per-thread array: a
+/// wide chip's row would be tens of kilobytes, which no thread has.
+fn transpile_round(
+    constraints: &[SymbolicExpression<F>],
+    main_width: usize,
+    prep_width: usize,
+    is_first_round: bool,
+) -> (String, usize) {
+    let mut bodies = String::new();
+    let mut nodes = 0usize;
+    for (prefix, point, acc) in [("a", 0u8, "acc0"), ("b", 2, "acc2"), ("c", 4, "acc4")] {
+        // The first round knows the polynomial vanishes at 0, so that copy of
+        // the body would be dead weight.
+        if point == 0 && is_first_round {
+            writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
+            continue;
+        }
+        let mut cg = Codegen::at_point(true, prefix, point);
+        let names: Vec<(String, Ty)> = constraints.iter().map(|c| cg.emit(c)).collect();
+        nodes += cg.next;
+        write!(bodies, "{}", cg.body).unwrap();
+        writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
+        for (k, (n, ty)) in names.iter().enumerate() {
+            let term = match ty {
+                Ty::Base => format!("ext_mul_base(ap[{k}u], {n})"),
+                Ty::Ext => format!("ext_mul_kara(ap[{k}u], {n})"),
+            };
+            writeln!(bodies, "        {acc} = ext_add({acc}, {term});").unwrap();
+        }
+    }
+    let kernel = format!(
+        r#"
+struct ZcParams {{
+    uint pairs;
+    uint rows;
+    uint main_w;
+    uint prep_w;
+}};
+
+kernel void zc_round(device const uint4* main [[buffer(0)]],
+                     device const uint4* prep [[buffer(1)]],
+                     device const uint* pv [[buffer(2)]],
+                     device const uint4* eq [[buffer(3)]],
+                     device const uint4* ap [[buffer(4)]],
+                     device const uint4* gp [[buffer(5)]],
+                     device uint4* partials [[buffer(6)]],
+                     constant ZcParams& p [[buffer(7)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint tid [[thread_position_in_threadgroup]],
+                     uint tgid [[threadgroup_position_in_grid]]) {{
+    threadgroup uint4 s0[256];
+    threadgroup uint4 s2[256];
+    threadgroup uint4 s4[256];
+    uint4 y0 = uint4(0u), y2 = uint4(0u), y4 = uint4(0u);
+    if (gid < p.pairs) {{
+        uint q = gid;
+        bool has1 = (2u * q + 1u) < p.rows;
+        uint main_b0 = (2u * q) * p.main_w;
+        uint main_b1 = (2u * q + 1u) * p.main_w;
+        uint prep_b0 = (2u * q) * p.prep_w;
+        uint prep_b1 = (2u * q + 1u) * p.prep_w;
+{bodies}
+        // The interaction adjustment: every column, main then preprocessed,
+        // against its batching power. The point-4 adjustment is inferred from
+        // the other two rather than computed again, as the CPU does.
+        uint4 g0 = uint4(0u), g2 = uint4(0u);
+        for (uint i = 0u; i < p.main_w; i++) {{
+            g0 = ext_add(g0, ext_mul_kara(gp[i], main[main_b0 + i]));
+            g2 = ext_add(g2, ext_mul_kara(gp[i], zc_at_2(main, main_b0, main_b1, i, has1)));
+        }}
+        for (uint i = 0u; i < p.prep_w; i++) {{
+            uint4 w = gp[p.main_w + i];
+            g0 = ext_add(g0, ext_mul_kara(w, prep[prep_b0 + i]));
+            g2 = ext_add(g2, ext_mul_kara(w, zc_at_2(prep, prep_b0, prep_b1, i, has1)));
+        }}
+        uint4 g4 = ext_sub(ext_add(g2, g2), g0);
+        uint4 e = eq[q];
+        y0 = ext_mul_kara(ext_add(acc0, g0), e);
+        y2 = ext_mul_kara(ext_add(acc2, g2), e);
+        y4 = ext_mul_kara(ext_add(acc4, g4), e);
+    }}
+    s0[tid] = y0;
+    s2[tid] = y2;
+    s4[tid] = y4;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = 128u; s > 0u; s >>= 1u) {{
+        if (tid < s) {{
+            s0[tid] = ext_add(s0[tid], s0[tid + s]);
+            s2[tid] = ext_add(s2[tid], s2[tid + s]);
+            s4[tid] = ext_add(s4[tid], s4[tid + s]);
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }}
+    if (tid == 0u) {{
+        partials[3u * tgid] = s0[0];
+        partials[3u * tgid + 1u] = s2[0];
+        partials[3u * tgid + 2u] = s4[0];
+    }}
+}}
+"#,
+        bodies = bodies,
+    );
+    let _ = (main_width, prep_width);
+    let source = format!("{}\nconstant uint KB_ONE = {}u;\n{}", header(), to_monty(1), kernel);
+    (source, nodes)
+}
+
 thread_local! {
     /// Time spent in the Metal compiler for the chip being checked.
     static COMPILE_SECONDS: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
@@ -585,11 +724,155 @@ fn parity(
     }
 }
 
+/// Checks a generated round kernel against the prover's own reduction.
+///
+/// The oracle is `increment_y_values` itself, called pair by pair, so this
+/// compares against the code the CPU path actually runs rather than against a
+/// second reading of the specification.
+#[allow(clippy::too_many_arguments)]
+fn parity3(
+    device: &metal::Device,
+    queue: &metal::CommandQueue,
+    air: &RiscvAir<F>,
+    source: &str,
+    num_constraints: usize,
+    main_width: usize,
+    prep_width: usize,
+    rows: usize,
+) -> Result<f64, String> {
+    let mut rng = StdRng::seed_from_u64(0x5EED_5EED);
+    let pairs = rows.div_ceil(2);
+    let pvs = sp1_hypercube::PROOF_MAX_NUM_PVS;
+    let public_values: Vec<F> = (0..pvs).map(|_| rng.gen()).collect();
+    let alpha: Vec<EF> = (0..num_constraints.max(1)).map(|_| rng.gen()).collect();
+    let gkr: Vec<EF> = (0..main_width + prep_width).map(|_| rng.gen()).collect();
+    let eq: Vec<EF> = (0..pairs).map(|_| rng.gen()).collect();
+    // Row-major, which is how the prover lays a trace out.
+    let main: Vec<EF> = (0..rows * main_width).map(|_| rng.gen()).collect();
+    let prep: Vec<EF> = (0..rows * prep_width.max(1)).map(|_| rng.gen()).collect();
+
+    let words = |xs: &[EF]| -> Vec<u32> { xs.iter().flat_map(|x| monty4(*x)).collect() };
+    let buf = |v: &[u32]| {
+        device.new_buffer_with_data(
+            v.as_ptr().cast(),
+            std::mem::size_of_val(v).max(4) as u64,
+            metal::MTLResourceOptions::StorageModeShared,
+        )
+    };
+    let (b_main, b_prep) = (buf(&words(&main)), buf(&words(&prep)));
+    let b_pv = buf(&public_values.iter().map(|x| monty_of(*x)).collect::<Vec<_>>());
+    let (b_eq, b_ap, b_gp) = (buf(&words(&eq)), buf(&words(&alpha)), buf(&words(&gkr)));
+
+    let t0 = std::time::Instant::now();
+    let library = device
+        .new_library_with_source(source, &metal::CompileOptions::new())
+        .map_err(|e| format!("compile: {e}"))?;
+    let compile_seconds = t0.elapsed().as_secs_f64();
+    let f = library.get_function("zc_round", None).map_err(|e| format!("{e}"))?;
+    let pso =
+        device.new_compute_pipeline_state_with_function(&f).map_err(|e| format!("{e}"))?;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ZcParams {
+        pairs: u32,
+        rows: u32,
+        main_w: u32,
+        prep_w: u32,
+    }
+    let params = ZcParams {
+        pairs: pairs as u32,
+        rows: rows as u32,
+        main_w: main_width as u32,
+        prep_w: prep_width as u32,
+    };
+    let threads = 256u64;
+    let groups = (pairs as u64).div_ceil(threads);
+    let partials =
+        device.new_buffer(groups * 3 * 16, metal::MTLResourceOptions::StorageModeShared);
+    let cb = queue.new_command_buffer();
+    let enc = cb.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(&pso);
+    for (i, b) in [&b_main, &b_prep, &b_pv, &b_eq, &b_ap, &b_gp].into_iter().enumerate() {
+        enc.set_buffer(i as u64, Some(b), 0);
+    }
+    enc.set_buffer(6, Some(&partials), 0);
+    enc.set_bytes(
+        7,
+        std::mem::size_of::<ZcParams>() as u64,
+        (&params as *const ZcParams).cast(),
+    );
+    enc.dispatch_thread_groups(
+        metal::MTLSize::new(groups, 1, 1),
+        metal::MTLSize::new(threads, 1, 1),
+    );
+    enc.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let raw = partials.contents().cast::<[u32; 4]>();
+    let (mut g0, mut g2, mut g4) = (EF::zero(), EF::zero(), EF::zero());
+    for g in 0..groups as usize {
+        g0 += from_monty4(unsafe { *raw.add(3 * g) });
+        g2 += from_monty4(unsafe { *raw.add(3 * g + 1) });
+        g4 += from_monty4(unsafe { *raw.add(3 * g + 2) });
+    }
+
+    let (mut w0, mut w2, mut w4) = (EF::zero(), EF::zero(), EF::zero());
+    let interp = |src: &[EF], width: usize, q: usize| -> (Vec<EF>, Vec<EF>, Vec<EF>) {
+        let has1 = 2 * q + 1 < rows;
+        let mut v0 = Vec::with_capacity(width);
+        let mut v2 = Vec::with_capacity(width);
+        let mut v4 = Vec::with_capacity(width);
+        for i in 0..width {
+            let a = src[2 * q * width + i];
+            let b = if has1 { src[(2 * q + 1) * width + i] } else { EF::zero() };
+            let s = b - a;
+            v0.push(a);
+            v2.push(s + s + a);
+            v4.push(s + s + s + s + a);
+        }
+        (v0, v2, v4)
+    };
+    for q in 0..pairs {
+        let (m0, m2, m4) = interp(&main, main_width, q);
+        let (p0, p2, p4) = if prep_width == 0 {
+            (vec![], vec![], vec![])
+        } else {
+            interp(&prep, prep_width, q)
+        };
+        sp1_hypercube::prover::increment_y_values::<EF, F, EF, _, false>(
+            &public_values,
+            &alpha,
+            air,
+            &mut w0,
+            &mut w2,
+            &mut w4,
+            &p0,
+            &m0,
+            &p2,
+            &m2,
+            &p4,
+            &m4,
+            &gkr,
+            eq[q],
+        );
+    }
+    if (g0, g2, g4) == (w0, w2, w4) {
+        Ok(compile_seconds)
+    } else {
+        Err(format!("y0 {}, y2 {}, y4 {}",
+            if g0 == w0 { "ok" } else { "differs" },
+            if g2 == w2 { "ok" } else { "differs" },
+            if g4 == w4 { "ok" } else { "differs" }))
+    }
+}
+
 fn main() {
     let mut only: Option<String> = None;
     let mut chunk = usize::MAX;
     let mut stats_only = false;
     let mut do_parity = false;
+    let mut do_round = false;
     let mut ext_columns = false;
     let mut max_nodes = usize::MAX;
     let mut args = std::env::args().skip(1);
@@ -608,6 +891,10 @@ fn main() {
             }
             "--parity" => {
                 do_parity = true;
+                ext_columns = true;
+            }
+            "--round" => {
+                do_round = true;
                 ext_columns = true;
             }
             other => only = Some(other.to_string()),
@@ -661,6 +948,36 @@ fn main() {
         }
         let device = metal::Device::system_default().expect("no Metal device");
         let queue = device.new_command_queue();
+        if do_round {
+            let (source, round_nodes) =
+                transpile_round(&constraints, main_width, prep_width, false);
+            match parity3(
+                &device,
+                &queue,
+                air,
+                &source,
+                constraints.len(),
+                main_width,
+                prep_width,
+                512,
+            ) {
+                Ok(secs) => println!(
+                    "{:34} {:5} constr {:7} nodes {:6} kB {:7.2}s compile  MATCHES",
+                    name,
+                    constraints.len(),
+                    round_nodes,
+                    source.len() / 1024,
+                    secs
+                ),
+                Err(e) => println!(
+                    "{:34} {:5} constr {:7} nodes  DIFFERS: {e}",
+                    name,
+                    constraints.len(),
+                    round_nodes
+                ),
+            }
+            continue;
+        }
         if do_parity {
             let rows = 256;
             COMPILE_SECONDS.with(|c| c.set(0.0));
