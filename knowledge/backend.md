@@ -184,10 +184,22 @@ What the diagnosis so far does establish is where to look. Every cause found was
 
 Under `RUST_LOGGER=flat RUST_LOG=debug` the CPU build emits 211 span lines and finishes while the Metal build emits none, which looked like evidence of a stall and was not: the process was being killed before its buffered output was flushed. Silence from a killed process says nothing about progress, and the exit status says everything.
 
-## 8 and 9: not reached
+## 8. Zerocheck: the seam is easy, the kernel needs a build step
 
-**Zerocheck** has the same shape as GKR and the same blocker: `ZeroCheckPoly` declares `type Backend = CpuBackend`, so the phase needs the same kind of factoring in the fork.
-The transpiler that would feed it exists and is measured — all 119 chips, 2.7 million DAG nodes, 215 G multiplies per second at the best chunk size — but nothing connects the two.
+Read rather than assumed, because the first guess at this was wrong in both directions.
 
-**The acceptance run** D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again.
+**The seam is cleaner than GKR's.** `zerocheck_sum_as_poly_in_last_variable` and `zerocheck_fix_last_variable` are already free functions in `prover/zerocheck/`, and the three `slop_sumcheck` backend impls just delegate to them. Factoring them behind a `ZerocheckOps` trait with a defaulted marker parameter is the same edit that worked for GKR, and smaller.
+
+**The kernel behind it is the work, and it needs an offline build step.** The reduction's inner call is `increment_y_values`, which evaluates the chip's constraints through `air.eval(&mut ConstraintSumcheckFolder)` — a Rust function, per chip, at three interpolation points. There is no data-only formulation to port: a Metal zerocheck *is* the transpiler's generated kernels.
+
+Two things make that a build step rather than a runtime one:
+
+- **The transpiler cannot live in the fork.** It needs `sp1-core-machine` to enumerate chips and read their symbolic constraints, and `sp1-core-machine` depends on `sp1-hypercube`. Putting it inside would close a dependency cycle. The kernels have to be generated into a file the fork includes.
+- **Compile time forces it anyway.** The spike measured eight minutes for the largest chip's kernel and 102 MB of generated Metal across all 119. That cannot happen at prover startup; it wants a Metal binary archive built ahead of time.
+
+So step 8 is: generate three-point constraint kernels offline for the chips a workload uses, compile them into an archive, add the `ZerocheckOps` seam, and parity-check against `zerocheck_sum_as_poly_in_last_variable`. Each piece is understood; together they are days, not hours, and none of it is started.
+
+## 9. Acceptance
+
+The run D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again, which is not this project's to start.
 The harness for it is ready: `crates/sp1-profile-host` builds against the fork, takes `--features metal` to turn the GPU path on, proves and verifies, and now accepts `--stdin-u32` so a small guest can drive it. A fibonacci core proof through it is the standing smoke test — 18.2 s on the CPU path, and the number to beat.
