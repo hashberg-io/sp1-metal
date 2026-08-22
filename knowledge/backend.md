@@ -209,3 +209,35 @@ So what remains of step 8 is the reduction: generate three-point constraint kern
 
 The run D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again, which is not this project's to start.
 The harness for it is ready: `crates/sp1-profile-host` builds against the fork, takes `--features metal` to turn the GPU path on, proves and verifies, and now accepts `--stdin-u32` so a small guest can drive it. A fibonacci core proof through it is the standing smoke test — 18.2 s on the CPU path, and the number to beat.
+
+### The scaling law, measured
+
+The proof-of-seed pair is gone, so acceptance is a set of canonical non-trivial computations instead, run in pairs through the *same* binary with `SP1_METAL_MIN_ENTRIES` switching the Metal path on and off, so nothing but the path under test differs.
+Three guests: `fib` at 9 cycles per iteration, `mem` at 21.7, `bits` at 14.
+
+Holding work fixed at two million fibonacci iterations and sweeping the shard size across a sixteen-fold range moves the ratio from 1.211x to 1.256x — about +0.009x per doubling, which is flat.
+Holding shard size fixed and sweeping total work moves it from 1.068x at 250k iterations to 1.246x at 2M — about +0.056x per doubling, six times the shard-size slope.
+The two other guests land inside that envelope at their sizes: `mem` 1.078x, `bits` 1.153x.
+
+So the speedup tracks how much of a run is GKR at all, which grows with the number of shards, and not the size of the individual layers.
+An earlier reading of this project's numbers had it the other way around — that bigger layers were the driver — and the shard-size axis is what refutes it.
+
+## 10. What the GPU is actually doing
+
+The end-to-end numbers above say the Metal path wins a little. They do not say why it wins so little, and guessing at that produced two wrong answers in a row before the machine was asked directly.
+
+**Instruments.** Metal reports `GPUStartTime` and `GPUEndTime` per command buffer, which is execution alone with no dispatch latency or CPU time in it, and needs no privileges — unlike `powermetrics`, which wants a password this session does not have. Against that sits a streaming kernel over the same data, which measures what this machine can really do rather than what the spec sheet claims: 531 GB/s observed against 546 quoted. A second reference kernel does extension multiplies with no memory traffic at all, giving an arithmetic ceiling to compare against. `crates/sp1-metal-probes` is too slow to iterate a kernel in, because the fork it feeds takes eight minutes to build; the reference harness reads its shaders from disk at run time and so turns the loop over in seconds.
+
+**The kernel was arithmetic-bound, not memory-bound.** The round reduction reached 155 GB/s, 29% of the observed ceiling — but the streaming kernel moves the same 64 bytes per element 2.8x faster, so the shortfall was never bandwidth. Three changes, each checked bit-for-bit against the old kernel at six chip widths:
+
+- Reading in order. One thread per row pair put neighbouring lanes `2*width` elements apart, so each lane pulled its own cache line for 16 bytes of it — 12% of every line fetched. One cell per thread fixes that for one extra multiply, since the eq weights factor out of the interaction sum linearly.
+- Multiplying less. `W` is `monty(3)` and Montgomery form is linear, so multiplying by `W` is tripling; reduction is linear too, so two products can share one `REDC` while their sum stays under `P*2^32`; and Karatsuba takes 16 base products to 9. Peak throughput: 20.0 to 39.5 G ext_mul/s.
+- Bounding the grid. One thread per cell would have handed back 200,000 per-threadgroup partials on a wide chip, moving work back onto the CPU that the kernel had just taken off it.
+
+Together: 1.9x to 2.35x on GPU time, and the isolated round reduction from 6.14 ms to 3.89 ms, 13.7x to 23.1x against the CPU.
+
+**And it barely mattered.** On a two-million-iteration proof the GPU is busy **0.65 seconds out of 51** — 1.3%. That is the whole explanation for a GPU that looks idle on a meter: it is idle. Doubling the speed of 1.3% of a proof is worth 0.6%, so the kernel work, though real, was the wrong lever, and only the instrument said so.
+
+**The copy costs twelve times the compute.** Feeding those 0.65 seconds takes **179 GB of uploads costing 8.18 thread-seconds**, because `newBufferWithBytesNoCopy` wants a page-aligned pointer *and* length and chip buffers have neither, so 89% of uploads are memcpys. The rate, 21.7 GB/s, is not memcpy speed: a fresh `MTLBuffer` has cold pages and faults them in as it copies, while copying into a buffer that has been written before runs at 91.2 GB/s, and allocating the buffer costs nothing either way. Reusing staging buffers takes uploading to 5.76 thread-seconds; the rest of the gap is four threads sharing memory bandwidth.
+
+**Where this leaves the target.** The paired figure is now 63.71 s against 50.45 s, 1.263x. Of the Metal path's remaining cost almost none is arithmetic, so even making the whole path free would reach about 1.3x. The profile says why: GKR is 47% of the thread-seconds but the port covers only the round reduction and the fold within it, and PCS at 19%, commit at 14% and zerocheck at 15% have never been touched at all. D7's 5x is a coverage problem, not a tuning problem, and no further work on this kernel changes that.
