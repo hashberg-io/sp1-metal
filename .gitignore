@@ -1,5 +1,7 @@
 /target
 /crates/sp1-profile-host/target
+/crates/sp1-metal-transpile/target
+/crates/sp1-metal-transpile/transpile.json
 /results
 __pycache__/
 .DS_Store

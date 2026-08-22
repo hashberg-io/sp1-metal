@@ -30,6 +30,7 @@ Sensitivity, on the complete port against the shipped prover:
 | PCS at a pessimistic 3× | 6.2× |
 | zerocheck given no packing credit at all | 7.0× |
 | commit credited only its hardware ratio (2.96×) | 6.3× |
+| zerocheck discounted to what real chips reach (2.93×) | 7.8× |
 | every ported phase free | 18.2× |
 
 The bar survives all of them, which is the main reason this plan is worth writing.
@@ -98,7 +99,7 @@ The commit phase is 13.7% and its factor spans 1.97× to 5.13×, the widest brac
 One stage in isolation runs at 1.11× because both sides are moving memory; a version that holds a block in threadgroup memory across stages moves toward the 3.21× multiply roofline.
 Which of those it lands on is entirely a question of residency, and it has to match slop's bit-reversed convention to be usable.
 
-**A constraint transpiler.**
+**A constraint transpiler.** *(Answered — see [spikes.md](spikes.md): all 119 chips transpile and compile; chunking the constraint list is worth up to 2.8×.)*
 Zerocheck is 15% of the proof and the probe suite deliberately priced only the *shape* of constraint evaluation, never a real chip's constraints.
 Turning `SymbolicExpression` into something a GPU runs is the genuine unknown-unknown of this project: either MSL codegen per chip, or a bytecode tape walked by an interpreter kernel.
 SP1 has on the order of thirty chips with very different constraint sets, so the spike should take the two largest and find out whether register pressure or branch divergence kills the approach before the other twenty-eight are attempted.
@@ -122,6 +123,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 3. **Constraint transpiler spike.**
    `SymbolicExpression` to MSL codegen or to a bytecode tape, tried on the two largest chips.
    *Machine: barely.* Mostly reading `sp1-core-machine` and writing codegen, ending with one GPU run to see whether register pressure or branch divergence kills the approach.
+   **Done**, on all 119 chips rather than two. Nothing is fatal; the obstacles are silent throughput loss on large kernels, fixed by chunking, and eight-minute compile times that force an offline build. See [spikes.md](spikes.md).
 4. **Refit the model and take the go/no-go.**
    Three measured numbers replace three brackets in `tools/fit_model.py`.
    *Machine: no.* Seconds of Python against the phase profile already on disk.

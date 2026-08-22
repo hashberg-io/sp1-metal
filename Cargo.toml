@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/sp1-metal-probes"]
-exclude = ["crates/sp1-profile-host"]
+exclude = ["crates/sp1-profile-host", "crates/sp1-metal-transpile"]
 
 [workspace.package]
 version = "0.1.0"

@@ -75,6 +75,8 @@ inline uint4 ext_mul(uint4 a, uint4 b) {
     return uint4(c0, c1, c2, c3);
 }
 
+// ---- end of shared field arithmetic ----
+
 // ---------------------------------------------------------------------------
 // Probe: streaming bandwidth (STREAM triad, integer lanes).
 // ---------------------------------------------------------------------------

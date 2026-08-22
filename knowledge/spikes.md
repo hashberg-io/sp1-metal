@@ -70,3 +70,56 @@ The plan gave commit the same factor in both baseline columns, reasoning that `p
 There is: slop's encoder is **7.6x** slower than the same transform written packed, most of it the two bit-reversal permutations the decimation-in-frequency convention makes unnecessary, and none of it anything to do with the GPU.
 So against the prover as it ships the commit phase is worth 14.2x rather than 3.2x, and the complete port moves from 6.5x to **8.2x**; against a packed CPU it moves the other way, from 3.7x to **3.6x**.
 That is the same pattern this project keeps finding, once more: almost all of the apparent GPU advantage in this phase is CPU work left undone.
+
+## 3. The constraint transpiler
+
+**Question.** Zerocheck is 15% of the proof, and the probe suite deliberately priced only the *shape* of constraint evaluation — T degree-3 monomials per row — never a real chip's constraints.
+Turning `SymbolicExpression` into something a GPU runs was the plan's genuine unknown-unknown: SP1's chips have hundreds to thousands of constraints, and a GPU thread has a few hundred registers.
+
+**What was built.** `crates/sp1-metal-transpile`, outside the workspace because it needs `sp1-core-machine`.
+It reads the symbolic constraints SP1 already builds for every chip in the RISC-V machine, emits a Metal kernel per chip in the zerocheck-round shape the probe prices synthetically, compiles it, and measures it.
+Common-subexpression elimination is free: `SymbolicExpression` is already a DAG whose shared subexpressions are shared `Rc` nodes, so memoising on pointer identity is the whole of it.
+
+The scale is larger than the constraint counts suggest.
+
+| | |
+|---|---|
+| chips in the RISC-V machine | 119 |
+| constraints | 37,487 |
+| DAG nodes after CSE | 2,705,327 |
+| generated Metal source | 102 MB |
+| largest chip (`Bls12381DoubleAssignUser`) | 178,163 nodes, 6.9 MB |
+
+**Answer.** It works, and nothing about it is fatal, but the naive form is slow in a way that does not announce itself.
+
+Every one of the 119 chips transpiles, compiles and runs.
+No chip failed to compile, and the usual register-pressure signal never fires: Apple reports the maximum threadgroup size as 1024 for every kernel, including the 3.6 MB one.
+What happens instead is that throughput collapses quietly as the kernel grows.
+
+| chip | DAG nodes | whole chip | best chunked | |
+|---|---|---|---|---|
+| `Lt` | 288 | 280.6 Mrow/s | 280.5 (64) | 1.00x |
+| `MemoryGlobalInit` | 231 | 300.4 | 317.9 (32) | 1.06x |
+| `InstructionDecode` | 1,513 | 73.5 | 121.6 (8) | 1.65x |
+| `Global` | 7,598 | 42.5 | 72.9 (64) | 1.72x |
+| `DivRem` | 3,812 | 37.7 | 85.1 (32) | 2.26x |
+| `KeccakPermuteControl` | 4,117 | 38.2 | 80.3 (32) | 2.10x |
+| `KeccakPermute` | 87,749 | 1.3 | 3.6 (32) | 2.77x |
+
+"Chunked" means splitting the constraint list across several kernels that accumulate into the same combination, which is worth up to 2.8x.
+The optimum differs per chip because chunking gives back the common subexpressions CSE had removed: `Global`'s DAG grows from 7,598 nodes to 19,556 at a chunk size of 8, which is why it prefers 64 while `DivRem` prefers 32 and `InstructionDecode` prefers 8.
+A transpiler should pick the chunk size per chip by measurement, which is cheap to do once and cache.
+
+Two floors bound the result.
+Chips with enough arithmetic to matter reach about **215 G multiplies per second**, 65% of the machine's 332, and chunking is what gets them there.
+Chips with very few constraints top out around 300 to 340 Mrow/s regardless, because at that size the per-row cost is the threadgroup reduction and the trace read rather than the constraints — a floor the synthetic probe shares.
+
+**The practical obstacle is compile time, not register pressure.**
+The largest chip's whole-chip kernel took about eight minutes for the Metal compiler to accept, and 102 MB of generated source across 119 chips cannot be compiled at prover startup.
+A backend has to generate and compile the kernels offline and ship them in a Metal binary archive, which is ordinary build engineering but has to be in the plan.
+
+**What this changes in the plan.** The zerocheck factor is optimistic on its GPU side.
+The synthetic kernel reached 329 of 332 G multiplies per second, essentially the roofline; real chips reach 215 at best, so the measured 4.48x is roughly **1.5x** better than a real constraint set will deliver.
+Discounting it moves a complete port from 8.2x to **7.8x** against the shipped prover and from 3.6x to 3.4x against a packed CPU — a small change, because zerocheck is only 15% of the proof.
+This is an upper bound on the discount rather than a correction: the CPU side has not been measured on real chips either, and SP1's CPU zerocheck runs a compiled `eval` per row whose overheads the synthetic tiled baseline also does not have.
+Closing that gap needs a real-chip CPU zerocheck, which is backend work rather than spike work.
