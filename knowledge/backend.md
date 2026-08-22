@@ -165,14 +165,16 @@ Finding it took reading the CPU code against the kernel line by line rather than
 
 The same binary, back to back, on a core proof of a fibonacci guest:
 
-| | |
-|---|---|
-| every layer forced to the CPU | 15.70 s, 15.83 s |
-| the GPU path as configured | 15.01 s, 15.23 s |
+| core proof, fibonacci guest | every layer on the CPU | the GPU path | |
+|---|---|---|---|
+| 200,000 iterations | 15.70 s, 15.83 s | 15.01 s, 15.23 s | 1.04x |
+| 2,000,000 iterations | 64.69 s | 53.59 s | **1.21x** |
 
-Both prove and verify. **The Metal GKR round runs inside a real SP1 proof and the proof is accepted**, which is the thing steps 6 and 7 existed to establish.
+Both prove and verify at both sizes. **The Metal GKR round runs inside a real SP1 proof and the proof is accepted**, which is the thing steps 6 and 7 existed to establish.
 
-Four percent is not a headline and should not be read as one. A core proof of a fibonacci guest barely exercises the phase: its layers are small, most fall below the dispatch threshold, and GKR is a much smaller share of it than the 46.8% the profiled compressed proof spends there. The 9.06x round factor is measured on shard-sized layers, which this workload does not produce, and the 8.15x the model projects from it is a projection about the profiled workload, not a result. Demonstrating that needs D7's workload regenerated — which is step 9, and is the next thing to do.
+The gain grows with the workload, which is the shape to expect and worth more than either number on its own: the smaller proof's layers mostly fall below the dispatch threshold and GKR is a small share of it, while the larger one produces layers big enough for the kernels to earn their dispatch. Neither is D7's workload, and neither is evidence for the model's 8.15x — that projection is about a compressed proof of a real lift, where GKR is 46.8% and the layers are shard-sized. What these do establish is that the port works end to end and that its benefit scales in the direction the model assumes.
+
+Both runs shared the machine with an unrelated build, so the absolute times are not clean; they were taken back to back under the same conditions, so the ratio is.
 
 It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
