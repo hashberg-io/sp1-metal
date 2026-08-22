@@ -108,13 +108,41 @@ Rough sizing, and these are guesses rather than estimates: two weeks each for th
 
 ## The order of work
 
-1. **Spike the challenger, the encode and the transpiler**, in that order.
-2. **Refit the model** on three measured numbers instead of three brackets, and take the go/no-go. The model is `tools/fit_model.py`; the phase profile it needs is already recorded.
-3. **`MetalBackend`** — allocator over page-aligned no-copy buffers, `DeviceMemory`, `GlobalBackend`. Small, and `crates/sp1-metal-probes/src/gpu.rs` already has the device and pipeline plumbing.
-4. **PCS opening and commit**, through `C: MultilinearPcsProver`. Ships against unmodified upstream.
-5. **Vendor `sp1-hypercube`**, factor the GKR prover behind a trait mirroring the sumcheck backend pattern, and implement Metal GKR. The largest phase and the largest diff.
-6. **Zerocheck**: a device polynomial type implementing the three sumcheck backend traits, plus the transpiler across all chips.
-7. **Acceptance** on D7's canonical workload, the ProofofSeed classical-128 lift, measured with `tools/span_profile.py` against the same CPU run already profiled.
+Each step carries a note on whether it exercises the machine, and how.
+This matters because the same M4 Max runs long CPU proving jobs, and some of these steps can share it while others cannot.
+
+1. **GPU-side challenger spike.**
+   A Poseidon2 duplex sponge and Fiat-Shamir on the device, plus a sumcheck round loop that batches into one submission instead of one command buffer per round.
+   Goes first because it constrains the shape of every other kernel.
+   *Machine: yes, GPU only.* Seconds per run, and the CPU side of the comparison is already measured, so it does not need a quiet machine.
+2. **Blocked Reed-Solomon encode spike.**
+   Bit-reversed, matching slop's convention, holding a block in threadgroup memory across stages.
+   *Machine: yes, GPU and CPU.* Roughly 1 GiB working sets and seconds per run, but the packed-CPU baseline is invalidated by a competing job, so this one wants the machine idle.
+3. **Constraint transpiler spike.**
+   `SymbolicExpression` to MSL codegen or to a bytecode tape, tried on the two largest chips.
+   *Machine: barely.* Mostly reading `sp1-core-machine` and writing codegen, ending with one GPU run to see whether register pressure or branch divergence kills the approach.
+4. **Refit the model and take the go/no-go.**
+   Three measured numbers replace three brackets in `tools/fit_model.py`.
+   *Machine: no.* Seconds of Python against the phase profile already on disk.
+5. **`MetalBackend`.**
+   Allocator over page-aligned no-copy buffers, `DeviceMemory`, `GlobalBackend`.
+   The device and pipeline plumbing already exists in `crates/sp1-metal-probes/src/gpu.rs`.
+   *Machine: no*, beyond compiles and unit tests.
+6. **PCS opening and commit**, through the `C: MultilinearPcsProver` type parameter.
+   Ships against unmodified upstream, which makes it the piece that survives version bumps.
+   *Machine: yes, moderate.* The first step that builds against the full sp1-hypercube dependency tree, and it needs integration proofs rather than parity checks alone.
+7. **Vendor `sp1-hypercube`**, factor the GKR prover behind a trait mirroring the sumcheck backend pattern, and implement Metal GKR.
+   The largest phase and the largest diff.
+   *Machine: yes.* Heavy repeated compiles of a vendored fork, plus end-to-end shard proofs to validate each layer.
+8. **Zerocheck.**
+   A device polynomial type implementing the three sumcheck backend traits, plus the transpiler extended across all thirty-odd chips.
+   *Machine: yes.* Parity runs per chip, individually cheap and collectively a long loop.
+9. **Acceptance** on D7's canonical workload, the ProofofSeed classical-128 lift, measured with `tools/span_profile.py` against the CPU run already profiled.
+   *Machine: yes, heavily.* The CPU reference took about 7.3 hours uncapped, so this wants the machine to itself for the better part of a day, and again once the first result raises questions.
+
+Steps 4 and 5 are the only ones that can proceed while a proving job holds the machine.
+Step 2 is the one that needs it genuinely idle, since a busy machine understates the CPU baseline and flatters the kernel.
+Step 9 needs it exclusively.
 
 Call it three to four months of one person's attention after the spikes, with the transpiler holding most of the variance.
 
