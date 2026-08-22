@@ -80,3 +80,18 @@ The prover recovers this not by changing the driver but by having many sumchecks
 
 `prove_trusted_evaluation` — the jagged sumcheck, the stacking, BaseFold's folding rounds, the FRI query openings and their Merkle paths — is not implemented.
 That is the larger half of the PCS phase's 19%, and with it steps 7 through 9 remain open.
+
+## 7. GKR: verified blocked without a fork
+
+The plan's structural claim was that GKR sits behind concrete CPU types and needs a vendored fork.
+That is now stronger than a reading of the types.
+
+`GkrProverImpl::prove_gkr_circuit` is public and would give a reference proof to check a Metal layer prover against, but it takes a `LogupGkrCpuCircuit` — whose `layers` field is **private, with no public constructor**.
+The only public way to build one is the trace generator, which needs a real machine and a real execution record.
+Attempting the construction from another crate fails to compile with `field 'layers' of struct 'LogupGkrCpuCircuit' is private`.
+
+So GKR — 46.8% of the proof, the single largest phase — cannot be reached, driven, or even parity-checked from outside `sp1-hypercube`.
+Vendoring the crate is not one option among several; it is the only one.
+That is a decision with consequences beyond this step: a fork of the hottest files in a fast-moving repository, pinned to `=6.4.0`, is a standing maintenance cost that the plan lists as a risk and that nothing here reduces.
+
+Steps 7, 8 and 9 all sit behind that decision, and behind the three to four months the plan estimates for them.

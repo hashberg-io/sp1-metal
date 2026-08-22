@@ -79,7 +79,7 @@ The property that caps throughput at 1.44× on streaming kernels is the same pro
 **GKR and zerocheck are not behind the seam.**
 `ShardProverInner` (`src/prover/shard.rs:169`) holds a concrete `GkrProverImpl<GC, SC>`, which holds a concrete `LogupGkrCpuTraceGenerator` (`src/logup_gkr/prover.rs:18`), and the round prover `prove_gkr_round` is a `pub(crate)` free function over CPU layer types (`src/logup_gkr/cpu.rs:151`).
 `ZeroCheckPoly` declares `type Backend = CpuBackend` outright (`src/prover/zerocheck/mod.rs:174`).
-There is no trait to implement for either.
+There is no trait to implement for either, and for GKR there is no way in at all: `LogupGkrCpuCircuit` holds its layers in a private field with no public constructor, so the circuit cannot be built, driven, or even parity-checked against from outside the crate. That is compiler-verified rather than inferred.
 Between them they are 62% of the proof, so a Metal backend means vendoring `sp1-hypercube` and doing the factoring by hand.
 The naming throughout — `LogupGkrCpuCircuit`, `LogUpGkrCpuLayer`, `logup_gkr/cpu.rs` — says upstream intends that factoring eventually, so it is worth offering back rather than keeping.
 
