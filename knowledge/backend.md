@@ -138,13 +138,16 @@ The lesson is the one the challenger spike ended on, now at prover scale: the ar
 The pieces are in place and correct: the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including layers whose chips straddle the threshold.
 In isolation the round is **9.06x**.
 
-**In a real proof it is still slower than the CPU, and the remaining cause is not identified.**
-After all five fixes above, a fibonacci core proof does not finish in 400 s where the CPU path takes 18.2 s.
-Each fix was a real defect with a measured cause, and each moved the number without reaching it; whatever is left has not been isolated, and it would be wrong to guess at it here.
+**In a real proof the process was being killed, and it took far too long to find out.**
+After the five fixes above a fibonacci core proof still did not finish where the CPU path takes 18.2 s, and the shape of the failure — no output, no completion — read as a stall or a slowdown for several rounds of investigation. It was neither. The exit status was **137**: SIGKILL.
+
+The cause is the one every Rust program talking to an Objective-C API has to answer for. **Every object Metal returns is autoreleased**, and a Rust program has no autorelease pool of its own, so command buffers, encoders and buffer objects accumulate for the life of the thread. A benchmark of a few hundred dispatches never notices; a proof makes millions and gets killed. Every entry point into Metal now runs inside `autoreleasepool`.
+
+The lesson is about diagnosis rather than Metal. Four rounds were spent optimising something that was not slow, because "produces no output and does not finish" was read as "slow" without checking the one thing that distinguishes them. `echo $?` would have said SIGKILL at the first attempt.
 
 What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
 
-The first attempt at the obvious next step is recorded here because its result is itself a clue and a trap. Under `RUST_LOGGER=flat RUST_LOG=debug`, the CPU build emits 211 span lines and finishes; the Metal build emits **none** in 150 s. That is consistent with a stall rather than a slowdown — but it is not proof of one, because stdout to a file is block-buffered and a process killed by `timeout` loses whatever has not filled a buffer. Distinguishing the two needs the log written unbuffered, or a sampled stack of the running process, before any conclusion is drawn from silence.
+Under `RUST_LOGGER=flat RUST_LOG=debug` the CPU build emits 211 span lines and finishes while the Metal build emits none, which looked like evidence of a stall and was not: the process was being killed before its buffered output was flushed. Silence from a killed process says nothing about progress, and the exit status says everything.
 
 ## 8 and 9: not reached
 
