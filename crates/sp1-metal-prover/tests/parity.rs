@@ -269,3 +269,75 @@ fn fixing_the_last_variable_matches_slop() {
         );
     }
 }
+
+/// The layer transition, against the arithmetic it replaces.
+///
+/// A layer of the logup circuit adds fractions pairwise: the next numerator is
+/// `d_b * n_a + d_a * n_b` over `d_a * d_b`, once for the even row of each pair
+/// and once for the odd one. An odd row count leaves the last pair without its
+/// odd half, and that half keeps the identity fraction 0/1.
+fn transition_reference(
+    n0: &[EF],
+    d0: &[EF],
+    n1: &[EF],
+    d1: &[EF],
+    width: usize,
+    rows: usize,
+    out_rows: usize,
+) -> (Vec<EF>, Vec<EF>, Vec<EF>, Vec<EF>) {
+    let mut next_n0 = vec![EF::zero(); out_rows * width];
+    let mut next_d0 = vec![EF::one(); out_rows * width];
+    let mut next_n1 = vec![EF::zero(); out_rows * width];
+    let mut next_d1 = vec![EF::one(); out_rows * width];
+    for q in 0..out_rows {
+        for j in 0..width {
+            let lo = 2 * q * width + j;
+            let out = q * width + j;
+            next_n0[out] = d1[lo] * n0[lo] + d0[lo] * n1[lo];
+            next_d0[out] = d0[lo] * d1[lo];
+            if 2 * q + 1 < rows {
+                let hi = lo + width;
+                next_n1[out] = d1[hi] * n0[hi] + d0[hi] * n1[hi];
+                next_d1[out] = d0[hi] * d1[hi];
+            }
+        }
+    }
+    (next_n0, next_d0, next_n1, next_d1)
+}
+
+fn check_transition(rows: usize, width: usize) {
+    force_gpu();
+    let mut rng = StdRng::seed_from_u64(rows as u64 * 31 + width as u64);
+    let n = rows * width;
+    let draw = |rng: &mut StdRng, n: usize| (0..n).map(|_| rng.gen::<EF>()).collect::<Vec<EF>>();
+    let (n0, d0, n1, d1) =
+        (draw(&mut rng, n), draw(&mut rng, n), draw(&mut rng, n), draw(&mut rng, n));
+    let out_rows = rows.div_ceil(2);
+    let want = transition_reference(&n0, &d0, &n1, &d1, width, rows, out_rows);
+    let got = sp1_hypercube::metal::transition_chip(&n0, &d0, &n1, &d1, width, rows, out_rows)
+        .expect("the GPU path should be taken with the threshold lifted");
+    assert_eq!(got.0, want.0, "numerator 0, rows {rows} width {width}");
+    assert_eq!(got.1, want.1, "denominator 0, rows {rows} width {width}");
+    assert_eq!(got.2, want.2, "numerator 1, rows {rows} width {width}");
+    assert_eq!(got.3, want.3, "denominator 1, rows {rows} width {width}");
+}
+
+#[test]
+fn the_layer_transition_matches_the_cpu() {
+    check_transition(64, 5);
+}
+
+#[test]
+fn an_odd_row_count_leaves_the_identity_fraction() {
+    check_transition(31, 7);
+}
+
+#[test]
+fn a_single_row_transitions_to_one() {
+    check_transition(1, 9);
+}
+
+#[test]
+fn a_wide_layer_transitions() {
+    check_transition(128, 40);
+}

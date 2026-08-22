@@ -283,6 +283,29 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
                 let d0_mle = d0_padded.inner().as_ref().unwrap();
                 let n1_mle = n1_padded.inner().as_ref().unwrap();
                 let d1_mle = d1_padded.inner().as_ref().unwrap();
+                // One output cell per thread and no reduction, so this is the
+                // easiest thing in the phase to move; it declines the chips too
+                // small to be worth a round trip.
+                #[cfg(feature = "metal")]
+                let on_gpu = crate::metal::transition_chip(
+                    n0_mle.guts().as_slice(),
+                    d0_mle.guts().as_slice(),
+                    n1_mle.guts().as_slice(),
+                    d1_mle.guts().as_slice(),
+                    num_interactions,
+                    n0_mle.guts().sizes()[0],
+                    row_count,
+                )
+                .map(|(a, b, c, d)| {
+                    next_n0 = a;
+                    next_d0 = b;
+                    next_n1 = c;
+                    next_d1 = d;
+                })
+                .is_some();
+                #[cfg(not(feature = "metal"))]
+                let on_gpu = false;
+                if !on_gpu {
                 n0_mle
                     .guts()
                     .as_slice()
@@ -346,6 +369,7 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
                             }
                         },
                     );
+                }
             }
             let next_n0_padded = PaddedMle::padded_with_zeros(
                 Arc::new(Mle::from(RowMajorMatrix::new(next_n0, num_interactions))),

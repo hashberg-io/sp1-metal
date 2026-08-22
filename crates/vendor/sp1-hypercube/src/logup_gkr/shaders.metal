@@ -264,3 +264,88 @@ kernel void fold_padded_ext(device const uint4* in [[buffer(0)]],
     uint4 y = (2u * i + 1u < p.rows) ? in[(2u * i + 1u) * p.width + j] : padding[j];
     out[gid] = ext_add(ext_mul_kara(alpha, ext_sub(y, x)), x);
 }
+
+// ---------------------------------------------------------------------------
+// Building the next circuit layer.
+//
+// Each layer of the logup circuit adds fractions pairwise, so a row pair of
+// (numerator, denominator) becomes one row of
+//
+//   n' = d_b * n_a + d_a * n_b,   d' = d_a * d_b
+//
+// once for the even row of the pair and once for the odd one. There is no AIR
+// and no reduction here, just one output cell per thread. When the row count is
+// odd the last pair has no odd row, and that half of the output keeps the
+// identity fraction 0/1 the CPU fills it with.
+// ---------------------------------------------------------------------------
+
+struct TransitionParams {
+    uint out_rows;
+    uint rows;
+    uint width;
+};
+
+kernel void gkr_transition_ext(device const uint4* n0 [[buffer(0)]],
+                               device const uint4* d0 [[buffer(1)]],
+                               device const uint4* n1 [[buffer(2)]],
+                               device const uint4* d1 [[buffer(3)]],
+                               device uint4* out_n0 [[buffer(4)]],
+                               device uint4* out_d0 [[buffer(5)]],
+                               device uint4* out_n1 [[buffer(6)]],
+                               device uint4* out_d1 [[buffer(7)]],
+                               constant TransitionParams& p [[buffer(8)]],
+                               uint gid [[thread_position_in_grid]]) {
+    uint total = p.out_rows * p.width;
+    if (gid >= total) {
+        return;
+    }
+    uint q = gid / p.width;
+    uint j = gid - q * p.width;
+    uint lo = (2u * q) * p.width + j;
+    uint4 a0 = n0[lo], b0 = d0[lo], a1 = n1[lo], b1 = d1[lo];
+    out_n0[gid] = ext_add(ext_mul_kara(b1, a0), ext_mul_kara(b0, a1));
+    out_d0[gid] = ext_mul_kara(b0, b1);
+    if (2u * q + 1u < p.rows) {
+        uint hi = lo + p.width;
+        uint4 c0 = n0[hi], e0 = d0[hi], c1 = n1[hi], e1 = d1[hi];
+        out_n1[gid] = ext_add(ext_mul_kara(e1, c0), ext_mul_kara(e0, c1));
+        out_d1[gid] = ext_mul_kara(e0, e1);
+    } else {
+        out_n1[gid] = uint4(0u);
+        out_d1[gid] = uint4(KB_ONE, 0u, 0u, 0u);
+    }
+}
+
+// The first transition: numerators are still base-field elements.
+kernel void gkr_transition_base(device const uint* n0 [[buffer(0)]],
+                                device const uint4* d0 [[buffer(1)]],
+                                device const uint* n1 [[buffer(2)]],
+                                device const uint4* d1 [[buffer(3)]],
+                                device uint4* out_n0 [[buffer(4)]],
+                                device uint4* out_d0 [[buffer(5)]],
+                                device uint4* out_n1 [[buffer(6)]],
+                                device uint4* out_d1 [[buffer(7)]],
+                                constant TransitionParams& p [[buffer(8)]],
+                                uint gid [[thread_position_in_grid]]) {
+    uint total = p.out_rows * p.width;
+    if (gid >= total) {
+        return;
+    }
+    uint q = gid / p.width;
+    uint j = gid - q * p.width;
+    uint lo = (2u * q) * p.width + j;
+    uint a0 = n0[lo], a1 = n1[lo];
+    uint4 b0 = d0[lo], b1 = d1[lo];
+    out_n0[gid] = ext_add(ext_mul_base(b1, a0), ext_mul_base(b0, a1));
+    out_d0[gid] = ext_mul_kara(b0, b1);
+    if (2u * q + 1u < p.rows) {
+        uint hi = lo + p.width;
+        uint c0 = n0[hi], c1 = n1[hi];
+        uint4 e0 = d0[hi], e1 = d1[hi];
+        out_n1[gid] = ext_add(ext_mul_base(e1, c0), ext_mul_base(e0, c1));
+        out_d1[gid] = ext_mul_kara(e0, e1);
+    } else {
+        out_n1[gid] = uint4(0u);
+        out_d1[gid] = uint4(KB_ONE, 0u, 0u, 0u);
+    }
+}

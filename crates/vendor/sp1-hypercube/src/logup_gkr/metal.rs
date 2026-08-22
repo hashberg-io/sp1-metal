@@ -118,6 +118,8 @@ struct Context {
     base: ComputePipelineState,
     fold_ext: ComputePipelineState,
     fold_base: ComputePipelineState,
+    transition_ext: ComputePipelineState,
+    transition_base: ComputePipelineState,
     /// Scratch buffers for per-threadgroup partials, checked out and returned.
     ///
     /// One shared buffer would be a data race: SP1 proves shards concurrently,
@@ -140,8 +142,20 @@ impl Context {
         let base = pso("logup_round_base");
         let fold_ext = pso("fold_padded_ext");
         let fold_base = pso("fold_padded_base");
+        let transition_ext = pso("gkr_transition_ext");
+        let transition_base = pso("gkr_transition_base");
         let queue = device.new_command_queue();
-        Self { device, queue, ext, base, fold_ext, fold_base, pool: Mutex::new(Vec::new()) }
+        Self {
+            device,
+            queue,
+            ext,
+            base,
+            fold_ext,
+            fold_base,
+            transition_ext,
+            transition_base,
+            pool: Mutex::new(Vec::new()),
+        }
     }
 
     /// Takes a scratch buffer of at least the size needed, out of the pool if
@@ -1103,4 +1117,175 @@ where
         }
     }
     mle.fix_last_variable(alpha)
+}
+
+/// Whether building the next circuit layer goes to the GPU, read once.
+///
+/// Gated separately from the round reduction because it is the one part of this
+/// backend whose worth is not obvious: it does move work off the CPU, but it
+/// also adds uploads, and whether that is a gain depends on how much of the
+/// proof is actually running in parallel at the time.
+fn transition_on_gpu() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_TRANSITION").map(|v| v != "0").unwrap_or(true))
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TransitionParams {
+    out_rows: u32,
+    rows: u32,
+    width: u32,
+}
+
+/// An output column and the buffer the kernel writes it through.
+///
+/// Unified memory lets the kernel write straight into the `Vec` that will back
+/// the MLE when its pages are aligned for Metal to take them, which for the
+/// sizes that matter they are.
+struct Out {
+    values: Vec<EF>,
+    buffer: Buffer,
+    direct: bool,
+}
+
+impl Out {
+    fn new(device: &Device, total: usize) -> Self {
+        let mut values: Vec<EF> = Vec::with_capacity(total);
+        // SAFETY: the kernel writes every element before anything reads them.
+        unsafe { values.set_len(total) };
+        let bytes = total * std::mem::size_of::<EF>();
+        let page = 16 * 1024usize;
+        let direct = values.as_ptr() as usize % page == 0 && bytes % page == 0;
+        STATS.with_borrow(direct, bytes, 0.0);
+        let buffer = if direct {
+            // SAFETY: borrowed only for the dispatch, which is awaited below.
+            unsafe {
+                device.new_buffer_with_bytes_no_copy(
+                    values.as_ptr().cast(),
+                    bytes as u64,
+                    MTLResourceOptions::StorageModeShared,
+                    None,
+                )
+            }
+        } else {
+            device.new_buffer(bytes.max(1) as u64, MTLResourceOptions::StorageModeShared)
+        };
+        Self { values, buffer, direct }
+    }
+
+    fn finish(mut self) -> Vec<EF> {
+        if !self.direct {
+            let bytes = self.values.len() * std::mem::size_of::<EF>();
+            // SAFETY: the kernel wrote that many bytes of extension elements.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.buffer.contents().cast::<u8>(),
+                    self.values.as_mut_ptr().cast::<u8>(),
+                    bytes,
+                );
+            }
+        }
+        self.values
+    }
+}
+
+/// Builds one chip's next circuit layer.
+///
+/// A layer of the logup circuit adds fractions pairwise, which is one output
+/// cell per thread and no reduction at all — the easiest thing in the phase to
+/// move, and 12% of a proof's thread-seconds sat in it.
+///
+/// Returns `None` when the chip is too small to be worth the round trip, or
+/// when the fields are not the ones the kernels are written for, leaving the
+/// caller to do it the way it always did.
+pub fn transition_chip<K, E>(
+    n0: &[K],
+    d0: &[E],
+    n1: &[K],
+    d1: &[E],
+    width: usize,
+    rows: usize,
+    out_rows: usize,
+) -> Option<(Vec<E>, Vec<E>, Vec<E>, Vec<E>)>
+where
+    K: slop_algebra::Field,
+    E: slop_algebra::Field,
+{
+    if !is::<E, EF>() {
+        return None;
+    }
+    let base = is::<K, BaseField>();
+    if !base && !is::<K, EF>() {
+        return None;
+    }
+    if !transition_on_gpu() {
+        return None;
+    }
+    let total = out_rows * width;
+    if total == 0 || width == 0 || total < min_entries_for_gpu() {
+        return None;
+    }
+    // The kernel reads rows `2q` and `2q + 1` for every output row `q`, so an
+    // output row count that does not match the input's would send it past the
+    // end. Checked rather than assumed, since the caller derives the two
+    // separately.
+    if out_rows != rows.div_ceil(2) {
+        return None;
+    }
+    if n0.len() != rows * width || n1.len() != rows * width {
+        return None;
+    }
+    if d0.len() != rows * width || d1.len() != rows * width {
+        return None;
+    }
+    arena_reset();
+    let ctx = context();
+    let out = pooled(|| {
+        let outs = [
+            Out::new(&ctx.device, total),
+            Out::new(&ctx.device, total),
+            Out::new(&ctx.device, total),
+            Out::new(&ctx.device, total),
+        ];
+        let inputs = [
+            upload(as_words(n0)),
+            upload(as_words(d0)),
+            upload(as_words(n1)),
+            upload(as_words(d1)),
+        ];
+        let params = TransitionParams {
+            out_rows: out_rows as u32,
+            rows: rows as u32,
+            width: width as u32,
+        };
+        let cb = ctx.queue.new_command_buffer();
+        let enc = cb.new_compute_command_encoder();
+        enc.set_compute_pipeline_state(if base {
+            &ctx.transition_base
+        } else {
+            &ctx.transition_ext
+        });
+        for (i, b) in inputs.iter().enumerate() {
+            enc.set_buffer(i as u64, Some(b), 0);
+        }
+        for (i, o) in outs.iter().enumerate() {
+            enc.set_buffer(4 + i as u64, Some(&o.buffer), 0);
+        }
+        enc.set_bytes(
+            8,
+            std::mem::size_of::<TransitionParams>() as u64,
+            (&params as *const TransitionParams).cast(),
+        );
+        enc.dispatch_threads(
+            MTLSize::new(total as u64, 1, 1),
+            MTLSize::new(THREADS.min(total as u64), 1, 1),
+        );
+        enc.end_encoding();
+        run_and_record(cb);
+        let [a, b, c, d] = outs;
+        (a.finish(), b.finish(), c.finish(), d.finish())
+    });
+    // SAFETY: E is EF, checked above.
+    Some(unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) })
 }
