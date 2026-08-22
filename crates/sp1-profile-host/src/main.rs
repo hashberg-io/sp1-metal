@@ -127,6 +127,11 @@ fn report_metal(elapsed: std::time::Duration) {
         gpu_s / total * 100.0,
         total,
     );
+    let (commits, on_gpu, commit_s, rows) = sp1_hypercube::prover::COMMIT_STATS.counts();
+    eprintln!(
+        "commit: {commits} tensor commitments ({on_gpu} on the GPU) over {rows} rows \
+         in {commit_s:.3} thread-seconds",
+    );
 }
 
 #[cfg(not(feature = "metal"))]

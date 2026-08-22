@@ -2,6 +2,8 @@
 
 mod cpu;
 mod memory_permit;
+#[cfg(feature = "metal")]
+mod metal_tcs;
 mod permits;
 mod shard;
 mod simple;
@@ -19,7 +21,15 @@ use sp1_primitives::{SP1ExtensionField, SP1Field, SP1GlobalContext, SP1OuterGlob
 pub use trace::*;
 pub use zerocheck::*;
 
+#[cfg(feature = "metal")]
+pub use metal_tcs::{MetalMerkleProver, COMMIT_STATS};
+
+#[cfg(not(feature = "metal"))]
 pub use slop_merkle_tree::Poseidon2KoalaBear16Prover as SP1MerkleTreeProver;
+
+/// Upstream's committer with its Merkle tree built on the GPU.
+#[cfg(feature = "metal")]
+pub type SP1MerkleTreeProver = MetalMerkleProver;
 
 #[allow(clippy::disallowed_types)]
 /// The CPU prover components for a jagged PCS prover in SP1.
