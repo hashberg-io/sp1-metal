@@ -8,7 +8,14 @@ publish = false
 # Deliberately outside the workspace: sp1-sdk pulls a very large dependency
 # tree, and this host is only built for profiling runs.
 
+[features]
+# Turns on the fork's Metal GKR round for the whole dependency graph: cargo
+# unifies features, so naming it here reaches sp1-sdk's copy of the crate too.
+metal = ["sp1-hypercube/metal"]
+
 [dependencies]
+sp1-hypercube = "=6.4.0"
+
 anyhow = "1"
 bincode = "1.3.3"
 sp1-sdk = "=6.4.0"

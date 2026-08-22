@@ -35,6 +35,17 @@ repository = "https://github.com/succinctlabs/sp1"
 [features]
 mprotect = []
 test-proof = []
+# Runs the logup GKR round on the GPU. Off by default: without it the crate
+# behaves exactly as upstream does.
+metal = ["dep:metal", "dep:sp1-metal-probes"]
+
+[dependencies.metal]
+version = "0.29"
+optional = true
+
+[dependencies.sp1-metal-probes]
+path = "../../sp1-metal-probes"
+optional = true
 
 [lib]
 name = "sp1_hypercube"

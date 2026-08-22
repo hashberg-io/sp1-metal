@@ -206,3 +206,36 @@ fn logup_round_reduction_matches_the_cpu() {
         assert_eq!(got.2, cpu.2, "eq sum differs for {counts:?}");
     }
 }
+
+/// The fold against slop's own, which is what the CPU default calls.
+#[test]
+fn fixing_the_last_variable_matches_slop() {
+    let mut rng = StdRng::seed_from_u64(1003);
+    for &(rows, width, vars) in &[(8usize, 3usize, 3u32), (5, 7, 3), (1, 4, 1), (33, 2, 6)] {
+        let alpha: EF = rng.gen();
+
+        let base = PaddedMle::padded_with_zeros(
+            Arc::new(Mle::new(Tensor::<F>::rand(&mut rng, [rows, width]))),
+            vars,
+        );
+        let want = base.fix_last_variable::<EF>(alpha);
+        let got = <MetalRoundOps as LogupRoundOps<F, EF>>::fix_numerator(&base, alpha);
+        assert_eq!(
+            got.inner().as_ref().map(|m| m.guts().as_slice().to_vec()),
+            want.inner().as_ref().map(|m| m.guts().as_slice().to_vec()),
+            "base fold differs at {rows}x{width}"
+        );
+        assert_eq!(got.num_variables(), want.num_variables());
+
+        let inner = Arc::new(Mle::new(Tensor::<EF>::rand(&mut rng, [rows, width])));
+        let ext =
+            PaddedMle::padded(inner, vars, Padding::Constant((EF::one(), width, CpuBackend)));
+        let want = ext.fix_last_variable::<EF>(alpha);
+        let got = <MetalRoundOps as LogupRoundOps<EF, EF>>::fix_numerator(&ext, alpha);
+        assert_eq!(
+            got.inner().as_ref().map(|m| m.guts().as_slice().to_vec()),
+            want.inner().as_ref().map(|m| m.guts().as_slice().to_vec()),
+            "extension fold differs at {rows}x{width}"
+        );
+    }
+}

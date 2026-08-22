@@ -9,7 +9,6 @@ publish = false
 # pulls the SP1 dependency tree.
 
 [dependencies]
-metal = "0.29"
 rand = "0.8"
 rayon = "1.10"
 serde_json = "1"
@@ -19,8 +18,7 @@ slop-koala-bear = "=6.4.0"
 slop-multilinear = "=6.4.0"
 slop-sumcheck = "=6.4.0"
 slop-tensor = "=6.4.0"
-sp1-hypercube = "=6.4.0"
-sp1-metal-probes = { path = "../sp1-metal-probes" }
+sp1-hypercube = { version = "=6.4.0", features = ["metal"] }
 
 [profile.release]
 lto = "thin"

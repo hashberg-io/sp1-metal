@@ -1611,6 +1611,7 @@ dependencies = [
  "futures",
  "hashbrown",
  "itertools 0.14.0",
+ "metal",
  "num-bigint 0.4.8",
  "num-traits",
  "num_cpus",
@@ -1639,6 +1640,7 @@ dependencies = [
  "slop-uni-stark",
  "slop-whir",
  "sp1-derive",
+ "sp1-metal-probes",
  "sp1-primitives",
  "struct-reflection",
  "strum",
@@ -1674,7 +1676,6 @@ dependencies = [
 name = "sp1-metal-prover"
 version = "0.1.0"
 dependencies = [
- "metal",
  "rand",
  "rayon",
  "serde_json",
@@ -1685,7 +1686,6 @@ dependencies = [
  "slop-sumcheck",
  "slop-tensor",
  "sp1-hypercube",
- "sp1-metal-probes",
 ]
 
 [[package]]

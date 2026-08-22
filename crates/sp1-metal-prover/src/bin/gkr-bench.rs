@@ -107,9 +107,9 @@ fn main() {
     // The reduction is only half of a round: the fold that follows it reads the
     // same data again and is still on the CPU, so the phase-level factor is
     // bounded by how the round's time splits between the two.
-    let clone_poly = |p: &LogupRoundPolynomial<F, EF, CpuRoundOps>| {
+    fn clone_poly<A, B>(p: &LogupRoundPolynomial<F, EF, A>) -> LogupRoundPolynomial<F, EF, B> {
         let PolynomialLayer::CircuitLayer(l) = &p.layer else { unreachable!() };
-        LogupRoundPolynomial::<F, EF, CpuRoundOps> {
+        LogupRoundPolynomial::<F, EF, B> {
             layer: PolynomialLayer::CircuitLayer(LogUpGkrCpuLayer {
                 numerator_0: l.numerator_0.clone(),
                 denominator_0: l.denominator_0.clone(),
@@ -126,10 +126,14 @@ fn main() {
             point: p.point.clone(),
             ops: PhantomData,
         }
-    };
+    }
     let alpha: EF = rng.gen();
     let fold = best(reps, || {
-        let fresh = clone_poly(cpu_view);
+        let fresh: LogupRoundPolynomial<F, EF, CpuRoundOps> = clone_poly(cpu_view);
+        slop_sumcheck::SumcheckPolyFirstRound::fix_t_variables(fresh, alpha, 1)
+    });
+    let fold_metal = best(reps, || {
+        let fresh: LogupRoundPolynomial<F, EF, MetalRoundOps> = clone_poly(&poly);
         slop_sumcheck::SumcheckPolyFirstRound::fix_t_variables(fresh, alpha, 1)
     });
 
@@ -139,13 +143,14 @@ fn main() {
     println!("  metal {:9.3} ms   {:7.1} M entries/s", gpu * 1e3, entries as f64 / gpu / 1e6);
     println!("  metal over cpu: {:.2}x", cpu / gpu);
     println!("  uploads: {uploads}, of which no-copy: {no_copy}");
-    println!("  fold (still on the cpu): {:9.3} ms", fold * 1e3);
+    println!("  fold: cpu {:9.3} ms   metal {:9.3} ms   {:.2}x", fold * 1e3, fold_metal * 1e3, fold / fold_metal);
     let round_cpu = cpu + fold;
-    let round_metal = gpu + fold;
     println!(
-        "  whole round: cpu {:.3} ms, reduction on metal {:.3} ms -> {:.2}x",
+        "  whole round: cpu {:.3} ms, reduction only on metal {:.3} ms ({:.2}x), both on metal {:.3} ms ({:.2}x)",
         round_cpu * 1e3,
-        round_metal * 1e3,
-        round_cpu / round_metal
+        (gpu + fold) * 1e3,
+        round_cpu / (gpu + fold),
+        (gpu + fold_metal) * 1e3,
+        round_cpu / (gpu + fold_metal)
     );
 }

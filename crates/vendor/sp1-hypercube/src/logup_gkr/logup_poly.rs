@@ -47,6 +47,19 @@ pub trait LogupRoundOps<F: Field, K: ExtensionField<F>>: Sized + Send + Sync + '
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CpuRoundOps;
 
+/// Where a GKR round runs unless a caller says otherwise.
+///
+/// Every type that carries a round backend defaults to this, so turning the
+/// `metal` feature on moves the phase to the GPU without a single type changing
+/// anywhere downstream — including in crates that never mention this one.
+#[cfg(not(feature = "metal"))]
+pub type DefaultRoundOps = CpuRoundOps;
+
+/// Where a GKR round runs unless a caller says otherwise. See the note on the
+/// non-Metal definition.
+#[cfg(feature = "metal")]
+pub type DefaultRoundOps = super::metal::MetalRoundOps;
+
 impl<F: Field, K: ExtensionField<F>> LogupRoundOps<F, K> for CpuRoundOps {
     fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K) {
         cpu_round_evals(poly)
@@ -351,7 +364,7 @@ where
 ///
 /// `B` selects where the round's reduction runs; it defaults to the CPU, so
 /// every existing use of this type is unchanged.
-pub struct LogupRoundPolynomial<F, EF, B = CpuRoundOps> {
+pub struct LogupRoundPolynomial<F, EF, B = DefaultRoundOps> {
     /// The values of the numerator and denominator polynomials
     pub layer: PolynomialLayer<F, EF>,
     /// The partial lagrange evaluation for the row variables

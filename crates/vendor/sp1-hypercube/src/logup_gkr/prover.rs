@@ -15,7 +15,7 @@ use crate::{
 use super::{LogUpEvaluations, LogUpGkrOutput, LogupGkrProof, LogupGkrRoundProof};
 
 /// TODO
-pub struct GkrProverImpl<GC: IopCtx, SC: ShardContext<GC>, B = crate::CpuRoundOps> {
+pub struct GkrProverImpl<GC: IopCtx, SC: ShardContext<GC>, B = crate::DefaultRoundOps> {
     /// TODO
     trace_generator: LogupGkrCpuTraceGenerator<GC::F, GC::EF, SC::Air>,
     /// Where each round's reduction runs.

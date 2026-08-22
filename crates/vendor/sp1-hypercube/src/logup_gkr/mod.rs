@@ -1,5 +1,7 @@
 mod cpu;
 mod execution;
+#[cfg(feature = "metal")]
+pub mod metal;
 mod logup_poly;
 mod proof;
 mod prover;

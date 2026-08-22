@@ -179,3 +179,52 @@ kernel void logup_round_base(device const uint* n0 [[buffer(0)]],
         partials[3u * tgid + 2u] = she[0];
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fixing a padded MLE's last variable: `out = alpha * (y - x) + x`, where the
+// partner row is the padding when the row count is odd. This reads the same
+// data the reduction does, so leaving it on the CPU caps a ported round at
+// about four times.
+// ---------------------------------------------------------------------------
+
+struct FoldParams {
+    uint out_rows;
+    uint rows;
+    uint width;
+};
+
+kernel void fold_padded_base(device const uint* in [[buffer(0)]],
+                             device const uint* padding [[buffer(1)]],
+                             device uint4* out [[buffer(2)]],
+                             constant FoldParams& p [[buffer(3)]],
+                             constant uint4& alpha [[buffer(4)]],
+                             uint gid [[thread_position_in_grid]]) {
+    uint total = p.out_rows * p.width;
+    if (gid >= total) {
+        return;
+    }
+    uint i = gid / p.width;
+    uint j = gid - i * p.width;
+    uint x = in[(2u * i) * p.width + j];
+    uint y = (2u * i + 1u < p.rows) ? in[(2u * i + 1u) * p.width + j] : padding[j];
+    uint4 r = ext_mul_base(alpha, kb_sub(y, x));
+    r.x = kb_add(r.x, x);
+    out[gid] = r;
+}
+
+kernel void fold_padded_ext(device const uint4* in [[buffer(0)]],
+                            device const uint4* padding [[buffer(1)]],
+                            device uint4* out [[buffer(2)]],
+                            constant FoldParams& p [[buffer(3)]],
+                            constant uint4& alpha [[buffer(4)]],
+                            uint gid [[thread_position_in_grid]]) {
+    uint total = p.out_rows * p.width;
+    if (gid >= total) {
+        return;
+    }
+    uint i = gid / p.width;
+    uint j = gid - i * p.width;
+    uint4 x = in[(2u * i) * p.width + j];
+    uint4 y = (2u * i + 1u < p.rows) ? in[(2u * i + 1u) * p.width + j] : padding[j];
+    out[gid] = ext_add(ext_mul(alpha, ext_sub(y, x)), x);
+}
