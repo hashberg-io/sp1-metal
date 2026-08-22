@@ -75,6 +75,110 @@ inline uint4 ext_mul(uint4 a, uint4 b) {
     return uint4(c0, c1, c2, c3);
 }
 
+// ---------------------------------------------------------------------------
+// A cheaper extension multiply.
+//
+// Two facts about this field make the schoolbook version wasteful.
+//
+// W is monty(3), and Montgomery form is linear, so multiplying by W is
+// tripling: three multiplies become two additions.
+//
+// Montgomery reduction is also linear, so REDC(ab) + REDC(cd) = REDC(ab + cd)
+// as long as the 64-bit sum stays below P * 2^32. Two products of reduced
+// inputs reach at most 2*(P-1)^2 = 9.079e18 against a bound of 9.152e18, so
+// every pair of products can share a single reduction.
+//
+// Together these take the multiply from 19 kb_mul (76 integer multiplies) to
+// 52 integer multiplies, with the same result bit for bit.
+// ---------------------------------------------------------------------------
+
+struct kb_wide {
+    uint hi;
+    uint lo;
+};
+
+inline kb_wide kb_wmul(uint a, uint b) {
+    kb_wide r;
+    r.lo = a * b;
+    r.hi = mulhi(a, b);
+    return r;
+}
+
+inline kb_wide kb_wadd(kb_wide a, kb_wide b) {
+    kb_wide r;
+    r.lo = a.lo + b.lo;
+    r.hi = a.hi + b.hi + ((r.lo < a.lo) ? 1u : 0u);
+    return r;
+}
+
+/// a*b + c*d, with one Montgomery reduction instead of two.
+inline uint kb_mul2(uint a, uint b, uint c, uint d) {
+    kb_wide t = kb_wadd(kb_wmul(a, b), kb_wmul(c, d));
+    return kb_redc(t.hi, t.lo);
+}
+
+/// Multiplication by W = monty(3).
+inline uint kb_triple(uint x) {
+    return kb_add(kb_add(x, x), x);
+}
+
+inline uint4 ext_mul_fast(uint4 a, uint4 b) {
+    uint c0 = kb_add(
+        kb_mul(a.x, b.x),
+        kb_triple(kb_add(kb_mul2(a.y, b.w, a.z, b.z), kb_mul(a.w, b.y))));
+    uint c1 = kb_add(
+        kb_mul2(a.x, b.y, a.y, b.x),
+        kb_triple(kb_mul2(a.z, b.w, a.w, b.z)));
+    uint c2 = kb_add(
+        kb_add(kb_mul2(a.x, b.z, a.y, b.y), kb_mul(a.z, b.x)),
+        kb_triple(kb_mul(a.w, b.w)));
+    uint c3 = kb_add(kb_mul2(a.x, b.w, a.y, b.z), kb_mul2(a.z, b.y, a.w, b.x));
+    return uint4(c0, c1, c2, c3);
+}
+
+// ---------------------------------------------------------------------------
+// Karatsuba over the same extension.
+//
+// Splitting a = A0 + A1 x^2 and b = B0 + B1 x^2 turns the quartic product into
+// three products of linear factors, and each of those is itself a Karatsuba,
+// so 16 base multiplies become 9. Reassembly uses x^4 = W:
+//
+//   a*b = P0 + M x^2 + P1 x^4,   M = P2 - P0 - P1,  P2 = (A0+A1)(B0+B1)
+//
+// which gives c0 = p00 + W(m2 + p10), c1 = p01 + W p11,
+//             c2 = p02 + m0 + W p12,  c3 = m1.
+// ---------------------------------------------------------------------------
+
+struct kb_deg2 {
+    uint r0;
+    uint r1;
+    uint r2;
+};
+
+/// (c0 + c1 x)(d0 + d1 x) as a quadratic, in three multiplies.
+inline kb_deg2 kb_kmul2(uint c0, uint c1, uint d0, uint d1) {
+    kb_deg2 r;
+    r.r0 = kb_mul(c0, d0);
+    r.r2 = kb_mul(c1, d1);
+    r.r1 = kb_sub(kb_mul(kb_add(c0, c1), kb_add(d0, d1)), kb_add(r.r0, r.r2));
+    return r;
+}
+
+inline uint4 ext_mul_kara(uint4 a, uint4 b) {
+    kb_deg2 p0 = kb_kmul2(a.x, a.y, b.x, b.y);
+    kb_deg2 p1 = kb_kmul2(a.z, a.w, b.z, b.w);
+    kb_deg2 p2 = kb_kmul2(
+        kb_add(a.x, a.z), kb_add(a.y, a.w), kb_add(b.x, b.z), kb_add(b.y, b.w));
+    uint m0 = kb_sub(p2.r0, kb_add(p0.r0, p1.r0));
+    uint m1 = kb_sub(p2.r1, kb_add(p0.r1, p1.r1));
+    uint m2 = kb_sub(p2.r2, kb_add(p0.r2, p1.r2));
+    return uint4(
+        kb_add(p0.r0, kb_triple(kb_add(m2, p1.r0))),
+        kb_add(p0.r1, kb_triple(p1.r1)),
+        kb_add(kb_add(p0.r2, m0), kb_triple(p1.r2)),
+        m1);
+}
+
 // ---- end of shared field arithmetic ----
 
 // ---------------------------------------------------------------------------

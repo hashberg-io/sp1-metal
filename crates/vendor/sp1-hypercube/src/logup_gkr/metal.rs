@@ -41,6 +41,12 @@ pub type EF = slop_algebra::extension::BinomialExtensionField<KoalaBear, 4>;
 
 const THREADS: u64 = 256;
 
+/// The most threadgroups a round dispatch will use. Beyond this the kernel
+/// strides, which keeps the partials the host adds up from growing with the
+/// chip: an uncapped grid over cells would hand back hundreds of thousands of
+/// them and put the work back on the CPU.
+const MAX_GROUPS: usize = 2048;
+
 /// Entries in a layer below which the round stays on the CPU.
 ///
 /// A GKR layer has one polynomial per chip, and a shard proof walks a lot of
@@ -379,7 +385,11 @@ where
             totals.2 += chip.2;
             continue;
         }
-        let groups = n_pairs.div_ceil(THREADS as usize);
+        // One thread per (row pair, interaction) cell. The grid is capped and
+        // each thread strides over it, so the host's sum over per-threadgroup
+        // partials stays bounded however wide the chip is.
+        let cells = n_pairs * width;
+        let groups = cells.div_ceil(THREADS as usize).min(MAX_GROUPS);
         let partials = ctx.take_partials(groups);
 
         let b_n0 = upload(as_words(n0_inner.guts().as_slice()));
