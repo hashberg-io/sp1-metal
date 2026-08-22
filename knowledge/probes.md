@@ -37,6 +37,18 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    Parity is against slop's own `DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>`: a scripted observe/sample sequence that crosses the sponge's rate boundary in both directions, and then the challenges and final value of the whole fold, for both the host-driven and device-driven paths.
 11. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
 
+## The acceptance study
+
+Separate from the probes, and the thing that says whether any of it matters: `tools/scaling.py` over a table of paired proofs, each run twice through the same binary — once with `SP1_METAL_MIN_ENTRIES` set high enough that every layer stays on the CPU, once with the GPU path as configured. Running the same binary both ways is what makes the ratio mean something: it holds the build, the machine and the workload fixed and varies only where the arithmetic runs.
+
+The study varies three things separately, because "a bigger workload" conflates two different experiments:
+
+- **Shard size** (`SHARD_SIZE`, default `1 << 24` cycles) at fixed total work. Larger shards mean fewer of them and bigger GKR layers in each, which is what the kernels are sensitive to.
+- **Total work** at fixed shard size. This adds shards of the same size rather than making them bigger, so it isolates whatever comes from having more proofs in flight.
+- **The computation itself**, across guests with different chip mixes — arithmetic, memory and bitwise — since a layer's width is the chip's interaction count.
+
+`sp1-profile-host --execute` reports the cycle count without proving, which is how a workload is placed on those axes before spending minutes on it.
+
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.
 Always build with `--release` for throughput runs (`cargo run --release --bin probes -- ...`): kernel timing is GPU-side, but buffer preparation and every `--cpu` baseline are host code.
