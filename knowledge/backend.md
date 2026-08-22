@@ -241,3 +241,25 @@ Together: 1.9x to 2.35x on GPU time, and the isolated round reduction from 6.14 
 **The copy costs twelve times the compute.** Feeding those 0.65 seconds takes **179 GB of uploads costing 8.18 thread-seconds**, because `newBufferWithBytesNoCopy` wants a page-aligned pointer *and* length and chip buffers have neither, so 89% of uploads are memcpys. The rate, 21.7 GB/s, is not memcpy speed: a fresh `MTLBuffer` has cold pages and faults them in as it copies, while copying into a buffer that has been written before runs at 91.2 GB/s, and allocating the buffer costs nothing either way. Reusing staging buffers takes uploading to 5.76 thread-seconds; the rest of the gap is four threads sharing memory bandwidth.
 
 **Where this leaves the target.** The paired figure is now 63.71 s against 50.45 s, 1.263x. Of the Metal path's remaining cost almost none is arithmetic, so even making the whole path free would reach about 1.3x. The profile says why: GKR is 47% of the thread-seconds but the port covers only the round reduction and the fold within it, and PCS at 19%, commit at 14% and zerocheck at 15% have never been touched at all. D7's 5x is a coverage problem, not a tuning problem, and no further work on this kernel changes that.
+
+## 11. Committing the traces, which was the largest thing of all
+
+Asking where a proof's time goes, rather than assuming, turned up something the earlier phase profile had understated. `commit traces` was 13.7% of the old profile; measured directly with a counter around the call it is **48.7 of a 52.2 second proof's thread-seconds** — more than the GKR rounds, the zerocheck and the openings together.
+
+Almost all of it is one Merkle tree, and the probe suite already had kernels for it, checked against slop's own committer and running at 152x. What was missing was not a kernel but the shape the prover actually calls with.
+
+**The seam needs no fork.** `BasefoldProver` takes its committer as a type parameter, `P: ComputeTcsOpenings<GC, CpuBackend>`, so the whole diff is aliasing `SP1MerkleTreeProver` to a wrapper. The encoder beside it is a concrete `Arc<Radix2DitParallel>` and could not be swapped this way — which does not matter, because the encode probe measures 429.8 GB/s against a packed CPU's 422.0, a ratio of 1.02x. There is nothing there to win.
+
+**Three details decide whether the commitment matches**, and a commitment that differs is worse than one that is slow:
+
+- `first_digest_layer` pads the leaf layer to a power of two with *zero* digests, for rows past the matrix height.
+- A leaf absorbs every tensor's row in order, so tensors arriving as separate buffers are gathered into one interleaved buffer first.
+- Every layer is kept, because those layers are the prover data that opening proofs walk.
+
+Openings stay on the CPU: walking digest layers and copying rows are not worth a dispatch, and delegating them keeps the prover data exactly the type upstream builds. The final `compress([root, hash([log_height, total_width])])` is two permutations and is left to slop's own hasher, which removes any chance of publishing a different commitment.
+
+Parity is checked digest by digest against slop for one tensor, several tensors, a height that is not a power of two, a single row, and a row wide enough to absorb in several chunks.
+
+**Result.** Committing takes 4.1 thread-seconds instead of 36.8. A two-million iteration fibonacci proof goes from **66.50 s to 35.57 s — 1.87x** — and verifies. `SP1_METAL_MERKLE=0` forces the CPU committer through the same binary, which is how the pair is taken.
+
+The profile afterwards, 89.5 thread-seconds over a 35.6 second wall: gkr 41.8%, zerocheck 24.3%, pcs 19.0%, commit 10.3%. What is left of commit is mostly the encode, which is not worth taking. Of the GKR share, the GPU itself accounts for 1.2 seconds and uploading for 5.5, so the copy still costs more than the arithmetic — the difference now is that it buys a phase worth having.

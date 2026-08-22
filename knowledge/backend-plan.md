@@ -138,7 +138,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 6. **PCS opening and commit**, through the `C: MultilinearPcsProver` type parameter.
    Ships against unmodified upstream, which makes it the piece that survives version bumps.
    *Machine: yes, moderate.* The first step that builds against the full sp1-hypercube dependency tree, and it needs integration proofs rather than parity checks alone.
-   **Half done.** The Reed-Solomon encode and the Merkle tree both reproduce slop exactly, and the three sumcheck backend traits are implemented so slop's driver runs on a Metal-backed MLE. The opening protocol — jagged sumcheck, stacking, BaseFold rounds and query openings — is not built.
+   **Commit done, opening not.** The Merkle tree now runs on the GPU inside a real proof, through the `TensorCsProver` type parameter and with no change to upstream; committing fell from 36.8 to 4.1 thread-seconds and the proof went from 66.50 s to 35.57 s. The encode stays on the CPU deliberately, measured at 1.02x against a packed baseline. The opening protocol — jagged sumcheck, stacking, BaseFold rounds and query openings — is not built; it is 19% of what remains.
 7. **Vendor `sp1-hypercube`**, factor the GKR prover behind a trait mirroring the sumcheck backend pattern, and implement Metal GKR.
    The largest phase and the largest diff.
    *Machine: yes.* Heavy repeated compiles of a vendored fork, plus end-to-end shard proofs to validate each layer.
