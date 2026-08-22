@@ -179,6 +179,28 @@ inline uint4 ext_mul_kara(uint4 a, uint4 b) {
         m1);
 }
 
+// Mixed base/extension arithmetic, for generated constraint code where a
+// constant-only subexpression stays in the base field while anything touching a
+// trace column does not.
+inline uint4 ext_add_base(uint4 a, uint b) {
+    a.x = kb_add(a.x, b);
+    return a;
+}
+
+inline uint4 ext_sub_base(uint4 a, uint b) {
+    a.x = kb_sub(a.x, b);
+    return a;
+}
+
+inline uint4 base_sub_ext(uint a, uint4 b) {
+    uint4 r = uint4(kb_sub(a, b.x), kb_neg(b.y), kb_neg(b.z), kb_neg(b.w));
+    return r;
+}
+
+inline uint4 ext_neg(uint4 a) {
+    return uint4(kb_neg(a.x), kb_neg(a.y), kb_neg(a.z), kb_neg(a.w));
+}
+
 // ---- end of shared field arithmetic ----
 
 // ---------------------------------------------------------------------------

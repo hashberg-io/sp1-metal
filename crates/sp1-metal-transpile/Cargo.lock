@@ -2934,6 +2934,7 @@ dependencies = [
  "slop-air",
  "slop-algebra",
  "slop-koala-bear",
+ "slop-matrix",
  "slop-uni-stark",
  "sp1-core-machine",
  "sp1-hypercube",

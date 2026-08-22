@@ -23,13 +23,16 @@ use std::rc::Rc;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use slop_algebra::PrimeField32;
+use slop_algebra::{AbstractExtensionField, AbstractField, PrimeField32};
+use slop_matrix::dense::RowMajorMatrixView;
 use slop_uni_stark::{get_symbolic_constraints, Entry, SymbolicExpression, SymbolicVariable};
 use sp1_core_machine::riscv::RiscvAir;
 use sp1_hypercube::air::MachineAir;
-use sp1_primitives::SP1Field;
+use sp1_hypercube::ConstraintSumcheckFolder;
+use sp1_primitives::{SP1ExtensionField, SP1Field};
 
 type F = SP1Field;
+type EF = SP1ExtensionField;
 
 const P: u32 = 0x7f00_0001;
 
@@ -52,19 +55,57 @@ fn monty_of(x: F) -> u32 {
 }
 
 /// Emits one chip's constraints as a straight-line Metal program.
+/// Whether a value lives in the base field or the extension.
+///
+/// A subexpression built only from constants stays in the base field however
+/// deep it is; anything that touches a trace column does not, once the columns
+/// themselves are extension elements. Tracking this per node rather than
+/// promoting everything keeps the cheap arithmetic cheap: an `ext_mul` costs
+/// nine base multiplies, an `ext_mul_base` costs four, and a `kb_mul` one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ty {
+    Base,
+    Ext,
+}
+
+impl Ty {
+    fn decl(self) -> &'static str {
+        match self {
+            Ty::Base => "uint",
+            Ty::Ext => "uint4",
+        }
+    }
+}
+
 struct Codegen {
     body: String,
-    memo: HashMap<usize, String>,
+    memo: HashMap<usize, (String, Ty)>,
     next: usize,
     adds: usize,
     muls: usize,
     consts: usize,
     loads: usize,
+    /// Whether the trace columns hold extension elements, as they do in every
+    /// zerocheck round after the first.
+    ext_columns: bool,
+    /// Set if any constraint reads a row other than the current one. The
+    /// zerocheck folder hands the AIR a single row, so this must stay clear.
+    reads_next_row: bool,
 }
 
 impl Codegen {
-    fn new() -> Self {
-        Self { body: String::new(), memo: HashMap::new(), next: 0, adds: 0, muls: 0, consts: 0, loads: 0 }
+    fn new(ext_columns: bool) -> Self {
+        Self {
+            body: String::new(),
+            memo: HashMap::new(),
+            next: 0,
+            adds: 0,
+            muls: 0,
+            consts: 0,
+            loads: 0,
+            ext_columns,
+            reads_next_row: false,
+        }
     }
 
     fn fresh(&mut self) -> String {
@@ -72,83 +113,159 @@ impl Codegen {
         format!("t{}", self.next - 1)
     }
 
-    fn var(&mut self, v: &SymbolicVariable<F>) -> String {
+    fn bind(&mut self, ty: Ty, expr: &str) -> (String, Ty) {
         let name = self.fresh();
-        let src = match v.entry {
-            Entry::Main { offset } => {
-                self.loads += 1;
-                format!("main[{}u * n + r{}]", v.index, offset.min(1))
-            }
-            Entry::Preprocessed { offset } => {
-                self.loads += 1;
-                format!("prep[{}u * n + r{}]", v.index, offset.min(1))
-            }
-            Entry::Public => format!("pv[{}u]", v.index),
-            Entry::Challenge => format!("pv[{}u]", v.index),
-            Entry::Permutation { offset } => {
-                self.loads += 1;
-                format!("main[{}u * n + r{}]", v.index, offset.min(1))
-            }
-        };
-        writeln!(self.body, "    uint {name} = {src};").unwrap();
-        name
+        writeln!(self.body, "    {} {name} = {expr};", ty.decl()).unwrap();
+        (name, ty)
     }
 
-    fn emit_rc(&mut self, r: &Rc<SymbolicExpression<F>>) -> String {
-        let key = Rc::as_ptr(r) as usize;
-        if let Some(name) = self.memo.get(&key) {
-            return name.clone();
+    fn column(&mut self, table: &str, index: usize, offset: usize) -> (String, Ty) {
+        self.loads += 1;
+        if offset > 0 {
+            self.reads_next_row = true;
         }
-        let name = self.emit(r);
-        self.memo.insert(key, name.clone());
-        name
+        let ty = if self.ext_columns { Ty::Ext } else { Ty::Base };
+        let expr = format!("{table}[{index}u * n + r{}]", offset.min(1));
+        self.bind(ty, &expr)
     }
 
-    fn emit(&mut self, e: &SymbolicExpression<F>) -> String {
+    fn var(&mut self, v: &SymbolicVariable<F>) -> (String, Ty) {
+        match v.entry {
+            Entry::Main { offset } => self.column("main", v.index, offset),
+            Entry::Permutation { offset } => self.column("main", v.index, offset),
+            Entry::Preprocessed { offset } => self.column("prep", v.index, offset),
+            // Public values and challenges are base-field however the columns look.
+            Entry::Public | Entry::Challenge => {
+                let expr = format!("pv[{}u]", v.index);
+                self.bind(Ty::Base, &expr)
+            }
+        }
+    }
+
+    fn emit_rc(&mut self, r: &Rc<SymbolicExpression<F>>) -> (String, Ty) {
+        let key = Rc::as_ptr(r) as usize;
+        if let Some(hit) = self.memo.get(&key) {
+            return hit.clone();
+        }
+        let out = self.emit(r);
+        self.memo.insert(key, out.clone());
+        out
+    }
+
+    /// `a + b`, in whichever field the two operands force.
+    fn add(&mut self, a: (String, Ty), b: (String, Ty)) -> (String, Ty) {
+        self.adds += 1;
+        match (a.1, b.1) {
+            (Ty::Base, Ty::Base) => {
+                let e = format!("kb_add({}, {})", a.0, b.0);
+                self.bind(Ty::Base, &e)
+            }
+            (Ty::Ext, Ty::Ext) => {
+                let e = format!("ext_add({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Ext, Ty::Base) => {
+                let e = format!("ext_add_base({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Base, Ty::Ext) => {
+                let e = format!("ext_add_base({}, {})", b.0, a.0);
+                self.bind(Ty::Ext, &e)
+            }
+        }
+    }
+
+    fn sub(&mut self, a: (String, Ty), b: (String, Ty)) -> (String, Ty) {
+        self.adds += 1;
+        match (a.1, b.1) {
+            (Ty::Base, Ty::Base) => {
+                let e = format!("kb_sub({}, {})", a.0, b.0);
+                self.bind(Ty::Base, &e)
+            }
+            (Ty::Ext, Ty::Ext) => {
+                let e = format!("ext_sub({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Ext, Ty::Base) => {
+                let e = format!("ext_sub_base({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Base, Ty::Ext) => {
+                let e = format!("base_sub_ext({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+        }
+    }
+
+    fn mul(&mut self, a: (String, Ty), b: (String, Ty)) -> (String, Ty) {
+        self.muls += 1;
+        match (a.1, b.1) {
+            (Ty::Base, Ty::Base) => {
+                let e = format!("kb_mul({}, {})", a.0, b.0);
+                self.bind(Ty::Base, &e)
+            }
+            (Ty::Ext, Ty::Base) => {
+                let e = format!("ext_mul_base({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Base, Ty::Ext) => {
+                let e = format!("ext_mul_base({}, {})", b.0, a.0);
+                self.bind(Ty::Ext, &e)
+            }
+            (Ty::Ext, Ty::Ext) => {
+                let e = format!("ext_mul_kara({}, {})", a.0, b.0);
+                self.bind(Ty::Ext, &e)
+            }
+        }
+    }
+
+    fn emit(&mut self, e: &SymbolicExpression<F>) -> (String, Ty) {
         match e {
             SymbolicExpression::Variable(v) => self.var(v),
-            SymbolicExpression::IsFirstRow => "is_first".to_string(),
-            SymbolicExpression::IsLastRow => "is_last".to_string(),
-            SymbolicExpression::IsTransition => "is_transition".to_string(),
+            // The zerocheck folder leaves the row selectors unimplemented, so a
+            // constraint set that reached for one would not evaluate on the CPU
+            // either. Kept as base-field zero so the shape stays honest.
+            SymbolicExpression::IsFirstRow => self.bind(Ty::Base, "is_first"),
+            SymbolicExpression::IsLastRow => self.bind(Ty::Base, "is_last"),
+            SymbolicExpression::IsTransition => self.bind(Ty::Base, "is_transition"),
             SymbolicExpression::Constant(c) => {
-                let name = self.fresh();
                 self.consts += 1;
-                writeln!(self.body, "    uint {name} = {}u;", monty_of(*c)).unwrap();
-                name
+                let e = format!("{}u", monty_of(*c));
+                self.bind(Ty::Base, &e)
             }
             SymbolicExpression::Add { x, y, .. } => {
                 let (a, b) = (self.emit_rc(x), self.emit_rc(y));
-                let name = self.fresh();
-                self.adds += 1;
-                writeln!(self.body, "    uint {name} = kb_add({a}, {b});").unwrap();
-                name
+                self.add(a, b)
             }
             SymbolicExpression::Sub { x, y, .. } => {
                 let (a, b) = (self.emit_rc(x), self.emit_rc(y));
-                let name = self.fresh();
-                self.adds += 1;
-                writeln!(self.body, "    uint {name} = kb_sub({a}, {b});").unwrap();
-                name
+                self.sub(a, b)
             }
             SymbolicExpression::Neg { x, .. } => {
                 let a = self.emit_rc(x);
-                let name = self.fresh();
                 self.adds += 1;
-                writeln!(self.body, "    uint {name} = kb_neg({a});").unwrap();
-                name
+                match a.1 {
+                    Ty::Base => {
+                        let e = format!("kb_neg({})", a.0);
+                        self.bind(Ty::Base, &e)
+                    }
+                    Ty::Ext => {
+                        let e = format!("ext_neg({})", a.0);
+                        self.bind(Ty::Ext, &e)
+                    }
+                }
             }
             SymbolicExpression::Mul { x, y, .. } => {
                 let (a, b) = (self.emit_rc(x), self.emit_rc(y));
-                let name = self.fresh();
-                self.muls += 1;
-                writeln!(self.body, "    uint {name} = kb_mul({a}, {b});").unwrap();
-                name
+                self.mul(a, b)
             }
         }
     }
 }
 
 struct ChipReport {
+    /// Set if any constraint reads a row other than the current one.
+    reads_next_row: bool,
     name: String,
     constraints: usize,
     main_width: usize,
@@ -171,21 +288,29 @@ fn transpile(
     base: usize,
     main_width: usize,
     prep_width: usize,
+    ext_columns: bool,
 ) -> ChipReport {
-    let mut cg = Codegen::new();
+    let mut cg = Codegen::new(ext_columns);
     let mut names = Vec::with_capacity(constraints.len());
     for c in constraints {
         names.push(cg.emit(c));
     }
     let mut combine = String::new();
-    for (k, n) in names.iter().enumerate() {
+    for (k, (n, ty)) in names.iter().enumerate() {
         let idx = base + k;
-        writeln!(combine, "        acc = ext_add(acc, ext_mul_base(ap[{idx}u], {n}));").unwrap();
+        // The folding challenge is an extension element whichever field the
+        // constraint itself came out in.
+        let term = match ty {
+            Ty::Base => format!("ext_mul_base(ap[{idx}u], {n})"),
+            Ty::Ext => format!("ext_mul_kara(ap[{idx}u], {n})"),
+        };
+        writeln!(combine, "        acc = ext_add(acc, {term});").unwrap();
     }
+    let col = if ext_columns { "uint4" } else { "uint" };
     let kernel = format!(
         r#"
-kernel void zc_chip(device const uint* main [[buffer(0)]],
-                    device const uint* prep [[buffer(1)]],
+kernel void zc_chip(device const {col}* main [[buffer(0)]],
+                    device const {col}* prep [[buffer(1)]],
                     device const uint* pv [[buffer(2)]],
                     device const uint4* eq [[buffer(3)]],
                     device const uint4* ap [[buffer(4)]],
@@ -203,7 +328,7 @@ kernel void zc_chip(device const uint* main [[buffer(0)]],
         uint is_last = (gid == n - 1u) ? KB_ONE : 0u;
         uint is_transition = (gid == n - 1u) ? 0u : KB_ONE;
 {body}
-{combine}        acc = ext_mul(acc, eq[gid]);
+{combine}        acc = ext_mul_kara(acc, eq[gid]);
     }}
     sh[tid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -232,6 +357,7 @@ kernel void zc_chip(device const uint* main [[buffer(0)]],
         adds: cg.adds,
         consts: cg.consts,
         loads: cg.loads,
+        reads_next_row: cg.reads_next_row,
         source,
     }
 }
@@ -332,15 +458,142 @@ fn measure(
     })
 }
 
+/// A field element as the Montgomery word the kernels read.
+fn monty4(x: EF) -> [u32; 4] {
+    let b = x.as_base_slice();
+    std::array::from_fn(|i| monty_of(b[i]))
+}
+
+fn from_monty4(w: [u32; 4]) -> EF {
+    let inv = |m: u32| -> F {
+        // Undo the Montgomery factor by reducing m * 1.
+        let t = (m as u64).wrapping_mul(0x8100_0001u64) & 0xffff_ffff;
+        let u = ((t * P as u64) >> 32) as u32;
+        let r = 0u32.wrapping_sub(u);
+        F::from_canonical_u32(if 0 < u { r.wrapping_add(P) } else { r })
+    };
+    EF::from_base_slice(&[inv(w[0]), inv(w[1]), inv(w[2]), inv(w[3])])
+}
+
+/// Checks a generated evaluator against the folder the prover actually uses.
+///
+/// The kernel computes, over `n` rows, the sum of `eq[r] * sum_k alpha^k * c_k(row r)`.
+/// The CPU side asks the AIR for exactly that through `ConstraintSumcheckFolder`,
+/// one row at a time. Columns are extension elements, which is what every
+/// zerocheck round after the first hands the AIR, and the case the base-field
+/// spike never covered.
+#[allow(clippy::too_many_arguments)]
+fn parity(
+    device: &metal::Device,
+    queue: &metal::CommandQueue,
+    air: &RiscvAir<F>,
+    parts: &[ChipReport],
+    num_constraints: usize,
+    main_width: usize,
+    prep_width: usize,
+    n: usize,
+) -> Result<(), String> {
+    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    let pvs = sp1_hypercube::PROOF_MAX_NUM_PVS;
+    let public_values: Vec<F> = (0..pvs).map(|_| rng.gen()).collect();
+    let alpha: Vec<EF> = (0..num_constraints.max(1)).map(|_| rng.gen()).collect();
+    let eq: Vec<EF> = (0..n).map(|_| rng.gen()).collect();
+    // Column-major, which is how the generated code indexes.
+    let main: Vec<EF> = (0..n * main_width).map(|_| rng.gen()).collect();
+    let prep: Vec<EF> = (0..n * prep_width.max(1)).map(|_| rng.gen()).collect();
+
+    let words = |xs: &[EF]| -> Vec<u32> { xs.iter().flat_map(|x| monty4(*x)).collect() };
+    let buf = |v: &[u32]| {
+        device.new_buffer_with_data(
+            v.as_ptr().cast(),
+            std::mem::size_of_val(v).max(4) as u64,
+            metal::MTLResourceOptions::StorageModeShared,
+        )
+    };
+    let b_main = buf(&words(&main));
+    let b_prep = buf(&words(&prep));
+    let b_pv = buf(&public_values.iter().map(|x| monty_of(*x)).collect::<Vec<_>>());
+    let b_eq = buf(&words(&eq));
+    let b_ap = buf(&words(&alpha));
+
+    let threads = 256u64;
+    let groups = (n as u64).div_ceil(threads);
+    let mut got = EF::zero();
+    for part in parts {
+        let library = device
+            .new_library_with_source(&part.source, &metal::CompileOptions::new())
+            .map_err(|e| format!("compile: {e}"))?;
+        let f = library.get_function("zc_chip", None).map_err(|e| format!("{e}"))?;
+        let pso = device
+            .new_compute_pipeline_state_with_function(&f)
+            .map_err(|e| format!("{e}"))?;
+        let partials = device.new_buffer(
+            groups * 16,
+            metal::MTLResourceOptions::StorageModeShared,
+        );
+        let cb = queue.new_command_buffer();
+        let enc = cb.new_compute_command_encoder();
+        enc.set_compute_pipeline_state(&pso);
+        for (i, b) in [&b_main, &b_prep, &b_pv, &b_eq, &b_ap].into_iter().enumerate() {
+            enc.set_buffer(i as u64, Some(b), 0);
+        }
+        enc.set_buffer(5, Some(&partials), 0);
+        let n32 = n as u32;
+        enc.set_bytes(6, 4, (&n32 as *const u32).cast());
+        enc.dispatch_thread_groups(
+            metal::MTLSize::new(groups, 1, 1),
+            metal::MTLSize::new(threads, 1, 1),
+        );
+        enc.end_encoding();
+        cb.commit();
+        cb.wait_until_completed();
+        let raw = partials.contents().cast::<[u32; 4]>();
+        for g in 0..groups as usize {
+            got += from_monty4(unsafe { *raw.add(g) });
+        }
+    }
+
+    let mut want = EF::zero();
+    for r in 0..n {
+        let main_row: Vec<EF> = (0..main_width).map(|i| main[i * n + r]).collect();
+        let prep_row: Vec<EF> = (0..prep_width).map(|i| prep[i * n + r]).collect();
+        let mut folder = ConstraintSumcheckFolder::<F, EF, EF> {
+            preprocessed: RowMajorMatrixView::new_row(&prep_row),
+            main: RowMajorMatrixView::new_row(&main_row),
+            accumulator: EF::zero(),
+            public_values: &public_values,
+            constraint_index: 0,
+            powers_of_alpha: &alpha,
+        };
+        slop_air::Air::eval(air, &mut folder);
+        want += folder.accumulator * eq[r];
+    }
+
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!("got {got:?} want {want:?}"))
+    }
+}
+
 fn main() {
     let mut only: Option<String> = None;
     let mut chunk = usize::MAX;
     let mut stats_only = false;
+    let mut do_parity = false;
+    let mut ext_columns = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--chunk" => chunk = args.next().expect("--chunk needs a value").parse().unwrap(),
             "--stats" => stats_only = true,
+            // Extension-valued columns, as every zerocheck round after the
+            // first hands the AIR.
+            "--ext" => ext_columns = true,
+            "--parity" => {
+                do_parity = true;
+                ext_columns = true;
+            }
             other => only = Some(other.to_string()),
         }
     }
@@ -369,7 +622,7 @@ fn main() {
         let parts: Vec<ChipReport> = constraints
             .chunks(size)
             .enumerate()
-            .map(|(i, c)| transpile(&name, c, i * size, main_width, prep_width))
+            .map(|(i, c)| transpile(&name, c, i * size, main_width, prep_width, ext_columns))
             .collect();
         let r = &parts[0];
         if stats_only {
@@ -389,6 +642,42 @@ fn main() {
         }
         let device = metal::Device::system_default().expect("no Metal device");
         let queue = device.new_command_queue();
+        if do_parity {
+            let rows = 256;
+            let verdict = if parts.iter().any(|p| p.reads_next_row) {
+                // The folder hands the AIR one row, so a constraint reaching for
+                // the next one could not be evaluated on the CPU side either.
+                Err("reads a row other than the current one".to_string())
+            } else {
+                parity(
+                    &device,
+                    &queue,
+                    air,
+                    &parts,
+                    constraints.len(),
+                    main_width,
+                    prep_width,
+                    rows,
+                )
+            };
+            match verdict {
+                Ok(()) => println!(
+                    "{:34} {:5} constr {:6} nodes {:3} kernels  MATCHES the folder",
+                    name,
+                    constraints.len(),
+                    parts.iter().map(|p| p.nodes).sum::<usize>(),
+                    parts.len()
+                ),
+                Err(e) => println!(
+                    "{:34} {:5} constr {:6} nodes {:3} kernels  DIFFERS: {e}",
+                    name,
+                    constraints.len(),
+                    parts.iter().map(|p| p.nodes).sum::<usize>(),
+                    parts.len()
+                ),
+            }
+            continue;
+        }
         let measured = measure(&device, &queue, &parts, n, reps);
         println!(
             "{:34} {:5} constr {:6} nodes {:6} mul {:3} kernels {:4} wide  {:>6} kB  {}",
