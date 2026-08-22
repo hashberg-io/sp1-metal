@@ -15,7 +15,9 @@
 
 use std::sync::OnceLock;
 
+use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
+use sp1_metal_probes::stats::{self, Input, Output};
 
 const THREADS: u64 = 256;
 /// Below this a dispatch costs more than the arithmetic saves.
@@ -150,7 +152,9 @@ fn as_words<T>(xs: &[T]) -> &[u8] {
 /// nothing is copied. Every caller here awaits its dispatch before returning,
 /// which is what makes borrowing the slice sound.
 fn read_only(device: &Device, words: &[u8]) -> Buffer {
+    let start = std::time::Instant::now();
     if !words.is_empty() && words.as_ptr() as usize % PAGE == 0 && words.len() % PAGE == 0 {
+        stats::record_input(Input::Wrapped, words.len(), 0);
         // SAFETY: borrowed only for the dispatch, which is awaited below.
         return unsafe {
             device.new_buffer_with_bytes_no_copy(
@@ -161,11 +165,13 @@ fn read_only(device: &Device, words: &[u8]) -> Buffer {
             )
         };
     }
-    device.new_buffer_with_data(
+    let buffer = device.new_buffer_with_data(
         words.as_ptr().cast(),
         words.len().max(1) as u64,
         MTLResourceOptions::StorageModeShared,
-    )
+    );
+    stats::record_input(Input::Copied, words.len(), start.elapsed().as_nanos() as u64);
+    buffer
 }
 
 /// The round's three sums: the products at even indices, at odd indices, and of
@@ -177,6 +183,7 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
     if !on_gpu() || n % 2 != 0 || n / 2 < MIN_PAIRS {
         return None;
     }
+    let _phase = stats::enter(stats::Phase::Pcs);
     let pairs = n / 2;
     let ctx = context()?;
     let pso = if base_is_ext { &ctx.round_ext } else { &ctx.round_base };
@@ -195,9 +202,15 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
         enc.set_bytes(3, 4, (&n32 as *const u32).cast());
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
+        let start = std::time::Instant::now();
         cb.commit();
         cb.wait_until_completed();
+        let wall = start.elapsed().as_secs_f64();
+        let (t0, t1): (f64, f64) =
+            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+        stats::record_dispatch(wall, t1 - t0);
     });
+    stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
     let raw = partials.contents().cast::<[u32; 4]>();
     let mut out = ([0u32; 4], [0u32; 4], [0u32; 4]);
     let add = |a: &mut [u32; 4], b: [u32; 4]| {
@@ -271,6 +284,7 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
     if n % 2 != 0 || n / 2 < MIN_PAIRS {
         return None;
     }
+    let _phase = stats::enter(stats::Phase::Pcs);
     let out_len = n / 2;
     let ctx = context()?;
     let pso = if in_is_ext { &ctx.fold_ext } else { &ctx.fold_base };
@@ -308,10 +322,18 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
+        let start = std::time::Instant::now();
         cb.commit();
         cb.wait_until_completed();
+        let wall = start.elapsed().as_secs_f64();
+        let (t0, t1): (f64, f64) =
+            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+        stats::record_dispatch(wall, t1 - t0);
     });
-    if !direct {
+    if direct {
+        stats::record_output(Output::Direct, out_bytes, 0);
+    } else {
+        let start = std::time::Instant::now();
         // SAFETY: the kernel wrote `out_bytes` bytes of extension elements.
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -320,6 +342,7 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
                 out_bytes,
             );
         }
+        stats::record_output(Output::Staged, out_bytes, start.elapsed().as_nanos() as u64);
     }
     Some(out)
 }

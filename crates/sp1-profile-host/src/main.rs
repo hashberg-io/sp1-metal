@@ -132,6 +132,20 @@ fn report_metal(elapsed: std::time::Duration) {
         "commit: {commits} tensor commitments ({on_gpu} on the GPU) over {rows} rows \
          in {commit_s:.3} thread-seconds",
     );
+    // Where the bytes went, split by phase. `resident` is the fraction a kernel
+    // read with nothing done to it first, which is what the residency work is
+    // trying to move.
+    eprint!("\n{}", sp1_hypercube::metal_stats::report());
+    let all = sp1_hypercube::metal_stats::grand_totals();
+    eprintln!(
+        "residency {:.1}% of {:.2} GB read | {:.2} GB written, {:.1}% of it copied back | \
+         {:.3} thread-seconds copying",
+        all.residency() * 100.0,
+        all.in_bytes() as f64 / 1e9,
+        all.out_bytes() as f64 / 1e9,
+        if all.out_bytes() == 0 { 0.0 } else { all.out_staged as f64 / all.out_bytes() as f64 * 100.0 },
+        all.in_copy_s + all.out_copy_s,
+    );
 }
 
 #[cfg(not(feature = "metal"))]

@@ -142,6 +142,7 @@ impl TensorCsProver<SP1GlobalContext, CpuBackend> for MetalMerkleProver {
         let uniform = borrowed.iter().all(|t| t.sizes()[0] == rows);
         let total_width: usize = borrowed.iter().map(|t| t.sizes()[1]).sum();
 
+        let _phase = sp1_metal_probes::stats::enter(sp1_metal_probes::stats::Phase::Commit);
         if use_gpu() && uniform {
             let words: Vec<(&[u32], usize)> = borrowed
                 .iter()

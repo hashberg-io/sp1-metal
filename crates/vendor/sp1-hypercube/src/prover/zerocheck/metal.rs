@@ -19,10 +19,13 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 
+use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 use slop_algebra::{AbstractExtensionField, AbstractField, Field, PrimeField32};
 use slop_multilinear::{Mle, PaddedMle};
 use slop_uni_stark::{Entry, SymbolicExpression, SymbolicVariable};
+
+use sp1_metal_probes::stats::{self, Input, Output};
 
 use crate::logup_gkr::metal::EF;
 
@@ -522,13 +525,17 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     }
     let pso = pipeline_for(key, is_first_round, ext_columns, constraints)?;
 
+    let _phase = stats::enter(stats::Phase::Zerocheck);
     let ctx = context();
     let upload = |bytes: &[u8]| {
-        ctx.device.new_buffer_with_data(
+        let start = std::time::Instant::now();
+        let buffer = ctx.device.new_buffer_with_data(
             bytes.as_ptr().cast(),
             bytes.len().max(1) as u64,
             MTLResourceOptions::StorageModeShared,
-        )
+        );
+        stats::record_input(Input::Copied, bytes.len(), start.elapsed().as_nanos() as u64);
+        buffer
     };
     let b_main = upload(as_words(main_inner.guts().as_slice()));
     let empty = [0u8; 16];
@@ -567,10 +574,16 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
+        let start = std::time::Instant::now();
         cb.commit();
         cb.wait_until_completed();
+        let wall = start.elapsed().as_secs_f64();
+        let (t0, t1): (f64, f64) =
+            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+        stats::record_dispatch(wall, t1 - t0);
     });
 
+    stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
     let raw = partials.contents().cast::<EF>();
     let mut out = (EF::zero(), EF::zero(), EF::zero());
     for g in 0..groups as usize {

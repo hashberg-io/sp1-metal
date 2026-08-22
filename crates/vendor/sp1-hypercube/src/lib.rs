@@ -38,6 +38,11 @@ pub mod shape;
 mod util;
 mod verifier;
 mod word;
+/// Residency accounting for the Metal path, shared with the vendored crates
+/// below this one so that one table covers every phase.
+#[cfg(feature = "metal")]
+pub use sp1_metal_probes::stats as metal_stats;
+
 pub use chip::*;
 pub use debug::{debug_constraints, debug_constraints_all_chips, DebugConstraintBuilder};
 pub use folder::*;

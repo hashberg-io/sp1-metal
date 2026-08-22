@@ -33,6 +33,7 @@ use slop_algebra::{AbstractExtensionField, AbstractField};
 use slop_koala_bear::KoalaBear;
 use slop_alloc::CpuBackend;
 use slop_multilinear::{Mle, Padding, PaddedMle};
+use sp1_metal_probes::stats::{self, Input, Output};
 use super::{cpu_round_evals, LogupRoundOps, LogupRoundPolynomial, PolynomialLayer};
 
 /// The base field the kernels are written for.
@@ -265,6 +266,7 @@ fn upload_mle<T: slop_algebra::Field>(mle: &Arc<Mle<T>>) -> Buffer {
         c.borrow().iter().find(|e| e.ptr == ptr && e.len == len).map(|e| e.buffer.clone())
     });
     if let Some(buffer) = hit {
+        stats::record_input(Input::Resident, len * 4, 0);
         return buffer;
     }
     let buffer = upload(words);
@@ -324,7 +326,13 @@ fn upload(bytes: &[u8]) -> Buffer {
     let aligned = bytes.as_ptr() as usize % page == 0 && bytes.len() % page == 0;
     let start = std::time::Instant::now();
     let buffer = upload_inner(device, bytes, aligned);
-    STATS.with_borrow(aligned, bytes.len(), start.elapsed().as_secs_f64());
+    let elapsed = start.elapsed();
+    STATS.with_borrow(aligned, bytes.len(), elapsed.as_secs_f64());
+    stats::record_input(
+        if aligned { Input::Wrapped } else { Input::Copied },
+        bytes.len(),
+        elapsed.as_nanos() as u64,
+    );
     buffer
 }
 
@@ -480,6 +488,12 @@ pub static STATS: UploadStats = UploadStats { inner: Mutex::new(StatsInner {
     threads: 0,
 }) };
 
+/// Records an output the kernel wrote, and whether it landed where it was
+/// wanted or in a staging buffer that still has to be copied back.
+fn record_out(direct: bool, bytes: usize) {
+    stats::record_output(if direct { Output::Direct } else { Output::Staged }, bytes, 0);
+}
+
 /// Commits a command buffer, waits for it, and records what the GPU spent.
 fn run_and_record(cb: &metal::CommandBufferRef) {
     let start = std::time::Instant::now();
@@ -491,6 +505,7 @@ fn run_and_record(cb: &metal::CommandBufferRef) {
     let (t0, t1): (f64, f64) =
         unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
     STATS.record(wall, t1 - t0);
+    stats::record_dispatch(wall, t1 - t0);
 }
 
 fn as_words<T>(xs: &[T]) -> &[u8] {
@@ -720,6 +735,7 @@ where
     K: slop_algebra::ExtensionField<F>,
 {
     fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K) {
+        let _phase = stats::enter(stats::Phase::Gkr);
         if is::<K, EF>() {
             if is::<F, BaseField>() {
                 // SAFETY: the type ids match, so these are the same types.
@@ -738,6 +754,7 @@ where
     }
 
     fn fix_numerator(mle: &PaddedMle<F>, alpha: K) -> PaddedMle<K> {
+        let _phase = stats::enter(stats::Phase::Gkr);
         if is::<K, EF>() {
             if is::<F, BaseField>() {
                 // SAFETY: the type ids match, so these are the same types.
@@ -762,6 +779,7 @@ where
         denominators: (&[PaddedMle<K>], &[PaddedMle<K>]),
         alpha: K,
     ) -> (Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>) {
+        let _phase = stats::enter(stats::Phase::Gkr);
         let handled = is::<K, EF>()
             && (is::<F, BaseField>() || is::<F, EF>())
 ;
@@ -819,6 +837,7 @@ where
     }
 
     fn fix_denominator(mle: &PaddedMle<K>, alpha: K) -> PaddedMle<K> {
+        let _phase = stats::enter(stats::Phase::Gkr);
         if is::<K, EF>() {
             // SAFETY: the type ids match, so these are the same types.
             let m: &PaddedMle<EF> = unsafe { &*std::ptr::from_ref(mle).cast() };
@@ -936,7 +955,7 @@ where
     let out_bytes = total * std::mem::size_of::<EF>();
     let page = 16 * 1024usize;
     let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
-    STATS.with_borrow(direct, out_bytes, 0.0);
+    record_out(direct, out_bytes);
     let out_buf = if direct {
         // SAFETY: borrowed only for the dispatch, which is awaited below.
         unsafe {
@@ -1086,7 +1105,7 @@ where
     let out_bytes = total * std::mem::size_of::<EF>();
     let page = 16 * 1024usize;
     let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
-    STATS.with_borrow(direct, out_bytes, 0.0);
+    record_out(direct, out_bytes);
     let out_buf = if direct {
         // SAFETY: borrowed until the batch is awaited, which happens before the
         // values are read.
@@ -1152,6 +1171,7 @@ where
     T: slop_algebra::Field,
     E: slop_algebra::ExtensionField<T>,
 {
+    let _phase = stats::enter(stats::Phase::Gkr);
     if is::<E, EF>()
         && mle.inner().as_ref().map_or(0, |i| i.guts().as_slice().len()) >= min_entries_for_gpu()
     {
@@ -1209,7 +1229,7 @@ impl Out {
         let bytes = total * std::mem::size_of::<EF>();
         let page = 16 * 1024usize;
         let direct = values.as_ptr() as usize % page == 0 && bytes % page == 0;
-        STATS.with_borrow(direct, bytes, 0.0);
+        record_out(direct, bytes);
         let buffer = if direct {
             // SAFETY: borrowed only for the dispatch, which is awaited below.
             unsafe {
@@ -1229,6 +1249,7 @@ impl Out {
     fn finish(mut self) -> Vec<EF> {
         if !self.direct {
             let bytes = self.values.len() * std::mem::size_of::<EF>();
+            let start = std::time::Instant::now();
             // SAFETY: the kernel wrote that many bytes of extension elements.
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -1237,6 +1258,7 @@ impl Out {
                     bytes,
                 );
             }
+            stats::record_output(Output::Staged, 0, start.elapsed().as_nanos() as u64);
         }
         self.values
     }
@@ -1264,6 +1286,7 @@ where
     K: slop_algebra::Field,
     E: slop_algebra::Field,
 {
+    let _phase = stats::enter(stats::Phase::Gkr);
     if !is::<E, EF>() {
         return None;
     }

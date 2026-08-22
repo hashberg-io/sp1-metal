@@ -3601,6 +3601,7 @@ dependencies = [
  "slop-symmetric",
  "slop-tensor",
  "slop-utils",
+ "sp1-metal-probes",
  "thiserror 1.0.69",
  "tracing",
 ]

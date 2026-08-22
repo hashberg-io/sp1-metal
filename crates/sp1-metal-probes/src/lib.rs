@@ -10,3 +10,4 @@ pub mod gpu;
 pub mod kb;
 pub mod packed;
 pub mod probes;
+pub mod stats;

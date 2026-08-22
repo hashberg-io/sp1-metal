@@ -21,6 +21,7 @@
 
 use std::sync::OnceLock;
 
+use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 
 use crate::gpu::SHADER_SRC;
@@ -88,7 +89,9 @@ fn dispatch(enc: &metal::ComputeCommandEncoderRef, n: u64) {
 fn upload(device: &Device, words: &[u32]) -> Buffer {
     let bytes = std::mem::size_of_val(words);
     let page = 16 * 1024usize;
+    let start = std::time::Instant::now();
     if bytes >= page && words.as_ptr() as usize % page == 0 && bytes % page == 0 {
+        crate::stats::record_input(crate::stats::Input::Wrapped, bytes, 0);
         // SAFETY: the buffer borrows `words` for the dispatch, which is awaited
         // before this returns.
         return unsafe {
@@ -100,11 +103,17 @@ fn upload(device: &Device, words: &[u32]) -> Buffer {
             )
         };
     }
-    device.new_buffer_with_data(
+    let buffer = device.new_buffer_with_data(
         words.as_ptr().cast(),
         bytes.max(1) as u64,
         MTLResourceOptions::StorageModeShared,
-    )
+    );
+    crate::stats::record_input(
+        crate::stats::Input::Copied,
+        bytes,
+        start.elapsed().as_nanos() as u64,
+    );
+    buffer
 }
 
 /// Builds every digest layer of the tree slop would build, bottom up.
@@ -195,24 +204,38 @@ pub fn digest_layers(tensors: &[(&[u32], usize)], rows: usize) -> Option<Vec<Vec
         dispatch(enc, parents as u64);
         enc.end_encoding();
     }
+    let start = std::time::Instant::now();
     cb.commit();
     cb.wait_until_completed();
+    let wall = start.elapsed().as_secs_f64();
+    // GPUStartTime and GPUEndTime are ordinary Objective-C properties on
+    // MTLCommandBuffer that the metal crate does not bind.
+    let (t0, t1): (f64, f64) =
+        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+    crate::stats::record_dispatch(wall, t1 - t0);
 
-    Some(
-        levels
-            .iter()
-            .enumerate()
-            .map(|(l, buf)| {
-                let n = padded >> l;
-                // SAFETY: the kernels wrote eight words per digest, and the
-                // padded tail was zeroed above.
-                let src = unsafe {
-                    std::slice::from_raw_parts(buf.contents().cast::<[u32; 8]>(), n)
-                };
-                src.to_vec()
-            })
-            .collect(),
-    )
+    let start = std::time::Instant::now();
+    let out: Vec<Vec<[u32; 8]>> = levels
+        .iter()
+        .enumerate()
+        .map(|(l, buf)| {
+            let n = padded >> l;
+            // SAFETY: the kernels wrote eight words per digest, and the padded
+            // tail was zeroed above.
+            let src =
+                unsafe { std::slice::from_raw_parts(buf.contents().cast::<[u32; 8]>(), n) };
+            src.to_vec()
+        })
+        .collect();
+    // Every digest the tree holds is copied back out of device memory, because
+    // the type the caller must return owns its layers on the host.
+    let copied: usize = out.iter().map(|l| std::mem::size_of_val(l.as_slice())).sum();
+    crate::stats::record_output(
+        crate::stats::Output::Staged,
+        copied,
+        start.elapsed().as_nanos() as u64,
+    );
+    Some(out)
 }
 
 #[cfg(test)]
