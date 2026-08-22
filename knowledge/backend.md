@@ -81,17 +81,52 @@ The prover recovers this not by changing the driver but by having many sumchecks
 `prove_trusted_evaluation` — the jagged sumcheck, the stacking, BaseFold's folding rounds, the FRI query openings and their Merkle paths — is not implemented.
 That is the larger half of the PCS phase's 19%, and with it steps 7 through 9 remain open.
 
-## 7. GKR: verified blocked without a fork
+## 7. GKR, through a fork
 
 The plan's structural claim was that GKR sits behind concrete CPU types and needs a vendored fork.
-That is now stronger than a reading of the types.
+It is stronger than a reading of the types: `GkrProverImpl::prove_gkr_circuit` is public and would give a reference to check against, but it takes a `LogupGkrCpuCircuit` whose `layers` field is **private, with no public constructor**, so the circuit cannot be built, driven or parity-checked from outside the crate.
+Attempting it fails to compile.
 
-`GkrProverImpl::prove_gkr_circuit` is public and would give a reference proof to check a Metal layer prover against, but it takes a `LogupGkrCpuCircuit` — whose `layers` field is **private, with no public constructor**.
-The only public way to build one is the trace generator, which needs a real machine and a real execution record.
-Attempting the construction from another crate fails to compile with `field 'layers' of struct 'LogupGkrCpuCircuit' is private`.
+So `crates/vendor/sp1-hypercube` is upstream 6.4.0 with a recorded set of changes, and consumers reach it through `[patch.crates-io]` — which matters, because `sp1-core-machine` depends on `sp1-hypercube` too and both must resolve to the same copy for the types to unify.
 
-So GKR — 46.8% of the proof, the single largest phase — cannot be reached, driven, or even parity-checked from outside `sp1-hypercube`.
-Vendoring the crate is not one option among several; it is the only one.
-That is a decision with consequences beyond this step: a fork of the hottest files in a fast-moving repository, pinned to `=6.4.0`, is a standing maintenance cost that the plan lists as a risk and that nothing here reduces.
+### The seam
 
-Steps 7, 8 and 9 all sit behind that decision, and behind the three to four months the plan estimates for them.
+A GKR round's message is built from three sums over the layer, and everything else about a round — layer transitions, padding and eq adjustments, interpolating the message from its evaluations — is the same wherever those sums are computed.
+`LogupRoundOps` names exactly that boundary, with `CpuRoundOps` holding the code that was inline, moved verbatim.
+The fold went behind it too, at layer granularity rather than per polynomial, because a layer has one polynomial per chip and there are of the order of a hundred chips.
+`DefaultRoundOps` selects the implementation, so turning the `metal` feature on moves the phase to the GPU **without a type changing anywhere downstream, sp1-sdk included**.
+
+The crate's own GKR tests pass unmodified beyond the new struct field, which is what establishes the CPU path is untouched.
+
+### What it measures, in isolation
+
+On a shard-sized layer — 2^16 rows, 108 interactions across 8 chips — against the same layer on the CPU:
+
+| | | |
+|---|---|---|
+| round reduction | 12.0x | |
+| fold | 3.7x | after batching; 1.8x before |
+| **whole round** | **9.06x** | 6.0x before batching, 4.3x with the fold left on the CPU |
+
+Feeding 9.06x into the model puts a complete port at **8.15x** end to end.
+
+Parity covers both halves — the reduction against the CPU one for base and extension layers, the fold against slop's own `fix_last_variable` — across several chip mixes and both even and odd row counts, the odd case being where the last row pair is half padding.
+Squaring one denominator, or dropping the odd-row guard, each fails exactly the test that covers it.
+
+Writing those tests found a real bug rather than a test artefact: the scratch buffer for per-threadgroup partials was a single shared allocation, which two concurrent reductions race on. SP1 proves shards concurrently, so it would have corrupted proofs under load. It is a checkout pool now.
+
+### What it does in the real prover: not yet a win
+
+Wired into an actual proof, the picture changes, and this is the honest result.
+A synthetic layer is a handful of chips all of the same size; a real one is about a hundred chips whose sizes span orders of magnitude, and the cost of *preparing* a dispatch — creating Metal buffer objects, which is a call into the kernel — is paid per chip regardless of how little that chip has in it.
+
+Three rounds of fixes each moved it a long way and none was enough:
+
+- **Batching.** One command buffer per layer instead of one per chip, and one per layer's folds instead of one per polynomial. Worth 6.0x to 9.06x on the synthetic layer.
+- **A size threshold.** Layers below a few thousand entries stay on the CPU, since below that the dispatch costs more than the arithmetic saves. Overridable with `SP1_METAL_MIN_ENTRIES`, which the tests set to zero so small shapes still reach the kernels.
+- **Inline arguments.** The small per-chip slices — a chip's eq values, a fold's padding — go into the command buffer directly rather than into freshly created buffers.
+
+A fibonacci core proof still takes longer with the feature on than the 18.2 s the CPU takes.
+The threshold is applied per *layer*, so a layer that clears it dispatches all its chips including the ninety tiny ones; the fix is a per-chip decision, with the small chips' contribution computed on the CPU and added to the GPU's — the sums are additive, so this is straightforward, and it is where this stands.
+
+The lesson is the one the challenger spike ended on, at prover scale: the arithmetic was never the problem, and every gain here came from submitting less often rather than computing faster.

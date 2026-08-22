@@ -21,6 +21,14 @@ use sp1_hypercube::{
 };
 use sp1_metal_prover::{MetalRoundOps, EF, F};
 
+/// The prover leaves small layers on the CPU, because below a few thousand
+/// entries preparing a dispatch costs more than the arithmetic saves. These
+/// shapes are deliberately small, so the threshold is lifted to keep the
+/// kernels under test.
+fn force_gpu() {
+    unsafe { std::env::set_var("SP1_METAL_MIN_ENTRIES", "0") };
+}
+
 fn random_layer(
     rng: &mut StdRng,
     interaction_counts: &[usize],
@@ -164,6 +172,7 @@ fn ext_poly<B>(
 
 #[test]
 fn logup_round_reduction_matches_the_cpu_on_extension_layers() {
+    force_gpu();
     let mut rng = StdRng::seed_from_u64(1002);
     let shapes: [(&[usize], usize, usize, usize); 4] = [
         (&[3, 5, 2], 8, 3, 4),
@@ -185,6 +194,7 @@ fn logup_round_reduction_matches_the_cpu_on_extension_layers() {
 
 #[test]
 fn logup_round_reduction_matches_the_cpu() {
+    force_gpu();
     let mut rng = StdRng::seed_from_u64(1001);
     // (interaction counts per chip, rows, row variables, interaction variables)
     let shapes: [(&[usize], usize, usize, usize); 4] = [
@@ -210,6 +220,7 @@ fn logup_round_reduction_matches_the_cpu() {
 /// The fold against slop's own, which is what the CPU default calls.
 #[test]
 fn fixing_the_last_variable_matches_slop() {
+    force_gpu();
     let mut rng = StdRng::seed_from_u64(1003);
     for &(rows, width, vars) in &[(8usize, 3usize, 3u32), (5, 7, 3), (1, 4, 1), (33, 2, 6)] {
         let alpha: EF = rng.gen();

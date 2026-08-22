@@ -40,6 +40,36 @@ pub type EF = slop_algebra::extension::BinomialExtensionField<KoalaBear, 4>;
 
 const THREADS: u64 = 256;
 
+/// Entries in a layer below which the round stays on the CPU.
+///
+/// A GKR layer has one polynomial per chip, and a shard proof walks a lot of
+/// small ones: preparing a dispatch costs Metal buffer creation, which is a
+/// call into the kernel, and below this size that costs more than the
+/// arithmetic saves. Measured on a shard-sized layer the GPU is nine times the
+/// CPU; on a layer of a few hundred entries it is far slower, and the crossover
+/// is around here.
+const DEFAULT_MIN_ENTRIES_FOR_GPU: usize = 1 << 14;
+
+/// The threshold in force, overridable with `SP1_METAL_MIN_ENTRIES` — which
+/// tests set to zero so that small shapes still reach the kernels.
+fn min_entries_for_gpu() -> usize {
+    static MIN: OnceLock<usize> = OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("SP1_METAL_MIN_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_MIN_ENTRIES_FOR_GPU)
+    })
+}
+
+/// Total entries across a layer's numerators, used to decide whether the round
+/// is worth dispatching.
+fn layer_entries<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> usize {
+    mles.iter()
+        .filter_map(|m| m.inner().as_ref().map(|i| i.guts().as_slice().len()))
+        .sum()
+}
+
 /// Shader source: the probe suite's field arithmetic verbatim, so the kernels
 /// here compute in the representation everything else was parity-checked in,
 /// plus the round kernels.
@@ -109,6 +139,23 @@ impl Context {
 fn context() -> &'static Context {
     static CTX: OnceLock<Context> = OnceLock::new();
     CTX.get_or_init(Context::new)
+}
+
+/// Metal takes argument data up to this size inline in the command buffer,
+/// which avoids creating a buffer object -- a call into the kernel that, for
+/// the small per-chip slices a GKR layer is full of, costs more than the work.
+const SET_BYTES_LIMIT: usize = 4096;
+
+/// Binds a small slice inline, or through a buffer if it is too large.
+fn bind_small(enc: &metal::ComputeCommandEncoderRef, index: u64, bytes: &[u8]) -> Option<Buffer> {
+    if bytes.len() <= SET_BYTES_LIMIT && !bytes.is_empty() {
+        enc.set_bytes(index, bytes.len() as u64, bytes.as_ptr().cast());
+        None
+    } else {
+        let b = upload(bytes);
+        enc.set_buffer(index, Some(&b), 0);
+        Some(b)
+    }
 }
 
 /// Hands a slice of field elements to Metal.
@@ -198,7 +245,7 @@ fn circuit_layer<N: slop_algebra::Field>(
     let mut interaction_offset = 0usize;
     let mut totals = (EF::zero(), EF::zero(), EF::zero());
     let cb = ctx.queue.new_command_buffer();
-    let mut held: Vec<(Buffer, usize, [Buffer; 6])> = Vec::new();
+    let mut held: Vec<(Buffer, usize, Vec<Option<Buffer>>)> = Vec::new();
     for (((n0, n1), d0), d1) in
         numerators.0.iter().zip(numerators.1).zip(denominators.0).zip(denominators.1)
     {
@@ -230,8 +277,6 @@ fn circuit_layer<N: slop_algebra::Field>(
         let b_n1 = upload(as_words(n1_inner.guts().as_slice()));
         let b_d0 = upload(as_words(d0_inner.guts().as_slice()));
         let b_d1 = upload(as_words(d1_inner.guts().as_slice()));
-        let b_eqi = upload(as_words(&eq_interaction[interaction_offset..interaction_offset + width]));
-        let b_eqr = upload(as_words(&eq_row[..2 * n_pairs]));
 
         #[repr(C)]
         #[derive(Clone, Copy)]
@@ -245,9 +290,15 @@ fn circuit_layer<N: slop_algebra::Field>(
 
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
-        for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1, &b_eqi, &b_eqr].into_iter().enumerate() {
+        for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1].into_iter().enumerate() {
             enc.set_buffer(i as u64, Some(b), 0);
         }
+        let b_eqi = bind_small(
+            enc,
+            4,
+            as_words(&eq_interaction[interaction_offset..interaction_offset + width]),
+        );
+        let b_eqr = bind_small(enc, 5, as_words(&eq_row[..2 * n_pairs]));
         enc.set_buffer(6, Some(&partials), 0);
         enc.set_bytes(7, std::mem::size_of::<Params>() as u64, (&params as *const Params).cast());
         enc.set_bytes(8, 16, lambda_words.as_ptr().cast());
@@ -257,7 +308,7 @@ fn circuit_layer<N: slop_algebra::Field>(
         );
         enc.end_encoding();
         // Keep the buffers alive until the whole layer has run.
-        held.push((partials, groups, [b_n0, b_n1, b_d0, b_d1, b_eqi, b_eqr]));
+        held.push((partials, groups, vec![Some(b_n0), Some(b_n1), Some(b_d0), Some(b_d1), b_eqi, b_eqr]));
         interaction_offset += width;
         let _ = numerator_words;
     }
@@ -337,13 +388,15 @@ where
         denominators: (&[PaddedMle<K>], &[PaddedMle<K>]),
         alpha: K,
     ) -> (Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>) {
-        let handled = is::<K, EF>() && (is::<F, BaseField>() || is::<F, EF>());
+        let handled = is::<K, EF>()
+            && (is::<F, BaseField>() || is::<F, EF>())
+            && layer_entries(numerators.0) >= min_entries_for_gpu();
         if !handled {
             return (
-                numerators.0.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
-                denominators.0.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
-                numerators.1.iter().map(|m| Self::fix_numerator(m, alpha)).collect(),
-                denominators.1.iter().map(|m| Self::fix_denominator(m, alpha)).collect(),
+                numerators.0.iter().map(|m| m.fix_last_variable(alpha)).collect(),
+                denominators.0.iter().map(|m| m.fix_last_variable(alpha)).collect(),
+                numerators.1.iter().map(|m| m.fix_last_variable(alpha)).collect(),
+                denominators.1.iter().map(|m| m.fix_last_variable(alpha)).collect(),
             );
         }
         // SAFETY: the type ids match, so these are the same types.
@@ -409,6 +462,11 @@ fn is<A: 'static + ?Sized, B: 'static + ?Sized>() -> bool {
 fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::CircuitLayer(layer)
+            if layer_entries(&layer.numerator_0) < min_entries_for_gpu() =>
+        {
+            cpu_round_evals(poly)
+        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<BaseField>(
             &context().base,
             (&layer.numerator_0, &layer.numerator_1),
@@ -424,6 +482,11 @@ fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -
 fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::CircuitLayer(layer)
+            if layer_entries(&layer.numerator_0) < min_entries_for_gpu() =>
+        {
+            cpu_round_evals(poly)
+        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<EF>(
             &context().ext,
             (&layer.numerator_0, &layer.numerator_1),
@@ -579,7 +642,7 @@ struct PendingFold {
     width: usize,
     out_vars: u32,
     padding: Padding<EF, CpuBackend>,
-    held: Vec<Buffer>,
+    held: Vec<Option<Buffer>>,
 }
 
 impl PendingFold {
@@ -653,11 +716,22 @@ where
         ctx.device.new_buffer(out_bytes as u64, MTLResourceOptions::StorageModeShared)
     };
     let in_buf = upload(as_words(inner.guts().as_slice()));
-    let pad_buf = upload(as_words(&pad_values));
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
     let params =
         FoldParams { out_rows: out_rows as u32, rows: rows as u32, width: width as u32 };
-    encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
+    let enc = cb.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(pso);
+    enc.set_buffer(0, Some(&in_buf), 0);
+    let pad_buf = bind_small(enc, 1, as_words(&pad_values));
+    enc.set_buffer(2, Some(&out_buf), 0);
+    enc.set_bytes(3, std::mem::size_of::<FoldParams>() as u64, (&params as *const FoldParams).cast());
+    enc.set_bytes(4, 16, alpha_words.as_ptr().cast());
+    let threads = total as u64;
+    enc.dispatch_threads(
+        MTLSize::new(threads, 1, 1),
+        MTLSize::new(THREADS.min(threads.max(1)), 1, 1),
+    );
+    enc.end_encoding();
     Fold::Pending(PendingFold {
         values,
         out_buf,
@@ -666,7 +740,7 @@ where
         width,
         out_vars,
         padding,
-        held: vec![in_buf, pad_buf],
+        held: vec![Some(in_buf), pad_buf],
     })
 }
 
