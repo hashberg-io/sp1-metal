@@ -1344,12 +1344,11 @@ dependencies = [
 [[package]]
 name = "slop-jagged"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d04caa11c56e4f3cb878574fc4c41a23b09378fd3accb9818f527f1700f033d7"
 dependencies = [
  "derive-where",
  "futures",
  "itertools 0.14.0",
+ "metal",
  "num_cpus",
  "rand",
  "rayon",
