@@ -1,6 +1,8 @@
 //! Zerocheck Sumcheck polynomial.
 
 mod fix_last_variable;
+#[cfg(feature = "metal")]
+pub(crate) mod metal;
 mod sum_as_poly;
 
 use std::fmt::Debug;

@@ -50,6 +50,84 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
+    /// The same three sums, on the GPU, for the chips whose kernel can be
+    /// generated.
+    ///
+    /// The constraints come from the AIR already in hand, so nothing here needs
+    /// to enumerate chips and no dependency is added. `None` means this chip is
+    /// not one the generator serves — because the columns are still base-field,
+    /// because its constraint DAG is too large to compile, or because the GPU
+    /// path is switched off — and the caller does what it always did.
+    #[cfg(feature = "metal")]
+    fn metal_sum_as_poly<K, const IS_FIRST_ROUND: bool>(
+        &self,
+        partial_lagrange: &Mle<EF>,
+        preprocessed_values: Option<&PaddedMle<K>>,
+        main_values: &PaddedMle<K>,
+    ) -> Option<(EF, EF, EF)>
+    where
+        K: ExtensionField<F>,
+        EF: ExtensionField<K>,
+        A: MachineAir<F> + slop_air::Air<slop_uni_stark::SymbolicAirBuilder<F>>,
+    {
+        use std::any::TypeId;
+        type MetalEF = crate::logup_gkr::metal::EF;
+        type MetalF = crate::logup_gkr::metal::BaseField;
+        // Only the rounds whose columns are extension elements are generated.
+        if TypeId::of::<K>() != TypeId::of::<MetalEF>()
+            || TypeId::of::<EF>() != TypeId::of::<MetalEF>()
+            || TypeId::of::<F>() != TypeId::of::<MetalF>()
+        {
+            return None;
+        }
+        // SAFETY: the type ids match, so these are the same types.
+        let main: &PaddedMle<MetalEF> = unsafe { &*std::ptr::from_ref(main_values).cast() };
+        let prep: Option<&PaddedMle<MetalEF>> =
+            preprocessed_values.map(|p| unsafe { &*std::ptr::from_ref(p).cast() });
+        let eq: &Mle<MetalEF> = unsafe { &*std::ptr::from_ref(partial_lagrange).cast() };
+        let alpha: &[MetalEF] =
+            unsafe { &*(std::ptr::from_ref::<[EF]>(&self.powers_of_alpha) as *const [MetalEF]) };
+        let gkr: &[MetalEF] =
+            unsafe { &*(std::ptr::from_ref::<[EF]>(&self.gkr_powers) as *const [MetalEF]) };
+
+        // SAFETY: F is the base field, checked above. Its elements are already
+        // the Montgomery words the kernels read.
+        let public_values: &[MetalF] = unsafe {
+            &*(std::ptr::from_ref::<[F]>(&self.public_values) as *const [MetalF])
+        };
+
+        let air = self.air.clone();
+        let name = MachineAir::<F>::name(air.as_ref());
+        let key = format!("{name}:{IS_FIRST_ROUND}");
+        let prep_width = MachineAir::<F>::preprocessed_width(air.as_ref());
+        let out = super::metal::sum_as_poly(
+            &key,
+            IS_FIRST_ROUND,
+            || {
+                let cs = slop_uni_stark::get_symbolic_constraints(
+                    air.as_ref(),
+                    prep_width,
+                    crate::PROOF_MAX_NUM_PVS,
+                );
+                // SAFETY: F is the base field, so this is the same type.
+                unsafe {
+                    std::mem::transmute_copy::<
+                        std::mem::ManuallyDrop<Vec<slop_uni_stark::SymbolicExpression<F>>>,
+                        Vec<slop_uni_stark::SymbolicExpression<MetalF>>,
+                    >(&std::mem::ManuallyDrop::new(cs))
+                }
+            },
+            public_values,
+            alpha,
+            gkr,
+            eq,
+            prep,
+            main,
+        )?;
+        // SAFETY: EF is the extension the kernels are written for, checked above.
+        Some(unsafe { std::mem::transmute_copy(&out) })
+    }
+
     pub(crate) fn sum_as_poly_in_last_variable<K, const IS_FIRST_ROUND: bool>(
         &self,
         partial_lagrange: &Mle<EF>,
@@ -59,8 +137,20 @@ where
     where
         K: ExtensionField<F>,
         EF: ExtensionField<K>,
-        A: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>> + MachineAir<F>,
+        A: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>>
+            + MachineAir<F>
+            + Air<slop_uni_stark::SymbolicAirBuilder<F>>,
     {
+        #[cfg(feature = "metal")]
+        {
+            if let Some(out) = self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
+                partial_lagrange,
+                preprocessed_values,
+                main_values,
+            ) {
+                return out;
+            }
+        }
         let air = self.air.clone();
         let public_values = self.public_values.clone();
         let powers_of_alpha = self.powers_of_alpha.clone();
@@ -195,7 +285,9 @@ pub fn zerocheck_sum_as_poly_in_last_variable<
     claim: Option<EF>,
 ) -> UnivariatePolynomial<EF>
 where
-    AirData: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>> + MachineAir<F>,
+    AirData: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>>
+        + MachineAir<F>
+        + Air<slop_uni_stark::SymbolicAirBuilder<F>>,
 {
     let num_real_entries = poly.main_columns.num_real_entries();
     if num_real_entries == 0 {
