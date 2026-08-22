@@ -159,7 +159,9 @@ A sample of the live process shows 36 threads — the main thread, 16 tokio work
 
 It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
-That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding: raising it until the stall disappears bounds the layer size at which the GPU path breaks.
+That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding. At a threshold of 4,194,304 entries, where no layer in this workload reaches the GPU, the proof completes in 15.78 s; lower it and the stall returns.
+
+Size alone is not the trigger. The harness in `crates/sp1-metal-prover` puts layers of seven million entries through the same kernels without trouble, and the parity tests cover mixed chip sizes and odd row counts. What the threshold gates is whether a *real* layer ever reaches the kernel, and real layers differ from constructed ones in ways the tests do not reach: `Padding::Generic` rather than a constant, chips whose `inner` is `None`, an `eq_row` shorter than the row pairs it is zipped against. The next test to write is one built from a layer the prover actually produced, not one assembled by hand.
 
 What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
 
