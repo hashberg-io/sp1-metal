@@ -263,3 +263,24 @@ Parity is checked digest by digest against slop for one tensor, several tensors,
 **Result.** Committing takes 4.1 thread-seconds instead of 36.8. A two-million iteration fibonacci proof goes from **66.50 s to 35.57 s — 1.87x** — and verifies. `SP1_METAL_MERKLE=0` forces the CPU committer through the same binary, which is how the pair is taken.
 
 The profile afterwards, 89.5 thread-seconds over a 35.6 second wall: gkr 41.8%, zerocheck 24.3%, pcs 19.0%, commit 10.3%. What is left of commit is mostly the encode, which is not worth taking. Of the GKR share, the GPU itself accounts for 1.2 seconds and uploading for 5.5, so the copy still costs more than the arithmetic — the difference now is that it buys a phase worth having.
+
+## 12. Where it stands, measured again
+
+The acceptance study re-run after the commitment moved to the GPU, same three axes and the same paired method, with both switches set together so the CPU arm really is one:
+
+| axis | setting | CPU | Metal | |
+|---|---|---|---|---|
+| shard size | 1 MiB … 16 MiB, fib n=2M | 65.6 → 64.8 s | 35.9 → 35.3 s | 1.825 → 1.833 |
+| work | fib n=250k … 2M, 4 MiB shards | 17.4 → 67.5 s | 11.5 → 36.6 s | 1.509 → 1.843 |
+| guest | mem n=400k / bits n=1M | 38.8 / 55.8 s | 25.8 / 32.7 s | 1.507 / 1.707 |
+
+The shape of the law is unchanged and the level has moved: flat in shard size across a sixteen-fold range, climbing with total work, and every point between **1.40x and 1.93x** where the same study gave 1.07x to 1.26x before.
+
+Building the circuit layers went to the GPU as well, taking that span from 11.0 to 9.0 thread-seconds and the proof from a mean of 35.61 to 34.68 seconds. That is much less than the thread-seconds suggest, and the reason is worth writing down: at 86 thread-seconds over a 35 second wall the proof averages 2.4 of its 4 threads, so work removed from a stretch that is already parallel does not shorten the critical path. Thread-seconds are the right unit for deciding *what* to port and the wrong unit for predicting what it will be worth.
+
+**What is left, and what it would cost.**
+
+- **Zerocheck, 21.9 thread-seconds (25.6%)** — now the largest single phase. Still needs the reduction's per-chip kernels generated offline, for the reasons under section 8. The transpiler spike is done; the build step around it is not.
+- **The PCS opening, 18.4 thread-seconds (21.4%)** — and this one carries a decision. `prove_trusted_evaluations` takes `Rounds<Evaluations<GC::EF>>`, which is `CpuBackend`, and `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself, so the jagged sumcheck's data is CPU-backed by construction rather than by choice. Reaching it means forking `slop-jagged`, which gives up exactly the property that made the commit half attractive: that it ships against unmodified upstream and survives version bumps.
+- **The encode, about 5 thread-seconds** — measured at 1.02x against a packed CPU. Not worth taking, and the concrete `Arc<Radix2DitParallel>` in the encoder means it could not be taken forklessly anyway.
+- **The uploads, 6.7 thread-seconds for 220 GB** — still larger than everything the GPU computes. The round reduction and the fold read the same MLEs one after the other and upload them twice; a cache keyed on the data pointer, held across the pair, would halve it.
