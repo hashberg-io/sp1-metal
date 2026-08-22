@@ -21,27 +21,23 @@ use super::{InteractionLayer, LogUpGkrCpuLayer};
 ///
 /// This trait is that boundary, and it is the only thing a backend has to
 /// supply to move the phase off the CPU.
-pub trait LogupRoundOps: Sized + Send + Sync + 'static {
+/// Parameterised by the field pair rather than generic in its method, so an
+/// implementation can be specific to one field and still satisfy the bound
+/// wherever that field is in use.
+pub trait LogupRoundOps<F: Field, K: ExtensionField<F>>: Sized + Send + Sync + 'static {
     /// The three sums a round message is built from: the batched numerator and
     /// denominator evaluation at zero, the same at the pair-sum point, and the
     /// sum of the eq polynomial, which corrects for padded rows.
-    fn round_evals<F, K>(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K)
-    where
-        F: Field,
-        K: ExtensionField<F>;
+    fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K);
 }
 
 /// The reduction as the CPU prover performs it, over rayon.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CpuRoundOps;
 
-impl LogupRoundOps for CpuRoundOps {
+impl<F: Field, K: ExtensionField<F>> LogupRoundOps<F, K> for CpuRoundOps {
     #[allow(clippy::too_many_lines)]
-    fn round_evals<F, K>(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K)
-    where
-        F: Field,
-        K: ExtensionField<F>,
-    {
+    fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K) {
         let (eval_zero, eval_half, eq_sum) = match &poly.layer {
             PolynomialLayer::InteractionLayer(layer) => {
                 let numerator_0 = layer.numerator_0.clone();
@@ -357,7 +353,7 @@ pub enum PolynomialLayer<F, EF> {
     InteractionLayer(InteractionLayer<F, EF>),
 }
 
-impl<F: Field, EF: ExtensionField<F>, B: LogupRoundOps> SumcheckPolyBase
+impl<F: Field, EF: ExtensionField<F>, B: LogupRoundOps<F, EF>> SumcheckPolyBase
     for LogupRoundPolynomial<F, EF, B>
 {
     fn num_variables(&self) -> u32 {
@@ -365,7 +361,7 @@ impl<F: Field, EF: ExtensionField<F>, B: LogupRoundOps> SumcheckPolyBase
     }
 }
 
-impl<K: Field, B: LogupRoundOps> ComponentPoly<K> for LogupRoundPolynomial<K, K, B> {
+impl<K: Field, B: LogupRoundOps<K, K>> ComponentPoly<K> for LogupRoundPolynomial<K, K, B> {
     fn get_component_poly_evals(&self) -> Vec<K> {
         match &self.layer {
             PolynomialLayer::InteractionLayer(layer) => {
@@ -381,7 +377,7 @@ impl<K: Field, B: LogupRoundOps> ComponentPoly<K> for LogupRoundPolynomial<K, K,
     }
 }
 
-impl<K: Field, B: LogupRoundOps> SumcheckPoly<K> for LogupRoundPolynomial<K, K, B> {
+impl<K: Field, B: LogupRoundOps<K, K>> SumcheckPoly<K> for LogupRoundPolynomial<K, K, B> {
     fn fix_last_variable(self, alpha: K) -> Self {
         self.fix_t_variables(alpha, 1)
     }
@@ -391,8 +387,8 @@ impl<K: Field, B: LogupRoundOps> SumcheckPoly<K> for LogupRoundPolynomial<K, K, 
     }
 }
 
-impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps> SumcheckPolyFirstRound<K>
-    for LogupRoundPolynomial<F, K, B>
+impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps<F, K> + LogupRoundOps<K, K>>
+    SumcheckPolyFirstRound<K> for LogupRoundPolynomial<F, K, B>
 {
     type NextRoundPoly = LogupRoundPolynomial<K, K, B>;
     #[allow(clippy::too_many_lines)]

@@ -23,7 +23,12 @@ pub struct GkrProverImpl<GC: IopCtx, SC: ShardContext<GC>, B = crate::CpuRoundOp
 }
 
 /// TODO
-impl<GC: IopCtx, SC: ShardContext<GC>, B: crate::LogupRoundOps> GkrProverImpl<GC, SC, B> {
+impl<
+        GC: IopCtx,
+        SC: ShardContext<GC>,
+        B: crate::LogupRoundOps<GC::F, GC::EF> + crate::LogupRoundOps<GC::EF, GC::EF>,
+    > GkrProverImpl<GC, SC, B>
+{
     /// TODO
     #[must_use]
     pub fn new(trace_generator: LogupGkrCpuTraceGenerator<GC::F, GC::EF, SC::Air>) -> Self {

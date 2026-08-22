@@ -154,7 +154,7 @@ pub(crate) fn prove_gkr_round<
     F: Field,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
-    B: crate::LogupRoundOps,
+    B: crate::LogupRoundOps<F, EF> + crate::LogupRoundOps<EF, EF>,
 >(
     circuit: GkrCircuitLayer<F, EF>,
     eval_point: &slop_multilinear::Point<EF>,
