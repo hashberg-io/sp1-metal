@@ -1,0 +1,13 @@
+[package]
+name = "sp1-metal-kernelbench"
+version.workspace = true
+edition.workspace = true
+description = "Measures the fork's Metal kernels against this machine's own memory and arithmetic ceilings."
+publish = false
+
+# Depends on nothing but `metal`, so it builds in seconds — unlike the fork it
+# measures, which takes eight minutes. It reads the shaders from disk at run
+# time, so editing a kernel needs no rebuild at all.
+
+[dependencies]
+metal.workspace = true
