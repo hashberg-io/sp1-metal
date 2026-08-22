@@ -138,12 +138,18 @@ The lesson is the one the challenger spike ended on, now at prover scale: the ar
 The pieces are in place and correct: the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including layers whose chips straddle the threshold.
 In isolation the round is **9.06x**.
 
-**In a real proof the process was being killed, and it took far too long to find out.**
-After the five fixes above a fibonacci core proof still did not finish where the CPU path takes 18.2 s, and the shape of the failure — no output, no completion — read as a stall or a slowdown for several rounds of investigation. It was neither. The exit status was **137**: SIGKILL.
+### A measurement that was not measuring the prover
 
-The cause is the one every Rust program talking to an Objective-C API has to answer for. **Every object Metal returns is autoreleased**, and a Rust program has no autorelease pool of its own, so command buffers, encoders and buffer objects accumulate for the life of the thread. A benchmark of a few hundred dispatches never notices; a proof makes millions and gets killed. Every entry point into Metal now runs inside `autoreleasepool`.
+Several rounds of investigation here chased a phantom, and the record keeps them because the mistake is an easy one to repeat.
 
-The lesson is about diagnosis rather than Metal. Four rounds were spent optimising something that was not slow, because "produces no output and does not finish" was read as "slow" without checking the one thing that distinguishes them. `echo $?` would have said SIGKILL at the first attempt.
+The integration appeared to hang, then to be merely slow, then to be killed. The exit status was **137** — SIGKILL — and the eventual cause was not the prover at all: the runs were invoking a copy of the binary in `/tmp`, made with `cp` from `target/release` while a `cargo build` was concurrently rewriting that file. On Apple Silicon a binary whose ad-hoc signature does not match its contents is killed by the kernel at exec, before `main`. The copy would not even print a usage error; the same binary run from `target/release` works.
+
+So every "the Metal prover is slow" result from that stretch measured a corrupted file. Two lessons, in order of how much time each would have saved:
+
+- **Check the exit status before theorising about performance.** 137 is not slow, and it was there from the first attempt.
+- **Never benchmark a copy.** Run the artefact where the build system put it, or the thing under test is not the thing you built.
+
+Real defects were found and fixed along the way and all of them stand — the fixes below are each backed by an isolated measurement, not by the integration runs. But no conclusion about integrated performance should be drawn from that stretch, and none is drawn here.
 
 What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
 
