@@ -140,3 +140,22 @@ mod tests {
         assert!(v.iter().enumerate().all(|(i, &x)| x == i as u32 + 1));
     }
 }
+
+/// This thread's command queue.
+///
+/// A `MTLCommandQueue` runs the command buffers committed to it in the order
+/// they were committed. One queue shared by four proving threads therefore
+/// makes them wait for each other even where the device could have run their
+/// work side by side, which is most of the time: the shards are independent.
+///
+/// One queue per thread rather than one per module, because two dispatches from
+/// the same thread are ordered by that thread anyway, and a queue costs a small
+/// amount of driver state.
+#[must_use]
+pub fn thread_queue(device: &metal::Device) -> metal::CommandQueue {
+    thread_local! {
+        static Q: std::cell::RefCell<Option<metal::CommandQueue>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    Q.with(|q| q.borrow_mut().get_or_insert_with(|| device.new_command_queue()).clone())
+}

@@ -99,11 +99,17 @@ kernel void jagged_fold_ext(device const uint4* in [[buffer(0)]],
 
 struct Context {
     device: Device,
-    queue: CommandQueue,
     round_base: ComputePipelineState,
     round_ext: ComputePipelineState,
     fold_base: ComputePipelineState,
     fold_ext: ComputePipelineState,
+}
+
+impl Context {
+    /// This thread's command queue; see [`sp1_metal_probes::nocopy::thread_queue`].
+    fn queue(&self) -> CommandQueue {
+        sp1_metal_probes::nocopy::thread_queue(&self.device)
+    }
 }
 
 fn context() -> Option<&'static Context> {
@@ -126,7 +132,6 @@ fn context() -> Option<&'static Context> {
             round_ext: pso("hadamard_round_ext")?,
             fold_base: pso("jagged_fold_base")?,
             fold_ext: pso("jagged_fold_ext")?,
-            queue: device.new_command_queue(),
             device,
         })
     })
@@ -192,7 +197,8 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
     let partials = ctx.device.new_buffer(groups * 3 * 16, MTLResourceOptions::StorageModeShared);
     let n32 = pairs as u32;
     metal::objc::rc::autoreleasepool(|| {
-        let cb = ctx.queue.new_command_buffer();
+        let queue = ctx.queue();
+        let cb = queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
         enc.set_buffer(0, Some(&b_base), 0);
@@ -310,7 +316,8 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
     let n32 = out_len as u32;
     metal::objc::rc::autoreleasepool(|| {
-        let cb = ctx.queue.new_command_buffer();
+        let queue = ctx.queue();
+        let cb = queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
         enc.set_buffer(0, Some(&b_in), 0);

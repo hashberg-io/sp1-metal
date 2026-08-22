@@ -114,7 +114,6 @@ fn shader_source() -> String {
 
 struct Context {
     device: Device,
-    queue: CommandQueue,
     ext: ComputePipelineState,
     base: ComputePipelineState,
     fold_ext: ComputePipelineState,
@@ -145,10 +144,8 @@ impl Context {
         let fold_base = pso("fold_padded_base");
         let transition_ext = pso("gkr_transition_ext");
         let transition_base = pso("gkr_transition_base");
-        let queue = device.new_command_queue();
         Self {
             device,
-            queue,
             ext,
             base,
             fold_ext,
@@ -176,6 +173,11 @@ impl Context {
         if pool.len() < 32 {
             pool.push(buffer);
         }
+    }
+
+    /// This thread's command queue; see [`sp1_metal_probes::nocopy::thread_queue`].
+    fn queue(&self) -> CommandQueue {
+        sp1_metal_probes::nocopy::thread_queue(&self.device)
     }
 }
 
@@ -596,6 +598,7 @@ where
     STATS.see_thread();
     arena_reset();
     let ctx = context();
+    let queue = ctx.queue();
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
     let mut totals = (EF::zero(), EF::zero(), EF::zero());
@@ -677,7 +680,7 @@ where
             Params { n_pairs: n_pairs as u32, n_full_pairs: n_full as u32, width: width as u32 };
 
         let encode_start = std::time::Instant::now();
-        let cb = *command_buffer.get_or_insert_with(|| ctx.queue.new_command_buffer());
+        let cb = *command_buffer.get_or_insert_with(|| queue.new_command_buffer());
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
         for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1].into_iter().enumerate() {
@@ -795,7 +798,8 @@ where
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
         pooled(|| {
         let ctx = context();
-        let cb = ctx.queue.new_command_buffer();
+        let queue = ctx.queue();
+        let cb = queue.new_command_buffer();
         let num_pso = if is::<F, BaseField>() { &ctx.fold_base } else { &ctx.fold_ext };
         let stage_num = |ms: &[PaddedMle<F>]| -> Vec<Fold> {
             ms.iter()
@@ -976,7 +980,8 @@ where
     let params =
         FoldParams { out_rows: out_rows as u32, rows: rows as u32, width: width as u32 };
 
-    let cb = ctx.queue.new_command_buffer();
+    let queue = ctx.queue();
+    let cb = queue.new_command_buffer();
     encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
     run_and_record(cb);
 
@@ -1331,7 +1336,8 @@ where
             rows: rows as u32,
             width: width as u32,
         };
-        let cb = ctx.queue.new_command_buffer();
+        let queue = ctx.queue();
+        let cb = queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(if base {
             &ctx.transition_base

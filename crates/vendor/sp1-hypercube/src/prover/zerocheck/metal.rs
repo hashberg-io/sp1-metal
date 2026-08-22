@@ -403,11 +403,17 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
 
 struct Context {
     device: Device,
-    queue: CommandQueue,
     /// One pipeline per chip and round kind, built the first time it is asked
     /// for. `None` records a chip whose kernel would not build, so it is not
     /// attempted again.
     pipelines: Mutex<HashMap<String, Option<ComputePipelineState>>>,
+}
+
+impl Context {
+    /// This thread's command queue; see [`sp1_metal_probes::nocopy::thread_queue`].
+    fn queue(&self) -> CommandQueue {
+        sp1_metal_probes::nocopy::thread_queue(&self.device)
+    }
 }
 
 fn context() -> &'static Context {
@@ -415,7 +421,6 @@ fn context() -> &'static Context {
     CTX.get_or_init(|| {
         let device = Device::system_default().expect("no Metal device found");
         Context {
-            queue: device.new_command_queue(),
             device,
             pipelines: Mutex::new(HashMap::new()),
         }
@@ -552,7 +557,8 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
         prep_w: prep_w as u32,
     };
     metal::objc::rc::autoreleasepool(|| {
-        let cb = ctx.queue.new_command_buffer();
+        let queue = ctx.queue();
+        let cb = queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(&pso);
         for (i, b) in [&b_main, &b_prep, &b_pv, &b_eq, &b_ap, &b_gp].into_iter().enumerate() {

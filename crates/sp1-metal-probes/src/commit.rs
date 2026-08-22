@@ -31,7 +31,6 @@ const THREADS: u64 = 256;
 
 struct Context {
     device: Device,
-    queue: CommandQueue,
     gather: ComputePipelineState,
     leaves: ComputePipelineState,
     compress: ComputePipelineState,
@@ -40,6 +39,13 @@ struct Context {
 
 /// One device, one queue, built once. `MTLCommandQueue` is thread-safe, which
 /// matters because shards commit concurrently.
+impl Context {
+    /// This thread's command queue; see [`crate::nocopy::thread_queue`].
+    fn queue(&self) -> CommandQueue {
+        crate::nocopy::thread_queue(&self.device)
+    }
+}
+
 fn context() -> &'static Context {
     static CTX: OnceLock<Context> = OnceLock::new();
     CTX.get_or_init(|| {
@@ -62,7 +68,6 @@ fn context() -> &'static Context {
             leaves: pso("merkle_leaves"),
             compress: pso("merkle_compress"),
             round_constants,
-            queue: device.new_command_queue(),
             device,
         }
     })
@@ -189,7 +194,8 @@ pub fn digest_layers(tensors: &[(&[u32], usize)], rows: usize) -> Option<Vec<Vec
         ))
     };
 
-    let cb = ctx.queue.new_command_buffer();
+    let queue = ctx.queue();
+    let cb = queue.new_command_buffer();
     if let Some(dst) = &gathered {
         let mut col = 0usize;
         for ((_, width), src) in tensors.iter().zip(uploaded.iter()) {
