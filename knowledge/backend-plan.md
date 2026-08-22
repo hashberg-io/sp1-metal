@@ -4,8 +4,10 @@
 That prediction measured the GPU against a *packed* CPU baseline, because that is the fair comparison between two pieces of silicon.
 [D7](desiderata.md) does not ask for the fair comparison. It asks for 5× "the same machine's CPU prover", and the prover on this machine is scalar.
 
-Against the prover that actually ships, a complete port predicts **6.5×**, and every corner of the sensitivity band stays above 5.
+Against the prover that actually ships, a complete port predicts **10.7×**, and every corner of the sensitivity band stays above 6.
 This document is the plan if that is the bar you want to clear: what the number rests on, where the code seam is, what is not yet known, and in what order to find out.
+
+The three unknowns below have since been measured; [spikes.md](spikes.md) has the results and the go/no-go, and the numbers here are the refit ones.
 
 ## Which baseline
 
@@ -17,7 +19,7 @@ The two numbers answer different questions and both are right.
 | zerocheck | 4.48× | 12.3× |
 | PCS opening | 2.86× | 8.6× |
 | commit | 2.96× | 14.2× |
-| **complete port** | **3.6×** | **8.2×** |
+| **complete port** | **3.9×** | **10.7×** |
 
 The right-hand column is the left multiplied by the packing headroom the shipped prover leaves unclaimed: 3.26× on the GKR round and 3.0× on the folds, both measured in [measurements.md](measurements.md), and 2.75× assumed for zerocheck by analogy with the folds, which is the one factor here with no measurement behind it.
 The commit row is measured on both sides rather than derived — see [spikes.md](spikes.md) — and its two columns differ by 4.8× because slop's Reed-Solomon encoder is that much slower than the same transform written packed.
@@ -127,6 +129,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 4. **Refit the model and take the go/no-go.**
    Three measured numbers replace three brackets in `tools/fit_model.py`.
    *Machine: no.* Seconds of Python against the phase profile already on disk.
+   **Done**: 10.7× against the shipped prover, 3.9× against a packed one. Go against D7 as written, no against the fairer bar. See [spikes.md](spikes.md).
 5. **`MetalBackend`.**
    Allocator over page-aligned no-copy buffers, `DeviceMemory`, `GlobalBackend`.
    The device and pipeline plumbing already exists in `crates/sp1-metal-probes/src/gpu.rs`.

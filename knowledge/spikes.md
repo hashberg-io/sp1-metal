@@ -123,3 +123,31 @@ The synthetic kernel reached 329 of 332 G multiplies per second, essentially the
 Discounting it moves a complete port from 8.2x to **7.8x** against the shipped prover and from 3.6x to 3.4x against a packed CPU — a small change, because zerocheck is only 15% of the proof.
 This is an upper bound on the discount rather than a correction: the CPU side has not been measured on real chips either, and SP1's CPU zerocheck runs a compiled `eval` per row whose overheads the synthetic tiled baseline also does not have.
 Closing that gap needs a real-chip CPU zerocheck, which is backend work rather than spike work.
+
+## 4. The refit, and the decision
+
+The three brackets the plan could not price are now measurements, so the model runs on measured factors rather than assumptions.
+`tools/fit_model.py` over the profiled proof, with `results/speedups-measured-packed.json` and `results/speedups-measured-shipped.json`:
+
+| | serial | pipelined |
+|---|---|---|
+| against a packed CPU prover | 3.59x | **3.88x** |
+| against the CPU prover as it ships | 8.76x | **10.69x** |
+
+The factors behind them, all measured on this machine except where noted:
+
+| phase | share | vs packed CPU | vs shipped CPU | source |
+|---|---|---|---|---|
+| logup GKR | 46.8% | 6.40x | 20.9x | measured both sides |
+| PCS opening | 19.0% | 2.86x | 8.6x | extension fold measured; shipped column scaled by the measured fold packing headroom |
+| zerocheck | 15.0% | 2.93x | 8.05x | synthetic kernel measured, discounted 1.5x to what real chips reach (spike 3) |
+| commit | 13.7% | 2.96x | 14.2x | encode and hash both measured (spike 2) |
+| recursion | 2.2% | 2.54x | 2.54x | recursion layers are shard proofs, so they inherit the same mix |
+| everything else | 3.3% | 1.0x | 1.0x | host-resident |
+
+**The decision is to go, against D7 as written, and not to go against the fairer bar.**
+D7 asks for 5x the same machine's CPU prover, and that prover is scalar: the complete port clears it with a margin of about two, and every sensitivity in [backend-plan.md](backend-plan.md) stays above 6x.
+Against a CPU prover that used the vector units this machine has, the same port predicts 3.9x and does not clear it, which is the answer [verdict.md](verdict.md) gave and still gives.
+
+Both remain true, and which one matters is a judgement about what the prover is for rather than a measurement.
+The bet is unchanged and is the one thing to keep watching: roughly half of the shipped-baseline figure is CPU work left undone, and it would evaporate the week upstream packs the GKR round or drops the two bit-reversals from its encoder.
