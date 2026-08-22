@@ -37,7 +37,7 @@ mprotect = []
 test-proof = []
 # Runs the logup GKR round on the GPU. Off by default: without it the crate
 # behaves exactly as upstream does.
-metal = ["dep:metal", "dep:sp1-metal-probes"]
+metal = ["dep:metal", "dep:sp1-metal-probes", "slop-jagged/metal"]
 
 [dependencies.metal]
 version = "0.29"

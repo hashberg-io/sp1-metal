@@ -317,17 +317,20 @@ Every point sits between **1.51x and 2.29x**, where the same study gave 1.07x to
 
 **What remains, in one place.** Of 71 thread-seconds over a 27 second wall: GKR 40.9%, the PCS opening 25.6%, zerocheck 15.2%, commit 12.6%. The opening is the largest untouched thing and the only one that cannot be reached the way everything else here was — `prove_trusted_evaluations` takes `Rounds<Evaluations<GC::EF>>`, which is `CpuBackend`, and `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself, so its data is CPU-backed by construction rather than by choice. Reaching it means forking `slop-jagged`, and that forfeits the property that made the commitment worth doing this way: it ships against unmodified upstream and survives a version bump.
 
-## 15. The PCS opening, and why it stays on the CPU
+## 15. The PCS opening, and a wrong conclusion corrected
 
-Step 6's remaining half was tried rather than deferred, and the answer is that it is not worth having.
+The first attempt at this phase came out *slower* than the CPU, and the conclusion drawn from it — that the work is memory-bound and so cannot win on unified memory — was wrong. It is worth recording both, because the wrong version is the more tempting one.
 
-`slop-jagged` was vendored, its round given a Metal path, and the result measured. The jagged sumcheck's round is three reductions over two arrays and a fold of each, so the kernels were the ones already written. The reduction fired on exactly the shape expected — 8,388,608 elements per array, halving each round — and moved the phase not at all. Measured over alternating runs the GPU path came out at 27.60 s against 27.24 s for the CPU one: **slower**. The vendoring was reverted.
+**What the first attempt did.** `slop-jagged` was vendored and its round's three reductions given a kernel. The reductions are cheap; the phase did not move; alternating runs gave 27.60 s against 27.44 s, which is noise. The reasoning offered for that was that the fold beside it is one extension multiply per sixteen bytes written, hence memory-bound, hence hopeless.
 
-**The reason is a property of the work, not of the port.** The fold is `out = x + alpha * (y - x)`: one extension multiply per sixteen bytes written. That is memory-bound, and on unified memory a memory-bound pass over CPU-resident data cannot win, because copying it across costs what the CPU's own pass costs. It is the same finding the Reed-Solomon encode gave at 1.02x against a packed CPU, and the same reason the GKR fold measures 3.7x while the reduction beside it measures 23x.
+**Why that was wrong.** The GKR fold is exactly as memory-bound and measures 3.7x. The difference is not the arithmetic intensity but whether anything is copied: the GKR fold borrows its input where it lies and writes through a buffer that borrows the pages of the `Vec` being filled, so the GPU's bandwidth is applied to memory the CPU already owns. The first jagged attempt uploaded both arrays through `newBufferWithBytes` every round — the cold-page path measured at 21.7 GB/s — and never ported the fold at all, which is where the time was.
 
-So the rule this backend has arrived at, which holds across every phase measured here:
+**What it does now.** Both halves run on the GPU with nothing copied in either direction: inputs are taken as they lie when page-aligned, and the fold writes straight into the allocation that will back the next round's MLE. Measured over three alternating pairs: **24.53 s against 27.29 s**, consistently, and the proof verifies.
 
-- **Compute-bound work wins large.** Hashing a Merkle tree (152x in isolation), evaluating hundreds of constraints per row (zerocheck 21.9 to 10.7 thread-seconds), the logup round's field arithmetic (23x).
-- **Memory-bound work does not win at all.** Reed-Solomon encode (1.02x), the jagged fold (below 1x), and the folds generally.
+So the rule is not "memory-bound work cannot win" but something narrower and more useful:
 
-What remains of the opening is the same shape: `Dense PCS evaluation proof` is BaseFold's FRI folding, which is another pass over memory. On this machine, with this data placement, there is nothing there. Reaching it would need the data to *stay* on the device across the whole protocol, which is a different design from the one this backend has — and the seam for it does not exist upstream, since `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself.
+- **Compute-bound work wins large however it is fed.** Merkle hashing (152x in isolation), constraint evaluation (zerocheck 21.9 to 10.7 thread-seconds), the logup round's arithmetic (23x).
+- **Memory-bound work wins only if nothing is copied.** The GKR fold at 3.7x and the jagged fold at 10% of a whole proof do it with no-copy buffers at both ends; the same fold uploaded conventionally loses to the CPU outright. This is the single most load-bearing implementation detail in the backend.
+- **And some of it is not worth taking either way**: the Reed-Solomon encode measures 1.02x against a packed CPU, because the CPU is already at memory speed there and there is no arithmetic to win back.
+
+The paired figure is now **63.07 s against 24.53 s, 2.57x.**
