@@ -176,6 +176,8 @@ The gain grows with the workload, which is the shape to expect and worth more th
 
 Both runs shared the machine with an unrelated build, so the absolute times are not clean; they were taken back to back under the same conditions, so the ratio is.
 
+Repeating the larger measurement with zerocheck's column fold also on Metal gives 53.10 s against 64.23 s — **the same 1.21x**. The fold is correct and costs nothing, but it buys nothing measurable either while zerocheck's *reduction* is still on the CPU: the phase is 15% of the proof and the fold is a fraction of that. It is kept because it is right and because it stops being idle work the moment the reduction moves, not because it showed a gain.
+
 It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
 That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding. At a threshold of 4,194,304 entries, where no layer in this workload reaches the GPU, the proof completes in 15.78 s; lower it and the stall returns.
@@ -199,7 +201,9 @@ Two things make that a build step rather than a runtime one:
 - **The transpiler cannot live in the fork.** It needs `sp1-core-machine` to enumerate chips and read their symbolic constraints, and `sp1-core-machine` depends on `sp1-hypercube`. Putting it inside would close a dependency cycle. The kernels have to be generated into a file the fork includes.
 - **Compile time forces it anyway.** The spike measured eight minutes for the largest chip's kernel and 102 MB of generated Metal across all 119. That cannot happen at prover startup; it wants a Metal binary archive built ahead of time.
 
-So step 8 is: generate three-point constraint kernels offline for the chips a workload uses, compile them into an archive, add the `ZerocheckOps` seam, and parity-check against `zerocheck_sum_as_poly_in_last_variable`. Each piece is understood; together they are days, not hours, and none of it is started.
+**The fold half is done.** `zerocheck_fix_last_variable` is `PaddedMle::fix_last_variable` on the main and preprocessed columns and refers to no AIR, so the GKR round's kernels serve it directly, under the same `metal` feature and the same size threshold. It is measured at no gain and no cost on the workloads available here, for the reason given under the end-to-end numbers.
+
+So what remains of step 8 is the reduction: generate three-point constraint kernels offline for the chips a workload uses, compile them into an archive, add the `ZerocheckOps` seam, and parity-check against `zerocheck_sum_as_poly_in_last_variable`. Each piece is understood; together they are days, not hours, and none of that part is started.
 
 ## 9. Acceptance
 
