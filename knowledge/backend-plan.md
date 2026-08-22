@@ -8,6 +8,7 @@ Against the prover that actually ships, a complete port predicts **10.7×**, and
 This document is the plan if that is the bar you want to clear: what the number rests on, where the code seam is, what is not yet known, and in what order to find out.
 
 The three unknowns below have since been measured; [spikes.md](spikes.md) has the results and the go/no-go, and the numbers here are the refit ones.
+Steps 5 through 7 of the order of work are done, and [backend.md](backend.md) records what building them found — including a stall that took seven defects and one retracted measurement to clear.
 
 ## Which baseline
 
@@ -137,9 +138,11 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 6. **PCS opening and commit**, through the `C: MultilinearPcsProver` type parameter.
    Ships against unmodified upstream, which makes it the piece that survives version bumps.
    *Machine: yes, moderate.* The first step that builds against the full sp1-hypercube dependency tree, and it needs integration proofs rather than parity checks alone.
+   **Half done.** The Reed-Solomon encode and the Merkle tree both reproduce slop exactly, and the three sumcheck backend traits are implemented so slop's driver runs on a Metal-backed MLE. The opening protocol — jagged sumcheck, stacking, BaseFold rounds and query openings — is not built.
 7. **Vendor `sp1-hypercube`**, factor the GKR prover behind a trait mirroring the sumcheck backend pattern, and implement Metal GKR.
    The largest phase and the largest diff.
    *Machine: yes.* Heavy repeated compiles of a vendored fork, plus end-to-end shard proofs to validate each layer.
+   **Done.** The fork is in `crates/vendor`, the seam is `LogupRoundOps`, and a real proof runs its GKR rounds on Metal and verifies. 9.06× on a shard-sized layer in isolation. See [backend.md](backend.md).
 8. **Zerocheck.**
    A device polynomial type implementing the three sumcheck backend traits, plus the transpiler extended across all thirty-odd chips.
    *Machine: yes.* Parity runs per chip, individually cheap and collectively a long loop.
