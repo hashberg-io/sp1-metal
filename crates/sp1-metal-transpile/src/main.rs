@@ -458,6 +458,11 @@ fn measure(
     })
 }
 
+thread_local! {
+    /// Time spent in the Metal compiler for the chip being checked.
+    static COMPILE_SECONDS: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
 /// A field element as the Montgomery word the kernels read.
 fn monty4(x: EF) -> [u32; 4] {
     let b = x.as_base_slice();
@@ -520,9 +525,13 @@ fn parity(
     let groups = (n as u64).div_ceil(threads);
     let mut got = EF::zero();
     for part in parts {
+        // Timed, because compiling is what decides whether these kernels can be
+        // built when the prover starts or have to be archived ahead of time.
+        let t0 = std::time::Instant::now();
         let library = device
             .new_library_with_source(&part.source, &metal::CompileOptions::new())
             .map_err(|e| format!("compile: {e}"))?;
+        COMPILE_SECONDS.with(|c| c.set(c.get() + t0.elapsed().as_secs_f64()));
         let f = library.get_function("zc_chip", None).map_err(|e| format!("{e}"))?;
         let pso = device
             .new_compute_pipeline_state_with_function(&f)
@@ -582,6 +591,7 @@ fn main() {
     let mut stats_only = false;
     let mut do_parity = false;
     let mut ext_columns = false;
+    let mut max_nodes = usize::MAX;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -590,6 +600,12 @@ fn main() {
             // Extension-valued columns, as every zerocheck round after the
             // first hands the AIR.
             "--ext" => ext_columns = true,
+            // Skip the chips whose constraint DAG is larger than this. The
+            // precompiles are two orders of magnitude bigger than the core
+            // chips, and a workload that never calls one never pays for it.
+            "--max-nodes" => {
+                max_nodes = args.next().expect("--max-nodes needs a value").parse().unwrap()
+            }
             "--parity" => {
                 do_parity = true;
                 ext_columns = true;
@@ -624,6 +640,9 @@ fn main() {
             .enumerate()
             .map(|(i, c)| transpile(&name, c, i * size, main_width, prep_width, ext_columns))
             .collect();
+        if parts.iter().map(|p| p.nodes).sum::<usize>() > max_nodes {
+            continue;
+        }
         let r = &parts[0];
         if stats_only {
             let nodes: usize = parts.iter().map(|p| p.nodes).sum();
@@ -644,6 +663,7 @@ fn main() {
         let queue = device.new_command_queue();
         if do_parity {
             let rows = 256;
+            COMPILE_SECONDS.with(|c| c.set(0.0));
             let verdict = if parts.iter().any(|p| p.reads_next_row) {
                 // The folder hands the AIR one row, so a constraint reaching for
                 // the next one could not be evaluated on the CPU side either.
@@ -662,11 +682,12 @@ fn main() {
             };
             match verdict {
                 Ok(()) => println!(
-                    "{:34} {:5} constr {:6} nodes {:3} kernels  MATCHES the folder",
+                    "{:34} {:5} constr {:6} nodes {:3} kernels {:8.1}s compile  MATCHES",
                     name,
                     constraints.len(),
                     parts.iter().map(|p| p.nodes).sum::<usize>(),
-                    parts.len()
+                    parts.len(),
+                    COMPILE_SECONDS.with(|c| c.get()),
                 ),
                 Err(e) => println!(
                     "{:34} {:5} constr {:6} nodes {:3} kernels  DIFFERS: {e}",
