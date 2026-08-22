@@ -875,3 +875,34 @@ fn finish_all(folds: Vec<Fold>) -> Vec<PaddedMle<EF>> {
         })
         .collect()
 }
+
+
+/// Fixes any padded MLE's last variable on the GPU, for callers outside the GKR
+/// round.
+///
+/// Zerocheck folds its column MLEs with exactly this operation and no reference
+/// to the AIR, so the same kernels serve both phases. The reduction is the part
+/// of zerocheck that needs per-chip generated code; the fold does not.
+pub fn fix_padded_mle<T, E>(mle: &PaddedMle<T>, alpha: E) -> PaddedMle<E>
+where
+    T: slop_algebra::Field,
+    E: slop_algebra::ExtensionField<T>,
+{
+    if is::<E, EF>()
+        && mle.inner().as_ref().map_or(0, |i| i.guts().as_slice().len()) >= min_entries_for_gpu()
+    {
+        // SAFETY: the type ids match, so these are the same types.
+        let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
+        if is::<T, BaseField>() {
+            let m: &PaddedMle<BaseField> = unsafe { &*std::ptr::from_ref(mle).cast() };
+            let out = fix_base(m, a);
+            return unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) };
+        }
+        if is::<T, EF>() {
+            let m: &PaddedMle<EF> = unsafe { &*std::ptr::from_ref(mle).cast() };
+            let out = fix_ext(m, a);
+            return unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) };
+        }
+    }
+    mle.fix_last_variable(alpha)
+}

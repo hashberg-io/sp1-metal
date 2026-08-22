@@ -4,6 +4,32 @@ use slop_algebra::{ExtensionField, Field};
 
 use super::ZeroCheckPoly;
 
+/// Where a zerocheck column fold runs.
+///
+/// This fold refers to no AIR — it is `PaddedMle::fix_last_variable` and
+/// nothing else — so unlike the reduction beside it, it needs no per-chip
+/// generated code and the GKR round's kernels serve it directly.
+#[cfg(not(feature = "metal"))]
+#[inline]
+fn fix_columns<K, EF>(mle: &slop_multilinear::PaddedMle<K>, alpha: EF) -> slop_multilinear::PaddedMle<EF>
+where
+    K: Field,
+    EF: ExtensionField<K>,
+{
+    mle.fix_last_variable(alpha)
+}
+
+/// Where a zerocheck column fold runs. See the note on the non-Metal definition.
+#[cfg(feature = "metal")]
+#[inline]
+fn fix_columns<K, EF>(mle: &slop_multilinear::PaddedMle<K>, alpha: EF) -> slop_multilinear::PaddedMle<EF>
+where
+    K: Field,
+    EF: ExtensionField<K>,
+{
+    crate::metal::fix_padded_mle(mle, alpha)
+}
+
 /// This function will set the last variable to `alpha`.
 pub fn zerocheck_fix_last_variable<
     K: Field,
@@ -15,8 +41,8 @@ pub fn zerocheck_fix_last_variable<
     alpha: EF,
 ) -> ZeroCheckPoly<EF, F, EF, A> {
     let preprocessed_columns =
-        poly.preprocessed_columns.as_ref().map(|mle| mle.fix_last_variable(alpha));
-    let main_columns = poly.main_columns.fix_last_variable(alpha);
+        poly.preprocessed_columns.as_ref().map(|mle| fix_columns(mle, alpha));
+    let main_columns = fix_columns(&poly.main_columns, alpha);
 
     if poly.main_columns.num_real_entries() == 0 {
         // If the chip is pure padding, it's contribution to sumcheck is just zero, we don't need
