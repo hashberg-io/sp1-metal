@@ -157,9 +157,9 @@ Run from `target/release`, the Metal-enabled prover **stalls**. Not slowly: it s
 
 A sample of the live process shows 36 threads — the main thread, 16 tokio workers, the rayon pool — every one of them parked for the whole sampling window, with no frame anywhere in `sp1_hypercube`, in this crate, or in Metal. Nothing is running and nothing completes. The CPU build proves and verifies the same workload in 18.2 s.
 
-Every thread parked with no panic message on stderr is the signature of a task that died where its failure was swallowed, leaving the pipeline waiting on a sender that will never send. SP1 runs its shard proving through `spawn_blocking`, where a panic becomes a `JoinError` rather than a crash. That is a hypothesis, not a finding.
+It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
-The next step is specific and small: build the host in debug with `RUST_BACKTRACE=full` and stderr unbuffered, and run the same workload. If a task is panicking, that will name the line.
+That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding: raising it until the stall disappears bounds the layer size at which the GPU path breaks.
 
 What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
 
