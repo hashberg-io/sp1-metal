@@ -142,7 +142,9 @@ In isolation the round is **9.06x**.
 After all five fixes above, a fibonacci core proof does not finish in 400 s where the CPU path takes 18.2 s.
 Each fix was a real defect with a measured cause, and each moved the number without reaching it; whatever is left has not been isolated, and it would be wrong to guess at it here.
 
-What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout. The next step is a profile of the Metal-enabled prover rather than another hypothesis: the span profiler that produced `results/profile.json` works on this build unchanged, and comparing its phase table against the CPU one would say directly which phase grew.
+What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
+
+The first attempt at the obvious next step is recorded here because its result is itself a clue and a trap. Under `RUST_LOGGER=flat RUST_LOG=debug`, the CPU build emits 211 span lines and finishes; the Metal build emits **none** in 150 s. That is consistent with a stall rather than a slowdown — but it is not proof of one, because stdout to a file is block-buffered and a process killed by `timeout` loses whatever has not filled a buffer. Distinguishing the two needs the log written unbuffered, or a sampled stack of the running process, before any conclusion is drawn from silence.
 
 ## 8 and 9: not reached
 
