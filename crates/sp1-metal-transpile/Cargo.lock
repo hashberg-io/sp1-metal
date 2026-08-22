@@ -2863,8 +2863,6 @@ dependencies = [
 [[package]]
 name = "sp1-hypercube"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aab3b0ba307c635c80725243d9a190d509ae9b4d42326de56acd4110e186671c"
 dependencies = [
  "arrayref",
  "deepsize2",

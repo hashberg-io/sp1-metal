@@ -22,3 +22,11 @@ sp1-primitives = "=6.4.0"
 
 [profile.release]
 lto = "thin"
+
+# The GKR prover cannot be reached from outside sp1-hypercube, so this
+# dependency graph resolves that crate to the fork in crates/vendor. Patching
+# rather than depending by path matters: sp1-core-machine depends on
+# sp1-hypercube too, and both must resolve to the same copy for the types to
+# unify.
+[patch.crates-io]
+sp1-hypercube = { path = "../vendor/sp1-hypercube" }
