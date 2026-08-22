@@ -16,21 +16,20 @@ The two numbers answer different questions and both are right.
 | logup GKR | 6.40× | 20.9× |
 | zerocheck | 4.48× | 12.3× |
 | PCS opening | 2.86× | 8.6× |
-| commit | 3.18× | 3.18× |
-| **complete port** | **3.7×** | **6.5×** |
+| commit | 2.96× | 14.2× |
+| **complete port** | **3.6×** | **8.2×** |
 
 The right-hand column is the left multiplied by the packing headroom the shipped prover leaves unclaimed: 3.26× on the GKR round and 3.0× on the folds, both measured in [measurements.md](measurements.md), and 2.75× assumed for zerocheck by analogy with the folds, which is the one factor here with no measurement behind it.
-Commit is the same in both columns because `p3-merkle-tree` and `p3-dft` already run packed, so there is no scalar headroom in that phase to claim.
+The commit row is measured on both sides rather than derived — see [spikes.md](spikes.md) — and its two columns differ by 4.8× because slop's Reed-Solomon encoder is that much slower than the same transform written packed.
 Phase shares are the profiled ones: GKR 46.8%, PCS 19.0%, zerocheck 15.0%, commit 13.7%, everything else 5.5%.
 
 Sensitivity, on the complete port against the shipped prover:
 
 | | |
 |---|---|
-| commit at its measured floor (1.97×) | 5.5× |
-| commit at its measured ceiling (5.13×) | 7.2× |
-| PCS at a pessimistic 3× | 5.1× |
-| zerocheck given no packing credit at all | 5.7× |
+| PCS at a pessimistic 3× | 6.2× |
+| zerocheck given no packing credit at all | 7.0× |
+| commit credited only its hardware ratio (2.96×) | 6.3× |
 | every ported phase free | 18.2× |
 
 The bar survives all of them, which is the main reason this plan is worth writing.
@@ -48,8 +47,8 @@ Compressing one phase at a time, against the shipped prover:
 |---|---|
 | GKR | 1.80× |
 | + zerocheck | 2.40× |
-| + commit | 3.10× |
-| + PCS opening | 6.46× |
+| + commit | 3.46× |
+| + PCS opening | 8.24× |
 
 Nothing before the last step clears the bar, because whatever remains unported becomes the whole cost.
 D7 is a single indivisible bet, which is also what the house rule against splitting milestones would force.
@@ -94,7 +93,7 @@ The `launch` probe already measured the size of this: folding 2²⁴ elements on
 Closing it means a Poseidon2 duplex sponge and Fiat-Shamir running on the device, so challenges never touch the host.
 This is a design constraint on the shape of every other kernel rather than an optimisation to add afterwards, which is why it goes first: retrofitting it is a rewrite.
 
-**A blocked Reed-Solomon encode.**
+**A blocked Reed-Solomon encode.** *(Answered — see [spikes.md](spikes.md): 1.72× over a packed CPU, and at the bandwidth roofline.)*
 The commit phase is 13.7% and its factor spans 1.97× to 5.13×, the widest bracket in the model, because only the DFT's butterfly stage has been measured and not a real implementation.
 One stage in isolation runs at 1.11× because both sides are moving memory; a version that holds a block in threadgroup memory across stages moves toward the 3.21× multiply roofline.
 Which of those it lands on is entirely a question of residency, and it has to match slop's bit-reversed convention to be usable.
@@ -119,6 +118,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 2. **Blocked Reed-Solomon encode spike.**
    Bit-reversed, matching slop's convention, holding a block in threadgroup memory across stages.
    *Machine: yes, GPU and CPU.* Roughly 1 GiB working sets and seconds per run, but the packed-CPU baseline is invalidated by a competing job, so this one wants the machine idle.
+   **Done**, and the bracket collapses to 1.72× against a packed CPU and 13.1× against slop's own encoder. See [spikes.md](spikes.md).
 3. **Constraint transpiler spike.**
    `SymbolicExpression` to MSL codegen or to a bytecode tape, tried on the two largest chips.
    *Machine: barely.* Mostly reading `sp1-core-machine` and writing codegen, ending with one GPU run to see whether register pressure or branch divergence kills the approach.

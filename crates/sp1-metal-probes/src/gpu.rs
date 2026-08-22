@@ -144,6 +144,19 @@ pub fn dispatch_1d(enc: &ComputeCommandEncoderRef, n: u64) {
     enc.dispatch_threads(MTLSize::new(n, 1, 1), MTLSize::new(tg, 1, 1));
 }
 
+/// Dispatches a grid with the column index fastest, so consecutive threads read
+/// consecutive columns of the same row.
+pub fn dispatch_2d(enc: &ComputeCommandEncoderRef, cols: u64, rows: u64) {
+    let tw = THREADGROUP_SIZE.min(cols.max(1));
+    let th = (THREADGROUP_SIZE / tw).max(1).min(rows.max(1));
+    enc.dispatch_threads(MTLSize::new(cols, rows, 1), MTLSize::new(tw, th, 1));
+}
+
+/// Dispatches `x` by `y` threadgroups of `THREADGROUP_SIZE` threads each.
+pub fn dispatch_groups_2d(enc: &ComputeCommandEncoderRef, x: u64, y: u64) {
+    enc.dispatch_thread_groups(MTLSize::new(x, y, 1), MTLSize::new(THREADGROUP_SIZE, 1, 1));
+}
+
 pub fn dispatch_groups(enc: &ComputeCommandEncoderRef, groups: u64) {
     enc.dispatch_thread_groups(
         MTLSize::new(groups, 1, 1),

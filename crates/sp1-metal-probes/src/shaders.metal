@@ -670,3 +670,105 @@ kernel void fold_ext_dev(device const uint4* in [[buffer(0)]],
                          uint gid [[thread_position_in_grid]]) {
     out[gid] = ext_add(in[2u * gid], ext_mul(beta[0], in[2u * gid + 1u]));
 }
+
+// ---------------------------------------------------------------------------
+// Step 2: the Reed-Solomon encode inside a BaseFold commitment.
+//
+// slop's encode is not a coset LDE. `Dft::dft(src, log_blowup, BitReversed, 0)`
+// zero-pads the trace to `rows << log_blowup` and takes a forward DFT of each
+// column, then bit-reverses the rows. A decimation-in-frequency transform takes
+// natural-order input to bit-reversed output directly, so matching slop's
+// convention costs no permutation at all — which is why these kernels are
+// Gentleman-Sande rather than the Cooley-Tukey shape `ntt_stage` uses.
+//
+// The trace is row-major, so a row is `cols` contiguous elements and one
+// butterfly is elementwise across the row. Threads are laid out with the column
+// fastest, which makes every access coalesced.
+//
+// The twiddle table holds w_n^j for j < n/2; stage m = 2^s reads it with stride
+// 2^(log_n - 1 - s).
+// ---------------------------------------------------------------------------
+
+struct DifParams {
+    uint log_n;
+    uint log_m;
+    uint cols;
+};
+
+// The first stage, specialised for a blowup of 2. Its partner rows are the
+// zero padding, so `u + v` is `u` and `(u - v) * w^j` is `u * w^j`: the stage
+// reads the trace once and never touches the padding.
+kernel void dif_spread(device const uint* src [[buffer(0)]],
+                       device uint* dst [[buffer(1)]],
+                       device const uint* tw [[buffer(2)]],
+                       constant DifParams& p [[buffer(3)]],
+                       uint2 gid [[thread_position_in_grid]]) {
+    uint c = gid.x;
+    uint j = gid.y;
+    uint u = src[j * p.cols + c];
+    dst[j * p.cols + c] = u;
+    dst[(j + (1u << (p.log_n - 1u))) * p.cols + c] = kb_mul(u, tw[j]);
+}
+
+// One decimation-in-frequency stage over the whole codeword.
+kernel void dif_stage(device uint* a [[buffer(0)]],
+                      device const uint* tw [[buffer(1)]],
+                      constant DifParams& p [[buffer(2)]],
+                      uint2 gid [[thread_position_in_grid]]) {
+    uint c = gid.x;
+    uint pair = gid.y;
+    uint m = 1u << p.log_m;
+    uint j = pair & (m - 1u);
+    uint base = (pair >> p.log_m) << (p.log_m + 1u);
+    uint i0 = (base + j) * p.cols + c;
+    uint i1 = i0 + m * p.cols;
+    uint u = a[i0];
+    uint v = a[i1];
+    a[i0] = kb_add(u, v);
+    a[i1] = kb_mul(kb_sub(u, v), tw[j << (p.log_n - 1u - p.log_m)]);
+}
+
+// The last six stages, run while a 64-row by 64-column tile stays in
+// threadgroup memory. Those stages pair rows less than 64 apart, so a
+// contiguous 64-row window is self-contained and the six stages cost one
+// memory pass rather than six.
+constant uint DIF_TILE_ROWS = 64;
+constant uint DIF_TILE_COLS = 64;
+constant uint DIF_TILE_STAGES = 6;
+
+kernel void dif_tail(device uint* a [[buffer(0)]],
+                     device const uint* tw [[buffer(1)]],
+                     constant DifParams& p [[buffer(2)]],
+                     uint2 tgid [[threadgroup_position_in_grid]],
+                     uint2 tid2 [[thread_position_in_threadgroup]]) {
+    threadgroup uint tile[DIF_TILE_ROWS * DIF_TILE_COLS];
+    const uint cells = DIF_TILE_ROWS * DIF_TILE_COLS;
+    uint tid = tid2.x;
+    uint row0 = tgid.y * DIF_TILE_ROWS;
+    uint col0 = tgid.x * DIF_TILE_COLS;
+    for (uint k = tid; k < cells; k += 256u) {
+        tile[k] = a[(row0 + (k / DIF_TILE_COLS)) * p.cols + col0 + (k % DIF_TILE_COLS)];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint back = 0; back < DIF_TILE_STAGES; back++) {
+        uint s = DIF_TILE_STAGES - 1u - back;
+        uint m = 1u << s;
+        uint stride = 1u << (p.log_n - 1u - s);
+        for (uint k = tid; k < cells / 2u; k += 256u) {
+            uint c = k % DIF_TILE_COLS;
+            uint pair = k / DIF_TILE_COLS;
+            uint j = pair & (m - 1u);
+            uint base = (pair >> s) << (s + 1u);
+            uint i0 = (base + j) * DIF_TILE_COLS + c;
+            uint i1 = i0 + m * DIF_TILE_COLS;
+            uint u = tile[i0];
+            uint v = tile[i1];
+            tile[i0] = kb_add(u, v);
+            tile[i1] = kb_mul(kb_sub(u, v), tw[j * stride]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint k = tid; k < cells; k += 256u) {
+        a[(row0 + (k / DIF_TILE_COLS)) * p.cols + col0 + (k % DIF_TILE_COLS)] = tile[k];
+    }
+}

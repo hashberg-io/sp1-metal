@@ -45,7 +45,7 @@ fn fold_tail_round_trip_parity() {
 }
 
 #[test]
-fn ntt_butterfly_stage_parity() {
+fn reed_solomon_encode_parity() {
     probes::encode::check(&gpu()).unwrap();
 }
 
