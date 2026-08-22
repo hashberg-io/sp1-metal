@@ -73,17 +73,17 @@ where
         use std::any::TypeId;
         type MetalEF = crate::logup_gkr::metal::EF;
         type MetalF = crate::logup_gkr::metal::BaseField;
-        // Only the rounds whose columns are extension elements are generated.
-        if TypeId::of::<K>() != TypeId::of::<MetalEF>()
-            || TypeId::of::<EF>() != TypeId::of::<MetalEF>()
+        // The first round's columns are still base-field elements; every round
+        // after it hands the AIR extension elements. Both are generated.
+        let ext_columns = TypeId::of::<K>() == TypeId::of::<MetalEF>();
+        if !ext_columns && TypeId::of::<K>() != TypeId::of::<MetalF>() {
+            return None;
+        }
+        if TypeId::of::<EF>() != TypeId::of::<MetalEF>()
             || TypeId::of::<F>() != TypeId::of::<MetalF>()
         {
             return None;
         }
-        // SAFETY: the type ids match, so these are the same types.
-        let main: &PaddedMle<MetalEF> = unsafe { &*std::ptr::from_ref(main_values).cast() };
-        let prep: Option<&PaddedMle<MetalEF>> =
-            preprocessed_values.map(|p| unsafe { &*std::ptr::from_ref(p).cast() });
         let eq: &Mle<MetalEF> = unsafe { &*std::ptr::from_ref(partial_lagrange).cast() };
         let alpha: &[MetalEF] =
             unsafe { &*(std::ptr::from_ref::<[EF]>(&self.powers_of_alpha) as *const [MetalEF]) };
@@ -103,6 +103,7 @@ where
         let out = super::metal::sum_as_poly(
             &key,
             IS_FIRST_ROUND,
+            ext_columns,
             || {
                 let cs = slop_uni_stark::get_symbolic_constraints(
                     air.as_ref(),
@@ -121,8 +122,8 @@ where
             alpha,
             gkr,
             eq,
-            prep,
-            main,
+            preprocessed_values,
+            main_values,
         )?;
         // SAFETY: EF is the extension the kernels are written for, checked above.
         Some(unsafe { std::mem::transmute_copy(&out) })

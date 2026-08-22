@@ -137,7 +137,8 @@ impl Codegen {
             format!("{table}[{table}_b0 + {index}u]")
         } else {
             let pt = self.point;
-            format!("zc_at_{pt}({table}, {table}_b0, {table}_b1, {index}u, has1)")
+            let suffix = if self.ext_columns { "" } else { "_base" };
+            format!("zc_at_{pt}{suffix}({table}, {table}_b0, {table}_b1, {index}u, has1)")
         };
         self.bind(ty, &expr)
     }
@@ -290,6 +291,7 @@ impl Codegen {
 fn transpile_round<Fx: PrimeField32>(
     constraints: &[SymbolicExpression<Fx>],
     is_first_round: bool,
+    ext_columns: bool,
 ) -> (String, usize) {
     let mut bodies = String::new();
     let mut nodes = 0usize;
@@ -300,7 +302,7 @@ fn transpile_round<Fx: PrimeField32>(
             writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
             continue;
         }
-        let mut cg = Codegen::at_point(true, prefix, point);
+        let mut cg = Codegen::at_point(ext_columns, prefix, point);
         let names: Vec<(String, Ty)> = constraints.iter().map(|c| cg.emit(c)).collect();
         nodes += cg.next;
         write!(bodies, "{}", cg.body).unwrap();
@@ -313,6 +315,9 @@ fn transpile_round<Fx: PrimeField32>(
             writeln!(bodies, "        {acc} = ext_add({acc}, {term});").unwrap();
         }
     }
+    let col = if ext_columns { "uint4" } else { "uint" };
+    let gkr_mul = if ext_columns { "ext_mul_kara" } else { "ext_mul_base" };
+    let at2 = if ext_columns { "zc_at_2" } else { "zc_at_2_base" };
     let kernel = format!(
         r#"
 struct ZcParams {{
@@ -322,8 +327,8 @@ struct ZcParams {{
     uint prep_w;
 }};
 
-kernel void zc_round(device const uint4* main [[buffer(0)]],
-                     device const uint4* prep [[buffer(1)]],
+kernel void zc_round(device const {col}* main [[buffer(0)]],
+                     device const {col}* prep [[buffer(1)]],
                      device const uint* pv [[buffer(2)]],
                      device const uint4* eq [[buffer(3)]],
                      device const uint4* ap [[buffer(4)]],
@@ -350,13 +355,13 @@ kernel void zc_round(device const uint4* main [[buffer(0)]],
         // the other two rather than computed again, as the CPU does.
         uint4 g0 = uint4(0u), g2 = uint4(0u);
         for (uint i = 0u; i < p.main_w; i++) {{
-            g0 = ext_add(g0, ext_mul_kara(gp[i], main[main_b0 + i]));
-            g2 = ext_add(g2, ext_mul_kara(gp[i], zc_at_2(main, main_b0, main_b1, i, has1)));
+            g0 = ext_add(g0, {gkr_mul}(gp[i], main[main_b0 + i]));
+            g2 = ext_add(g2, {gkr_mul}(gp[i], {at2}(main, main_b0, main_b1, i, has1)));
         }}
         for (uint i = 0u; i < p.prep_w; i++) {{
             uint4 w = gp[p.main_w + i];
-            g0 = ext_add(g0, ext_mul_kara(w, prep[prep_b0 + i]));
-            g2 = ext_add(g2, ext_mul_kara(w, zc_at_2(prep, prep_b0, prep_b1, i, has1)));
+            g0 = ext_add(g0, {gkr_mul}(w, prep[prep_b0 + i]));
+            g2 = ext_add(g2, {gkr_mul}(w, {at2}(prep, prep_b0, prep_b1, i, has1)));
         }}
         uint4 g4 = ext_sub(ext_add(g2, g2), g0);
         uint4 e = eq[q];
@@ -384,6 +389,9 @@ kernel void zc_round(device const uint4* main [[buffer(0)]],
 }}
 "#,
         bodies = bodies,
+        col = col,
+        gkr_mul = gkr_mul,
+        at2 = at2,
     );
     let source = format!("{}\nconstant uint KB_ONE = {}u;\n{}", header(), to_monty(1), kernel);
     (source, nodes)
@@ -431,6 +439,7 @@ const MAX_NODES: usize = 16_384;
 fn pipeline_for<Fx: PrimeField32>(
     key: &str,
     is_first_round: bool,
+    ext_columns: bool,
     constraints: impl FnOnce() -> Vec<SymbolicExpression<Fx>>,
 ) -> Option<ComputePipelineState> {
     let ctx = context();
@@ -439,7 +448,7 @@ fn pipeline_for<Fx: PrimeField32>(
     }
     let cs = constraints();
     let built = (!cs.is_empty())
-        .then(|| transpile_round(&cs, is_first_round))
+        .then(|| transpile_round(&cs, is_first_round, ext_columns))
         .filter(|(_, nodes)| *nodes <= MAX_NODES)
         .and_then(|(source, _)| {
             let library = ctx
@@ -477,16 +486,17 @@ struct ZcParams {
 ///
 /// Returns `None` whenever the chip is not one this can serve, leaving the
 /// caller to do what it always did.
-pub(crate) fn sum_as_poly<Fx: PrimeField32>(
+pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     key: &str,
     is_first_round: bool,
+    ext_columns: bool,
     constraints: impl FnOnce() -> Vec<SymbolicExpression<Fx>>,
     public_values: &[Fx],
     powers_of_alpha: &[EF],
     gkr_powers: &[EF],
     partial_lagrange: &Mle<EF>,
-    preprocessed: Option<&PaddedMle<EF>>,
-    main: &PaddedMle<EF>,
+    preprocessed: Option<&PaddedMle<C>>,
+    main: &PaddedMle<C>,
 ) -> Option<(EF, EF, EF)> {
     if !zerocheck_on_gpu() {
         return None;
@@ -510,7 +520,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32>(
     if eq.len() < pairs {
         return None;
     }
-    let pso = pipeline_for(key, is_first_round, constraints)?;
+    let pso = pipeline_for(key, is_first_round, ext_columns, constraints)?;
 
     let ctx = context();
     let upload = |bytes: &[u8]| {

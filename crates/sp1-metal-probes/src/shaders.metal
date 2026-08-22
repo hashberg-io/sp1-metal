@@ -218,6 +218,21 @@ inline uint4 zc_at_4(device const uint4* m, uint b0, uint b1, uint i, bool has1)
     return ext_add(a, ext_add(s2, s2));
 }
 
+// The same interpolation where the columns are still base-field elements, as
+// they are in the zerocheck's first round.
+inline uint zc_at_2_base(device const uint* m, uint b0, uint b1, uint i, bool has1) {
+    uint a = m[b0 + i];
+    uint s = has1 ? kb_sub(m[b1 + i], a) : kb_neg(a);
+    return kb_add(a, kb_add(s, s));
+}
+
+inline uint zc_at_4_base(device const uint* m, uint b0, uint b1, uint i, bool has1) {
+    uint a = m[b0 + i];
+    uint s = has1 ? kb_sub(m[b1 + i], a) : kb_neg(a);
+    uint s2 = kb_add(s, s);
+    return kb_add(a, kb_add(s2, s2));
+}
+
 // ---- end of shared field arithmetic ----
 
 // ---------------------------------------------------------------------------
