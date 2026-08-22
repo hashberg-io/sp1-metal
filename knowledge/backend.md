@@ -151,11 +151,15 @@ So every "the Metal prover is slow" result from that stretch measured a corrupte
 
 Real defects were found and fixed along the way and all of them stand — the fixes below are each backed by an isolated measurement, not by the integration runs. But no conclusion about integrated performance should be drawn from that stretch, and none is drawn here.
 
-### What the integration actually does, measured properly
+### The stall, and what it turned out to be
 
-Run from `target/release`, the Metal-enabled prover **stalls**. Not slowly: it stops.
+Run from `target/release`, the Metal-enabled prover used to **stall** — not run slowly, stop. A sample of the live process showed 36 threads, the main thread and sixteen tokio workers and the rayon pool, every one parked for the whole sampling window with no frame anywhere in `sp1_hypercube`, in this crate, or in Metal.
 
-A sample of the live process shows 36 threads — the main thread, 16 tokio workers, the rayon pool — every one of them parked for the whole sampling window, with no frame anywhere in `sp1_hypercube`, in this crate, or in Metal. Nothing is running and nothing completes. The CPU build proves and verifies the same workload in 18.2 s.
+**The cause was an index, and it is fixed.** Upstream increments `interaction_offset` outside its `if let Some(inner)`, so a chip that contributes nothing still consumes its share of `eq_interaction`. This crate's loop skipped the increment when it skipped the chip, which misaligns the eq slice for every chip after the first empty one and eventually indexes past the end. A hand-built layer never exercises it, because its chips all have rows. A real one does.
+
+With that fixed, the workload that had been hanging **proves and verifies in 15.17 s**, at the same threshold that stalled before.
+
+Finding it took reading the CPU code against the kernel line by line rather than another experiment, after the threshold bisect had narrowed the failure to the dispatching path and the harness had ruled out size as the trigger. The parked-threads signature was a panic in a `spawn_blocking` task after all — swallowed, leaving the pipeline waiting on a sender that would never send.
 
 It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
