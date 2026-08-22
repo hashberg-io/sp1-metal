@@ -335,8 +335,15 @@ where
     for (((n0, n1), d0), d1) in
         numerators.0.iter().zip(numerators.1).zip(denominators.0).zip(denominators.1)
     {
-        let Some(n0_inner) = chip_inner(n0) else { continue };
+        // Every chip advances the interaction offset, whether or not it
+        // contributes: upstream increments it outside the `if let Some(inner)`,
+        // so a chip with no rows still consumes its share of eq_interaction.
+        // Skipping the increment misaligns every chip after the first empty one
+        // and eventually indexes past the end.
         let width = n0.num_polynomials();
+        let offset = interaction_offset;
+        interaction_offset += width;
+        let Some(n0_inner) = chip_inner(n0) else { continue };
         let n1_inner = chip_inner(n1).expect("paired numerator");
         let d0_inner = chip_inner(d0).expect("paired denominator");
         let d1_inner = chip_inner(d1).expect("paired denominator");
@@ -362,7 +369,7 @@ where
                 n1_inner.guts().as_slice(),
                 d0_inner.guts().as_slice(),
                 d1_inner.guts().as_slice(),
-                &eq_interaction[interaction_offset..interaction_offset + width],
+                &eq_interaction[offset..offset + width],
                 eq_row,
                 width,
                 lambda,
@@ -370,7 +377,6 @@ where
             totals.0 += chip.0;
             totals.1 += chip.1;
             totals.2 += chip.2;
-            interaction_offset += width;
             continue;
         }
         let groups = n_pairs.div_ceil(THREADS as usize);
@@ -400,7 +406,7 @@ where
         let b_eqi = bind_small(
             enc,
             4,
-            as_words(&eq_interaction[interaction_offset..interaction_offset + width]),
+            as_words(&eq_interaction[offset..offset + width]),
         );
         let b_eqr = bind_small(enc, 5, as_words(&eq_row[..2 * n_pairs]));
         enc.set_buffer(6, Some(&partials), 0);
@@ -413,7 +419,6 @@ where
         enc.end_encoding();
         // Keep the buffers alive until the whole layer has run.
         held.push((partials, groups, vec![Some(b_n0), Some(b_n1), Some(b_d0), Some(b_d1), b_eqi, b_eqr]));
-        interaction_offset += width;
         let _ = numerator_words;
     }
     let Some(cb) = command_buffer else {
