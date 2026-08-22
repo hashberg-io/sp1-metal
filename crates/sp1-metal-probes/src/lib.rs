@@ -4,6 +4,7 @@
 //! implementations (small inputs, runs in `cargo test`), and a throughput
 //! benchmark (large inputs, run explicitly via the `probes` binary).
 
+pub mod backend;
 pub mod gpu;
 pub mod kb;
 pub mod packed;

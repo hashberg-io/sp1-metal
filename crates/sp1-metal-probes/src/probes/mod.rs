@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod challenger;
 pub mod encode;
 pub mod fieldops;

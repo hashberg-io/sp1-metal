@@ -58,3 +58,8 @@ fn gkr_round_parity() {
 fn duplex_challenger_parity() {
     probes::challenger::check(&gpu()).unwrap();
 }
+
+#[test]
+fn slop_buffer_on_metal_backend_parity() {
+    probes::backend::check(&gpu()).unwrap();
+}
