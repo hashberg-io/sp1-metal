@@ -229,6 +229,62 @@ fn chip_inner<T: slop_algebra::Field>(mle: &PaddedMle<T>) -> Option<Arc<Mle<T>>>
     mle.inner().as_ref().cloned()
 }
 
+/// One chip's contribution to the round sums, on the CPU.
+///
+/// A layer's chips span orders of magnitude in size, and a dispatch costs the
+/// same whether the chip has a million entries or a hundred. The small ones are
+/// computed here and added to what the kernels return; the sums are additive,
+/// so mixing the two is exact.
+#[allow(clippy::too_many_arguments)]
+fn cpu_chip<N: slop_algebra::Field>(
+    n0: &[N],
+    n1: &[N],
+    d0: &[EF],
+    d1: &[EF],
+    eq_int: &[EF],
+    eq_row: &[EF],
+    width: usize,
+    lambda: EF,
+) -> (EF, EF, EF)
+where
+    EF: slop_algebra::ExtensionField<N>,
+{
+    let rows = n0.len() / width;
+    let n_pairs = (rows.div_ceil(2)).min(eq_row.len() / 2);
+    let mut eval_0 = EF::zero();
+    let mut eval_half = EF::zero();
+    let mut eq_sum = EF::zero();
+    for p in 0..n_pairs {
+        let eq0 = eq_row[2 * p];
+        let eqs = eq0 + eq_row[2 * p + 1];
+        let full = 2 * p + 1 < rows;
+        let (mut s_num0, mut s_den0) = (EF::zero(), EF::zero());
+        let (mut s_numh, mut s_denh) = (EF::zero(), EF::zero());
+        let mut s_eq = EF::zero();
+        let base = 2 * p * width;
+        for j in 0..width {
+            let e = eq_int[j];
+            let (a0, a1) = (n0[base + j], n1[base + j]);
+            let (b0, b1) = (d0[base + j], d1[base + j]);
+            s_num0 += e * (b0 * a1 + b1 * a0);
+            s_den0 += e * (b0 * b1);
+            let (a0s, a1s, b0s, b1s) = if full {
+                let k = base + width + j;
+                (a0 + n0[k], a1 + n1[k], b0 + d0[k], b1 + d1[k])
+            } else {
+                (a0, a1, b0 + EF::one(), b1 + EF::one())
+            };
+            s_numh += e * (b0s * a1s + b1s * a0s);
+            s_denh += e * (b0s * b1s);
+            s_eq += e * eqs;
+        }
+        eval_0 += (s_num0 * lambda + s_den0) * eq0;
+        eval_half += (s_numh * lambda + s_denh) * eqs;
+        eq_sum += s_eq;
+    }
+    (eval_0, eval_half, eq_sum)
+}
+
 /// The reduction for one circuit layer, one dispatch per chip.
 #[allow(clippy::too_many_arguments)]
 fn circuit_layer<N: slop_algebra::Field>(
@@ -239,7 +295,10 @@ fn circuit_layer<N: slop_algebra::Field>(
     eq_row: &[EF],
     lambda: EF,
     numerator_words: usize,
-) -> (EF, EF, EF) {
+) -> (EF, EF, EF)
+where
+    EF: slop_algebra::ExtensionField<N>,
+{
     let ctx = context();
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
@@ -270,6 +329,23 @@ fn circuit_layer<N: slop_algebra::Field>(
             continue;
         }
         let n_full = (rows / 2).min(n_pairs);
+        if len < min_entries_for_gpu() {
+            let chip = cpu_chip::<N>(
+                n0_inner.guts().as_slice(),
+                n1_inner.guts().as_slice(),
+                d0_inner.guts().as_slice(),
+                d1_inner.guts().as_slice(),
+                &eq_interaction[interaction_offset..interaction_offset + width],
+                eq_row,
+                width,
+                lambda,
+            );
+            totals.0 += chip.0;
+            totals.1 += chip.1;
+            totals.2 += chip.2;
+            interaction_offset += width;
+            continue;
+        }
         let groups = n_pairs.div_ceil(THREADS as usize);
         let partials = ctx.take_partials(groups);
 
@@ -390,7 +466,7 @@ where
     ) -> (Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>, Vec<PaddedMle<K>>) {
         let handled = is::<K, EF>()
             && (is::<F, BaseField>() || is::<F, EF>())
-            && layer_entries(numerators.0) >= min_entries_for_gpu();
+;
         if !handled {
             return (
                 numerators.0.iter().map(|m| m.fix_last_variable(alpha)).collect(),
@@ -462,11 +538,6 @@ fn is<A: 'static + ?Sized, B: 'static + ?Sized>() -> bool {
 fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
-        PolynomialLayer::CircuitLayer(layer)
-            if layer_entries(&layer.numerator_0) < min_entries_for_gpu() =>
-        {
-            cpu_round_evals(poly)
-        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<BaseField>(
             &context().base,
             (&layer.numerator_0, &layer.numerator_1),
@@ -482,11 +553,6 @@ fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -
 fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
-        PolynomialLayer::CircuitLayer(layer)
-            if layer_entries(&layer.numerator_0) < min_entries_for_gpu() =>
-        {
-            cpu_round_evals(poly)
-        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<EF>(
             &context().ext,
             (&layer.numerator_0, &layer.numerator_1),
@@ -681,6 +747,9 @@ fn stage_fold<T: slop_algebra::Field>(
 where
     EF: slop_algebra::ExtensionField<T>,
 {
+    if mle.inner().as_ref().map_or(0, |i| i.guts().as_slice().len()) < min_entries_for_gpu() {
+        return Fold::Done(mle.fix_last_variable(alpha));
+    }
     let (padding, pad_values) = lift_padding(mle);
     let out_vars = mle.num_variables() - 1;
     let Some(inner) = chip_inner(mle) else {

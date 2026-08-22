@@ -217,6 +217,25 @@ fn logup_round_reduction_matches_the_cpu() {
     }
 }
 
+/// A layer whose chips straddle the threshold, so some are computed on the GPU
+/// and some on the CPU and the two sets of sums are added together. This is the
+/// shape a real layer has, and the arithmetic has to agree either way.
+#[test]
+fn a_mixed_layer_agrees_with_the_cpu() {
+    unsafe { std::env::set_var("SP1_METAL_MIN_ENTRIES", "64") };
+    let mut rng = StdRng::seed_from_u64(1004);
+    // Counts either side of 64 entries per chip at 16 rows.
+    let counts: &[usize] = &[1, 8, 2, 16, 3];
+    let (rows, rv, iv) = (16usize, 4usize, 5usize);
+    let layer = random_layer(&mut rng, counts, rows, rv, iv);
+    let metal: LogupRoundPolynomial<F, EF, MetalRoundOps> = poly(&mut rng.clone(), layer, rv, iv);
+    let cpu = cpu_round_evals(&metal);
+    let got = <MetalRoundOps as LogupRoundOps<F, EF>>::round_evals(&metal);
+    assert_eq!(got.0, cpu.0, "mixed layer: eval at zero differs");
+    assert_eq!(got.1, cpu.1, "mixed layer: eval at the pair-sum point differs");
+    assert_eq!(got.2, cpu.2, "mixed layer: eq sum differs");
+}
+
 /// The fold against slop's own, which is what the CPU default calls.
 #[test]
 fn fixing_the_last_variable_matches_slop() {
