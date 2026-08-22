@@ -322,8 +322,7 @@ fn bind_small(enc: &metal::ComputeCommandEncoderRef, index: u64, bytes: &[u8]) -
 /// and [`no_copy_fraction`] reports how often each happened.
 fn upload(bytes: &[u8]) -> Buffer {
     let device = &context().device;
-    let page = 16 * 1024usize;
-    let aligned = bytes.as_ptr() as usize % page == 0 && bytes.len() % page == 0;
+    let aligned = sp1_metal_probes::nocopy::takeable(bytes.as_ptr());
     let start = std::time::Instant::now();
     let buffer = upload_inner(device, bytes, aligned);
     let elapsed = start.elapsed();
@@ -953,8 +952,7 @@ where
     // SAFETY: the kernel writes every element before anything reads them.
     unsafe { values.set_len(total) };
     let out_bytes = total * std::mem::size_of::<EF>();
-    let page = 16 * 1024usize;
-    let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
+    let direct = sp1_metal_probes::nocopy::takeable(values.as_ptr().cast());
     record_out(direct, out_bytes);
     let out_buf = if direct {
         // SAFETY: borrowed only for the dispatch, which is awaited below.
@@ -1103,8 +1101,7 @@ where
     // SAFETY: the kernel writes every element before anything reads them.
     unsafe { values.set_len(total) };
     let out_bytes = total * std::mem::size_of::<EF>();
-    let page = 16 * 1024usize;
-    let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
+    let direct = sp1_metal_probes::nocopy::takeable(values.as_ptr().cast());
     record_out(direct, out_bytes);
     let out_buf = if direct {
         // SAFETY: borrowed until the batch is awaited, which happens before the
@@ -1227,8 +1224,7 @@ impl Out {
         // SAFETY: the kernel writes every element before anything reads them.
         unsafe { values.set_len(total) };
         let bytes = total * std::mem::size_of::<EF>();
-        let page = 16 * 1024usize;
-        let direct = values.as_ptr() as usize % page == 0 && bytes % page == 0;
+        let direct = sp1_metal_probes::nocopy::takeable(values.as_ptr().cast());
         record_out(direct, bytes);
         let buffer = if direct {
             // SAFETY: borrowed only for the dispatch, which is awaited below.

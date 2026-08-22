@@ -8,6 +8,7 @@ pub mod backend;
 pub mod commit;
 pub mod gpu;
 pub mod kb;
+pub mod nocopy;
 pub mod packed;
 pub mod probes;
 pub mod stats;

@@ -22,7 +22,6 @@ use sp1_metal_probes::stats::{self, Input, Output};
 const THREADS: u64 = 256;
 /// Below this a dispatch costs more than the arithmetic saves.
 const MIN_PAIRS: usize = 1 << 12;
-const PAGE: usize = 16 * 1024;
 
 const KERNELS: &str = r#"
 // One thread per pair: the products at the even index, the odd one, and of the
@@ -153,7 +152,7 @@ fn as_words<T>(xs: &[T]) -> &[u8] {
 /// which is what makes borrowing the slice sound.
 fn read_only(device: &Device, words: &[u8]) -> Buffer {
     let start = std::time::Instant::now();
-    if !words.is_empty() && words.as_ptr() as usize % PAGE == 0 && words.len() % PAGE == 0 {
+    if !words.is_empty() && sp1_metal_probes::nocopy::takeable(words.as_ptr()) {
         stats::record_input(Input::Wrapped, words.len(), 0);
         // SAFETY: borrowed only for the dispatch, which is awaited below.
         return unsafe {
@@ -292,7 +291,7 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
     // SAFETY: the kernel writes every element before anything reads them.
     unsafe { out.set_len(out_len) };
     let out_bytes = out_len * std::mem::size_of::<E>();
-    let direct = out.as_ptr() as usize % PAGE == 0 && out_bytes % PAGE == 0;
+    let direct = sp1_metal_probes::nocopy::takeable(out.as_ptr().cast());
     let b_out = if direct {
         // SAFETY: borrowed only for the dispatch, which is awaited below.
         unsafe {

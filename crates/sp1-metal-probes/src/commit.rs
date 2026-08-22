@@ -88,9 +88,8 @@ fn dispatch(enc: &metal::ComputeCommandEncoderRef, n: u64) {
 /// Takes a slice of Montgomery words without copying when it can.
 fn upload(device: &Device, words: &[u32]) -> Buffer {
     let bytes = std::mem::size_of_val(words);
-    let page = 16 * 1024usize;
     let start = std::time::Instant::now();
-    if bytes >= page && words.as_ptr() as usize % page == 0 && bytes % page == 0 {
+    if bytes > 0 && crate::nocopy::takeable(words.as_ptr().cast()) {
         crate::stats::record_input(crate::stats::Input::Wrapped, bytes, 0);
         // SAFETY: the buffer borrows `words` for the dispatch, which is awaited
         // before this returns.

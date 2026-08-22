@@ -527,16 +527,11 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
 
     let _phase = stats::enter(stats::Phase::Zerocheck);
     let ctx = context();
-    let upload = |bytes: &[u8]| {
-        let start = std::time::Instant::now();
-        let buffer = ctx.device.new_buffer_with_data(
-            bytes.as_ptr().cast(),
-            bytes.len().max(1) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        stats::record_input(Input::Copied, bytes.len(), start.elapsed().as_nanos() as u64);
-        buffer
-    };
+    // SAFETY: every buffer here is read by the one dispatch below, which is
+    // awaited before this function returns, and nothing writes the slices in
+    // the meantime.
+    let upload =
+        |bytes: &[u8]| unsafe { sp1_metal_probes::nocopy::read_only(&ctx.device, bytes) };
     let b_main = upload(as_words(main_inner.guts().as_slice()));
     let empty = [0u8; 16];
     let b_prep = prep_inner
