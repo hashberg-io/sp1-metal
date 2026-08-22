@@ -213,12 +213,65 @@ thread_local! {
 /// The most staging buffers one thread will hold. A layer stages four arrays
 /// per chip; past this an upload just makes its own buffer, so a pathological
 /// shape costs time rather than unbounded memory.
-const ARENA_SLOTS: usize = 96;
+const ARENA_SLOTS: usize = 256;
 
-/// Releases this thread's staging buffers for reuse. Sound only where no
-/// dispatch of ours is outstanding on this thread.
+/// Releases this thread's staging buffers for reuse, and with them the record
+/// of what is already on the device. Sound only where no dispatch of ours is
+/// outstanding on this thread.
+///
+/// The two are released together on purpose: a cache entry names a staging
+/// buffer, so recycling buffers without forgetting the entries would hand a
+/// later reader a buffer that had since been overwritten.
 fn arena_reset() {
     ARENA.with(|a| a.borrow_mut().next = 0);
+    CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// An MLE that is already on the device.
+///
+/// A sumcheck round reduces the layer and then fixes it, over exactly the same
+/// four MLEs per chip, so uploading each where it is needed copies every one of
+/// them twice — and copying already costs more than all the arithmetic.
+///
+/// Keying on the data pointer is sound because the entry also holds an `Arc` to
+/// the MLE: while the entry lives the allocation cannot be freed, so its
+/// address cannot have been handed to something else. Entries last until the
+/// next reduction begins, which is when the layer they belong to is finished.
+struct Cached {
+    ptr: usize,
+    len: usize,
+    buffer: Buffer,
+    _pin: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+thread_local! {
+    static CACHE: RefCell<Vec<Cached>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether an MLE already uploaded this round is reused, read once.
+fn cache_uploads() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_UPLOAD_CACHE").map(|v| v != "0").unwrap_or(true))
+}
+
+/// Uploads an MLE's words, or hands back the buffer this layer already made.
+fn upload_mle<T: slop_algebra::Field>(mle: &Arc<Mle<T>>) -> Buffer {
+    let words = as_words(mle.guts().as_slice());
+    if !cache_uploads() {
+        return upload(words);
+    }
+    let (ptr, len) = (words.as_ptr() as usize, words.len());
+    let hit = CACHE.with(|c| {
+        c.borrow().iter().find(|e| e.ptr == ptr && e.len == len).map(|e| e.buffer.clone())
+    });
+    if let Some(buffer) = hit {
+        return buffer;
+    }
+    let buffer = upload(words);
+    CACHE.with(|c| {
+        c.borrow_mut().push(Cached { ptr, len, buffer: buffer.clone(), _pin: mle.clone() })
+    });
+    buffer
 }
 
 /// A staging buffer of at least `len` bytes, or `None` if this thread is
@@ -593,10 +646,10 @@ where
         let groups = cells.div_ceil(THREADS as usize).min(MAX_GROUPS);
         let partials = ctx.take_partials(groups);
 
-        let b_n0 = upload(as_words(n0_inner.guts().as_slice()));
-        let b_n1 = upload(as_words(n1_inner.guts().as_slice()));
-        let b_d0 = upload(as_words(d0_inner.guts().as_slice()));
-        let b_d1 = upload(as_words(d1_inner.guts().as_slice()));
+        let b_n0 = upload_mle(&n0_inner);
+        let b_n1 = upload_mle(&n1_inner);
+        let b_d0 = upload_mle(&d0_inner);
+        let b_d1 = upload_mle(&d1_inner);
 
         #[repr(C)]
         #[derive(Clone, Copy)]
@@ -722,7 +775,6 @@ where
         }
         // SAFETY: the type ids match, so these are the same types.
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
-        arena_reset();
         pooled(|| {
         let ctx = context();
         let cb = ctx.queue.new_command_buffer();
@@ -899,7 +951,7 @@ where
         ctx.device.new_buffer(out_bytes.max(1) as u64, MTLResourceOptions::StorageModeShared)
     };
 
-    let in_buf = upload(as_words(inner.guts().as_slice()));
+    let in_buf = upload_mle(&inner);
     let pad_buf = upload(padding_words);
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
 
@@ -1049,7 +1101,7 @@ where
     } else {
         ctx.device.new_buffer(out_bytes as u64, MTLResourceOptions::StorageModeShared)
     };
-    let in_buf = upload(as_words(inner.guts().as_slice()));
+    let in_buf = upload_mle(&inner);
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
     let params =
         FoldParams { out_rows: out_rows as u32, rows: rows as u32, width: width as u32 };
