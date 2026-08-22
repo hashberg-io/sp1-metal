@@ -126,7 +126,20 @@ Three rounds of fixes each moved it a long way and none was enough:
 - **A size threshold.** Layers below a few thousand entries stay on the CPU, since below that the dispatch costs more than the arithmetic saves. Overridable with `SP1_METAL_MIN_ENTRIES`, which the tests set to zero so small shapes still reach the kernels.
 - **Inline arguments.** The small per-chip slices — a chip's eq values, a fold's padding — go into the command buffer directly rather than into freshly created buffers.
 
-A fibonacci core proof still takes longer with the feature on than the 18.2 s the CPU takes.
-The threshold is applied per *layer*, so a layer that clears it dispatches all its chips including the ninety tiny ones; the fix is a per-chip decision, with the small chips' contribution computed on the CPU and added to the GPU's — the sums are additive, so this is straightforward, and it is where this stands.
+- **A per-chip decision.** The threshold was being applied to the layer, so a layer that cleared it still dispatched its ninety small chips. Each chip and each polynomial now decides for itself, with the small ones summed on the CPU and added to what the kernels return. That is exact because the sums are additive, and a test builds a layer whose chips straddle the threshold to check it.
 
-The lesson is the one the challenger spike ended on, at prover scale: the arithmetic was never the problem, and every gain here came from submitting less often rather than computing faster.
+The lesson is the one the challenger spike ended on, now at prover scale: the arithmetic was never the problem. Every gain here came from submitting less often, and every setback from a fixed cost paid per dispatch rather than per unit of work.
+
+### Where it stands
+
+The pieces are in place and correct — the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including mixed layers — and the isolated measurement is 9.06x on a shard-sized layer.
+Whether that survives integration is a question about scheduling, not arithmetic, and the answer at the last measurement was still no.
+What remains is not new capability but the same kind of work again: fewer submissions, fewer allocations, and a threshold chosen by measurement rather than by guess.
+
+## 8 and 9: not reached
+
+**Zerocheck** has the same shape as GKR and the same blocker: `ZeroCheckPoly` declares `type Backend = CpuBackend`, so the phase needs the same kind of factoring in the fork.
+The transpiler that would feed it exists and is measured — all 119 chips, 2.7 million DAG nodes, 215 G multiplies per second at the best chunk size — but nothing connects the two.
+
+**The acceptance run** D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again.
+The harness for it is ready: `crates/sp1-profile-host` builds against the fork, takes `--features metal` to turn the GPU path on, proves and verifies, and now accepts `--stdin-u32` so a small guest can drive it. A fibonacci core proof through it is the standing smoke test — 18.2 s on the CPU path, and the number to beat.
