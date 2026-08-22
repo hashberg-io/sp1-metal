@@ -134,12 +134,36 @@ pub fn digest_layers(tensors: &[(&[u32], usize)], rows: usize) -> Option<Vec<Vec
     }
     let ctx = context();
     let padded = rows.next_power_of_two();
-    let levels: Vec<Buffer> = (0..=padded.trailing_zeros())
+    // The caller must own its layers, so the kernels write straight into the
+    // vectors that will be handed back rather than into device buffers whose
+    // contents are copied out afterwards. The bottom layer is by far the
+    // largest, and it is the one big enough to be page-aligned and so taken
+    // where it lies; the small ones near the root fall back to a copy.
+    let mut layers: Vec<Vec<[u32; 8]>> = (0..=padded.trailing_zeros())
         .map(|l| {
-            ctx.device.new_buffer(
-                ((padded >> l) * 8 * std::mem::size_of::<u32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            )
+            let n = padded >> l;
+            let mut v: Vec<[u32; 8]> = Vec::with_capacity(n);
+            // SAFETY: the kernels write every digest before anything reads
+            // them, except the padded tail of layer zero, zeroed below.
+            unsafe { v.set_len(n) };
+            v
+        })
+        .collect();
+    let mut direct = Vec::with_capacity(layers.len());
+    let levels: Vec<Buffer> = layers
+        .iter_mut()
+        .map(|v| {
+            let bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    v.as_mut_ptr().cast::<u8>(),
+                    std::mem::size_of_val(v.as_slice()),
+                )
+            };
+            // SAFETY: the buffer is read and written only by the dispatches
+            // below, which are awaited before the vectors are read.
+            let (buffer, aliased) = unsafe { crate::nocopy::write_into(&ctx.device, bytes) };
+            direct.push(aliased);
+            buffer
         })
         .collect();
 
@@ -212,29 +236,34 @@ pub fn digest_layers(tensors: &[(&[u32], usize)], rows: usize) -> Option<Vec<Vec
     let (t0, t1): (f64, f64) =
         unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
     crate::stats::record_dispatch(wall, t1 - t0);
+    crate::stats::record_interval(t0, t1);
 
     let start = std::time::Instant::now();
-    let out: Vec<Vec<[u32; 8]>> = levels
-        .iter()
-        .enumerate()
-        .map(|(l, buf)| {
-            let n = padded >> l;
-            // SAFETY: the kernels wrote eight words per digest, and the padded
-            // tail was zeroed above.
-            let src =
-                unsafe { std::slice::from_raw_parts(buf.contents().cast::<[u32; 8]>(), n) };
-            src.to_vec()
-        })
-        .collect();
-    // Every digest the tree holds is copied back out of device memory, because
-    // the type the caller must return owns its layers on the host.
-    let copied: usize = out.iter().map(|l| std::mem::size_of_val(l.as_slice())).sum();
-    crate::stats::record_output(
-        crate::stats::Output::Staged,
-        copied,
-        start.elapsed().as_nanos() as u64,
-    );
-    Some(out)
+    let mut copied = 0usize;
+    for ((layer, buf), aliased) in layers.iter_mut().zip(levels.iter()).zip(direct) {
+        if aliased {
+            continue;
+        }
+        let bytes = std::mem::size_of_val(layer.as_slice());
+        copied += bytes;
+        // SAFETY: the kernels wrote eight words per digest into a buffer of
+        // exactly this size.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                buf.contents().cast::<u8>(),
+                layer.as_mut_ptr().cast::<u8>(),
+                bytes,
+            );
+        }
+    }
+    if copied > 0 {
+        crate::stats::record_output(
+            crate::stats::Output::Staged,
+            copied,
+            start.elapsed().as_nanos() as u64,
+        );
+    }
+    Some(layers)
 }
 
 #[cfg(test)]

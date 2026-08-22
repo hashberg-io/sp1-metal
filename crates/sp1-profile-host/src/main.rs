@@ -146,6 +146,14 @@ fn report_metal(elapsed: std::time::Duration) {
         if all.out_bytes() == 0 { 0.0 } else { all.out_staged as f64 / all.out_bytes() as f64 * 100.0 },
         all.in_copy_s + all.out_copy_s,
     );
+    // The union of the command buffers' own execution intervals: what fraction
+    // of the proof the device was doing anything at all.
+    let (busy, span) = sp1_hypercube::metal_stats::device_busy_s();
+    eprintln!(
+        "device busy {busy:.3}s of a {span:.3}s span, {:.1}% -- and {:.1}% of the whole proof",
+        if span > 0.0 { busy / span * 100.0 } else { 0.0 },
+        busy / elapsed.as_secs_f64() * 100.0,
+    );
 }
 
 #[cfg(not(feature = "metal"))]

@@ -208,6 +208,7 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
         let (t0, t1): (f64, f64) =
             unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
         stats::record_dispatch(wall, t1 - t0);
+        stats::record_interval(t0, t1);
     });
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
     let raw = partials.contents().cast::<[u32; 4]>();
@@ -328,6 +329,7 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
         let (t0, t1): (f64, f64) =
             unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
         stats::record_dispatch(wall, t1 - t0);
+        stats::record_interval(t0, t1);
     });
     if direct {
         stats::record_output(Output::Direct, out_bytes, 0);

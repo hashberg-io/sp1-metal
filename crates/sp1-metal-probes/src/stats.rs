@@ -24,6 +24,7 @@
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// The stage of proving a dispatch belongs to.
 ///
@@ -201,8 +202,18 @@ pub fn record_output(kind: Output, bytes: usize, nanos: u64) {
     }
 }
 
-/// Records one command buffer: how long the caller waited, and how long the
-/// hardware actually ran.
+/// Every command buffer's execution interval, for [`device_busy_s`].
+///
+/// Summing the intervals answers a different question from taking their union,
+/// and with four provers submitting at once only the union is the device's
+/// utilisation. Bounded so that a pathological run cannot grow it without
+/// limit; past the bound the sum is still exact and only the union goes stale.
+static INTERVALS: Mutex<Vec<(f64, f64)>> = Mutex::new(Vec::new());
+
+const MAX_INTERVALS: usize = 1 << 20;
+
+/// Records one command buffer: how long the caller waited, and the interval
+/// during which the hardware actually ran it.
 pub fn record_dispatch(wall_s: f64, gpu_s: f64) {
     let c = current();
     c.dispatches.fetch_add(1, Ordering::Relaxed);
@@ -210,6 +221,46 @@ pub fn record_dispatch(wall_s: f64, gpu_s: f64) {
     if gpu_s.is_finite() && gpu_s > 0.0 {
         c.gpu_ns.fetch_add((gpu_s * 1e9) as u64, Ordering::Relaxed);
     }
+}
+
+/// Records when a command buffer ran, from the hardware's own clock.
+///
+/// Separate from [`record_dispatch`] because the union is device-wide: which
+/// phase submitted the work does not change how busy the device was.
+pub fn record_interval(start: f64, end: f64) {
+    if !(start.is_finite() && end.is_finite()) || end <= start {
+        return;
+    }
+    let mut iv = INTERVALS.lock().expect("intervals poisoned");
+    if iv.len() < MAX_INTERVALS {
+        iv.push((start, end));
+    }
+}
+
+/// Seconds during which at least one command buffer was executing, and the
+/// span from the first to the last.
+///
+/// The first number is what "the GPU was busy" should mean. Summing per-thread
+/// GPU time instead counts a device shared by four provers four times over.
+#[must_use]
+pub fn device_busy_s() -> (f64, f64) {
+    let mut iv = INTERVALS.lock().expect("intervals poisoned").clone();
+    if iv.is_empty() {
+        return (0.0, 0.0);
+    }
+    iv.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite"));
+    let span = iv.iter().map(|x| x.1).fold(f64::MIN, f64::max) - iv[0].0;
+    let (mut busy, mut cur) = (0.0, iv[0]);
+    for &(s, e) in &iv[1..] {
+        if s > cur.1 {
+            busy += cur.1 - cur.0;
+            cur = (s, e);
+        } else if e > cur.1 {
+            cur.1 = e;
+        }
+    }
+    busy += cur.1 - cur.0;
+    (busy, span)
 }
 
 /// One phase's totals, in bytes and seconds.
@@ -302,6 +353,7 @@ pub fn reset() {
     for c in &COUNTERS {
         c.reset();
     }
+    INTERVALS.lock().expect("intervals poisoned").clear();
 }
 
 fn gb(bytes: u64) -> f64 {
@@ -402,5 +454,14 @@ mod tests {
         assert_eq!(totals(Phase::Gkr).in_resident, 20);
         reset();
         assert_eq!(grand_totals().in_bytes(), 0);
+        // Overlapping intervals are one busy stretch, not two.
+        record_interval(10.0, 12.0);
+        record_interval(11.0, 13.0);
+        record_interval(20.0, 20.5);
+        let (busy, span) = device_busy_s();
+        assert!((busy - 3.5).abs() < 1e-9, "busy was {busy}");
+        assert!((span - 10.5).abs() < 1e-9, "span was {span}");
+        reset();
+        assert_eq!(device_busy_s(), (0.0, 0.0));
     }
 }

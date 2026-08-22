@@ -505,6 +505,7 @@ fn run_and_record(cb: &metal::CommandBufferRef) {
         unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
     STATS.record(wall, t1 - t0);
     stats::record_dispatch(wall, t1 - t0);
+    stats::record_interval(t0, t1);
 }
 
 fn as_words<T>(xs: &[T]) -> &[u8] {

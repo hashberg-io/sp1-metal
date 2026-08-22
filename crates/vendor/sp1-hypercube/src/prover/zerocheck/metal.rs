@@ -576,6 +576,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
         let (t0, t1): (f64, f64) =
             unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
         stats::record_dispatch(wall, t1 - t0);
+        stats::record_interval(t0, t1);
     });
 
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
