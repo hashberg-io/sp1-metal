@@ -26,6 +26,7 @@
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 use slop_algebra::{AbstractExtensionField, AbstractField};
 use slop_koala_bear::KoalaBear;
@@ -195,10 +196,17 @@ fn upload(bytes: &[u8]) -> Buffer {
     let device = &context().device;
     let page = 16 * 1024usize;
     let aligned = bytes.as_ptr() as usize % page == 0 && bytes.len() % page == 0;
-    STATS.with_borrow(aligned);
+    let start = std::time::Instant::now();
+    let buffer = upload_inner(device, bytes, aligned);
+    STATS.with_borrow(aligned, bytes.len(), start.elapsed().as_secs_f64());
+    buffer
+}
+
+fn upload_inner(device: &Device, bytes: &[u8], aligned: bool) -> Buffer {
     if aligned && !bytes.is_empty() {
         // SAFETY: the buffer borrows `bytes` for the lifetime of the dispatch,
         // which is awaited before this function's caller returns.
+        #[allow(unused_unsafe)]
         unsafe {
             device.new_buffer_with_bytes_no_copy(
                 bytes.as_ptr().cast(),
@@ -216,32 +224,137 @@ fn upload(bytes: &[u8]) -> Buffer {
     }
 }
 
-/// How many uploads avoided a copy, for reporting.
+#[derive(Clone, Copy, Default)]
+struct StatsInner {
+    uploads: usize,
+    no_copy: usize,
+    upload_s: f64,
+    upload_bytes: u64,
+    dispatches: usize,
+    encode_s: f64,
+    gpu_s: f64,
+    wall_s: f64,
+    cpu_chip_s: f64,
+    threads: usize,
+}
+
+/// What the Metal path did, so a measurement can say where the time went.
+///
+/// The GPU figure is the hardware's own: `GPUStartTime` and `GPUEndTime` on the
+/// command buffer bracket execution only, so the difference between it and the
+/// wall figure is everything around a dispatch — encoding, submission, and
+/// waiting for a queue this thread does not own.
 pub struct UploadStats {
-    inner: Mutex<(usize, usize)>,
+    inner: Mutex<StatsInner>,
 }
 
 impl UploadStats {
-    fn with_borrow(&self, no_copy: bool) {
+    fn with_borrow(&self, no_copy: bool, bytes: usize, secs: f64) {
         let mut s = self.inner.lock().expect("stats poisoned");
-        s.0 += 1;
-        s.1 += usize::from(no_copy);
+        s.uploads += 1;
+        s.no_copy += usize::from(no_copy);
+        s.upload_bytes += bytes as u64;
+        s.upload_s += secs;
+    }
+
+    fn add_encode(&self, secs: f64) {
+        self.inner.lock().expect("stats poisoned").encode_s += secs;
+    }
+
+    fn add_cpu_chip(&self, secs: f64) {
+        self.inner.lock().expect("stats poisoned").cpu_chip_s += secs;
+    }
+
+    /// Counts this thread once, so thread-seconds can be read against a wall clock.
+    fn see_thread(&self) {
+        thread_local! {
+            static SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        SEEN.with(|seen| {
+            if !seen.get() {
+                seen.set(true);
+                self.inner.lock().expect("stats poisoned").threads += 1;
+            }
+        });
+    }
+
+    /// Everything the Metal path spent, as a printable line.
+    #[must_use]
+    pub fn report(&self) -> String {
+        let s = *self.inner.lock().expect("stats poisoned");
+        format!(
+            "dispatches {} on {} threads | gpu {:.3}s | blocked {:.3}s | encode {:.3}s | \
+             upload {:.3}s for {:.2} GB in {} ({} no-copy) | cpu fallback {:.3}s",
+            s.dispatches,
+            s.threads,
+            s.gpu_s,
+            s.wall_s,
+            s.encode_s,
+            s.upload_s,
+            s.upload_bytes as f64 / 1e9,
+            s.uploads,
+            s.no_copy,
+            s.cpu_chip_s,
+        )
+    }
+
+    fn record(&self, wall_s: f64, gpu_s: f64) {
+        let mut s = self.inner.lock().expect("stats poisoned");
+        s.dispatches += 1;
+        s.wall_s += wall_s;
+        // A command buffer that never ran on the GPU reports a zero or
+        // decreasing pair; do not let that subtract from the total.
+        if gpu_s.is_finite() && gpu_s > 0.0 {
+            s.gpu_s += gpu_s;
+        }
     }
 
     /// `(uploads, of which no-copy)`.
     #[must_use]
     pub fn counts(&self) -> (usize, usize) {
-        *self.inner.lock().expect("stats poisoned")
+        let s = *self.inner.lock().expect("stats poisoned");
+        (s.uploads, s.no_copy)
+    }
+
+    /// `(dispatches, GPU seconds, wall seconds)` spent in the Metal path.
+    #[must_use]
+    pub fn timings(&self) -> (usize, f64, f64) {
+        let s = *self.inner.lock().expect("stats poisoned");
+        (s.dispatches, s.gpu_s, s.wall_s)
     }
 
     /// Resets the counters.
     pub fn reset(&self) {
-        *self.inner.lock().expect("stats poisoned") = (0, 0);
+        *self.inner.lock().expect("stats poisoned") = StatsInner::default();
     }
 }
 
-/// Upload accounting, so a measurement can say how much of it was copying.
-pub static STATS: UploadStats = UploadStats { inner: Mutex::new((0, 0)) };
+/// Accounting for the Metal path, reported by the profiling host.
+pub static STATS: UploadStats = UploadStats { inner: Mutex::new(StatsInner {
+    uploads: 0,
+    no_copy: 0,
+    upload_s: 0.0,
+    upload_bytes: 0,
+    dispatches: 0,
+    encode_s: 0.0,
+    gpu_s: 0.0,
+    wall_s: 0.0,
+    cpu_chip_s: 0.0,
+    threads: 0,
+}) };
+
+/// Commits a command buffer, waits for it, and records what the GPU spent.
+fn run_and_record(cb: &metal::CommandBufferRef) {
+    let start = std::time::Instant::now();
+    cb.commit();
+    cb.wait_until_completed();
+    let wall = start.elapsed().as_secs_f64();
+    // GPUStartTime and GPUEndTime are not bound by the metal crate, but they
+    // are ordinary Objective-C properties on MTLCommandBuffer.
+    let (t0, t1): (f64, f64) =
+        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+    STATS.record(wall, t1 - t0);
+}
 
 fn as_words<T>(xs: &[T]) -> &[u8] {
     // SAFETY: KoalaBear is repr(transparent) over u32 and BinomialExtensionField
@@ -328,6 +441,7 @@ fn circuit_layer<N: slop_algebra::Field>(
 where
     EF: slop_algebra::ExtensionField<N>,
 {
+    STATS.see_thread();
     let ctx = context();
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
@@ -370,6 +484,7 @@ where
         }
         let n_full = (rows / 2).min(n_pairs);
         if len < min_entries_for_gpu() {
+            let fallback_start = std::time::Instant::now();
             let chip = cpu_chip::<N>(
                 n0_inner.guts().as_slice(),
                 n1_inner.guts().as_slice(),
@@ -383,6 +498,7 @@ where
             totals.0 += chip.0;
             totals.1 += chip.1;
             totals.2 += chip.2;
+            STATS.add_cpu_chip(fallback_start.elapsed().as_secs_f64());
             continue;
         }
         // One thread per (row pair, interaction) cell. The grid is capped and
@@ -407,6 +523,7 @@ where
         let params =
             Params { n_pairs: n_pairs as u32, n_full_pairs: n_full as u32, width: width as u32 };
 
+        let encode_start = std::time::Instant::now();
         let cb = *command_buffer.get_or_insert_with(|| ctx.queue.new_command_buffer());
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
@@ -427,6 +544,7 @@ where
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
+        STATS.add_encode(encode_start.elapsed().as_secs_f64());
         // Keep the buffers alive until the whole layer has run.
         held.push((partials, groups, vec![Some(b_n0), Some(b_n1), Some(b_d0), Some(b_d1), b_eqi, b_eqr]));
         let _ = numerator_words;
@@ -434,8 +552,7 @@ where
     let Some(cb) = command_buffer else {
         return totals;
     };
-    cb.commit();
-    cb.wait_until_completed();
+    run_and_record(cb);
     for (partials, groups, _) in held {
         let raw = partials.contents().cast::<EF>();
         for g in 0..groups {
@@ -520,7 +637,7 @@ where
         }
         // SAFETY: the type ids match, so these are the same types.
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
-        pooled(|| {
+            pooled(|| {
         let ctx = context();
         let cb = ctx.queue.new_command_buffer();
         let num_pso = if is::<F, BaseField>() { &ctx.fold_base } else { &ctx.fold_ext };
@@ -551,8 +668,7 @@ where
             stage_num(numerators.1),
             stage_den(denominators.1),
         );
-        cb.commit();
-        cb.wait_until_completed();
+        run_and_record(cb);
         let out = (
             finish_all(staged.0),
             finish_all(staged.1),
@@ -681,7 +797,7 @@ where
     let out_bytes = total * std::mem::size_of::<EF>();
     let page = 16 * 1024usize;
     let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
-    STATS.with_borrow(direct);
+    STATS.with_borrow(direct, out_bytes, 0.0);
     let out_buf = if direct {
         // SAFETY: borrowed only for the dispatch, which is awaited below.
         unsafe {
@@ -705,8 +821,7 @@ where
 
     let cb = ctx.queue.new_command_buffer();
     encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
-    cb.commit();
-    cb.wait_until_completed();
+    run_and_record(cb);
 
     if !direct {
         // SAFETY: the kernel wrote `out_bytes` bytes of extension elements.
@@ -832,7 +947,7 @@ where
     let out_bytes = total * std::mem::size_of::<EF>();
     let page = 16 * 1024usize;
     let direct = values.as_ptr() as usize % page == 0 && out_bytes % page == 0;
-    STATS.with_borrow(direct);
+    STATS.with_borrow(direct, out_bytes, 0.0);
     let out_buf = if direct {
         // SAFETY: borrowed until the batch is awaited, which happens before the
         // values are read.

@@ -106,5 +106,28 @@ async fn main() -> Result<()> {
         .verify(&proof, pk.verifying_key(), None)
         .map_err(|e| anyhow!("verification failed: {e:?}"))?;
     eprintln!("proved and verified in {elapsed:?} (mode: {})", args.mode);
+    report_metal(elapsed);
     Ok(())
 }
+
+/// What the Metal path contributed, if it was built in.
+///
+/// The GPU figure comes from the hardware's own command-buffer timestamps, so
+/// the share it takes of the proof is the honest answer to how much of this
+/// machine's work has actually moved off the CPU.
+#[cfg(feature = "metal")]
+fn report_metal(elapsed: std::time::Duration) {
+    let (_dispatches, gpu_s, _wall_s) = sp1_hypercube::metal::STATS.timings();
+    let total = elapsed.as_secs_f64();
+    // Everything but the GPU figure is thread-seconds: shards prove
+    // concurrently, so those sums are over threads, not over the wall clock.
+    eprintln!(
+        "metal: {} | gpu is {:.1}% of the {:.1}s proof",
+        sp1_hypercube::metal::STATS.report(),
+        gpu_s / total * 100.0,
+        total,
+    );
+}
+
+#[cfg(not(feature = "metal"))]
+fn report_metal(_elapsed: std::time::Duration) {}
