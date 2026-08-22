@@ -306,6 +306,19 @@ inline void p2_internal(thread uint* s, uint rc) {
     s[0] = new0;
 }
 
+inline void p2_permute(thread uint* s, constant uint* rc) {
+    p2_external(s);
+    for (uint r = 0; r < 4; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+    for (uint r = 0; r < 20; r++) {
+        p2_internal(s, rc[128u + r]);
+    }
+    for (uint r = 4; r < 8; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+}
+
 kernel void poseidon2_16(device const uint* in [[buffer(0)]],
                          device uint* out [[buffer(1)]],
                          constant uint* rc [[buffer(2)]],
@@ -318,16 +331,7 @@ kernel void poseidon2_16(device const uint* in [[buffer(0)]],
     for (uint i = 0; i < 16; i++) {
         s[i] = in[gid * 16u + i];
     }
-    p2_external(s);
-    for (uint r = 0; r < 4; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
-    for (uint r = 0; r < 20; r++) {
-        p2_internal(s, rc[128u + r]);
-    }
-    for (uint r = 4; r < 8; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
+    p2_permute(s, rc);
     for (uint i = 0; i < 16; i++) {
         out[gid * 16u + i] = s[i];
     }
@@ -502,16 +506,7 @@ inline void chal_duplex(thread Challenger* c, constant uint* rc) {
         s[i] = c->input_buf[i];
     }
     c->input_len = 0u;
-    p2_external(s);
-    for (uint r = 0; r < 4; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
-    for (uint r = 0; r < 20; r++) {
-        p2_internal(s, rc[128u + r]);
-    }
-    for (uint r = 4; r < 8; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
+    p2_permute(s, rc);
     for (uint i = 0; i < 16; i++) {
         c->sponge[i] = s[i];
     }
@@ -772,5 +767,96 @@ kernel void dif_tail(device uint* a [[buffer(0)]],
     }
     for (uint k = tid; k < cells; k += 256u) {
         a[(row0 + (k / DIF_TILE_COLS)) * p.cols + col0 + (k % DIF_TILE_COLS)] = tile[k];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Step 6: the Merkle tree over a committed codeword.
+//
+// slop commits a tensor by hashing each row of the row-major matrix into a
+// digest with `PaddingFreeSponge<KoalaPerm, 16, 8, 8>` and then compressing
+// pairs of digests up the tree with `TruncatedPermutation<KoalaPerm, 2, 8, 16>`.
+// Both are the same width-16 Poseidon2 permutation, so both are one kernel each
+// and neither needs the host between layers: the whole tree is a single
+// submission, which is the lesson the challenger spike ended on.
+// ---------------------------------------------------------------------------
+
+// One digest per row. Overwrite-mode sponge: absorb the row eight elements at a
+// time into the first eight lanes, permuting after each chunk, including a
+// short final chunk.
+kernel void merkle_leaves(device const uint* rows [[buffer(0)]],
+                          device uint* digests [[buffer(1)]],
+                          constant uint& width [[buffer(2)]],
+                          constant uint& n_rows [[buffer(3)]],
+                          constant uint* rc [[buffer(4)]],
+                          uint gid [[thread_position_in_grid]]) {
+    if (gid >= n_rows) {
+        return;
+    }
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = 0u;
+    }
+    device const uint* row = rows + gid * width;
+    for (uint base = 0; base < width; base += 8u) {
+        uint take = min(8u, width - base);
+        for (uint i = 0; i < take; i++) {
+            s[i] = row[base + i];
+        }
+        p2_permute(s, rc);
+    }
+    for (uint i = 0; i < 8; i++) {
+        digests[gid * 8u + i] = s[i];
+    }
+}
+
+// One layer of the tree: a parent is the first eight lanes of the permutation
+// applied to its two children laid end to end.
+kernel void merkle_compress(device const uint* children [[buffer(0)]],
+                            device uint* parents [[buffer(1)]],
+                            constant uint& n_parents [[buffer(2)]],
+                            constant uint* rc [[buffer(3)]],
+                            uint gid [[thread_position_in_grid]]) {
+    if (gid >= n_parents) {
+        return;
+    }
+    uint s[16];
+    for (uint i = 0; i < 8; i++) {
+        s[i] = children[(2u * gid) * 8u + i];
+        s[8u + i] = children[(2u * gid + 1u) * 8u + i];
+    }
+    p2_permute(s, rc);
+    for (uint i = 0; i < 8; i++) {
+        parents[gid * 8u + i] = s[i];
+    }
+}
+
+// The commitment is not the Merkle root. slop binds the shape into it:
+// `compress([root, hash([log_height, total_width])])`, so a commitment carries
+// the dimensions it was made over. A backend that returned the bare root would
+// produce commitments the verifier rejects.
+kernel void merkle_finalize(device const uint* root [[buffer(0)]],
+                            device uint* out [[buffer(1)]],
+                            constant uint& log_height [[buffer(2)]],
+                            constant uint& total_width [[buffer(3)]],
+                            constant uint* rc [[buffer(4)]]) {
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = 0u;
+    }
+    s[0] = log_height;
+    s[1] = total_width;
+    p2_permute(s, rc);
+    uint h[8];
+    for (uint i = 0; i < 8; i++) {
+        h[i] = s[i];
+    }
+    for (uint i = 0; i < 8; i++) {
+        s[i] = root[i];
+        s[8u + i] = h[i];
+    }
+    p2_permute(s, rc);
+    for (uint i = 0; i < 8; i++) {
+        out[i] = s[i];
     }
 }

@@ -63,3 +63,13 @@ fn duplex_challenger_parity() {
 fn slop_buffer_on_metal_backend_parity() {
     probes::backend::check(&gpu()).unwrap();
 }
+
+#[test]
+fn merkle_commitment_parity() {
+    probes::merkle::check(&gpu()).unwrap();
+}
+
+#[test]
+fn sumcheck_driver_on_metal_parity() {
+    probes::sumcheck::check(&gpu()).unwrap();
+}

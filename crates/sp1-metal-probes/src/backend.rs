@@ -38,11 +38,19 @@ struct Allocation {
     len: usize,
 }
 
+/// Bytes of freed buffers kept for reuse. A prover folds the same working set
+/// down round after round, so it asks for the same handful of sizes over and
+/// over; without a pool every round pays the kernel to map fresh pages, which
+/// costs more than the round's arithmetic.
+const POOL_BUDGET_BYTES: usize = 2 << 30;
+
 struct Inner {
     device: Device,
     /// Live allocations keyed by the base address of their host mapping, so a
     /// pointer into the middle of one can be resolved back to its buffer.
     live: Mutex<BTreeMap<usize, Allocation>>,
+    /// Freed buffers, keyed by exact byte length, waiting to be handed out again.
+    pool: Mutex<(BTreeMap<usize, Vec<Buffer>>, usize)>,
 }
 
 /// A slop backend backed by Metal buffers in shared storage.
@@ -61,7 +69,13 @@ impl MetalBackend {
     /// Wraps the system default Metal device.
     pub fn new() -> Result<Self, String> {
         let device = Device::system_default().ok_or("no Metal device found")?;
-        Ok(Self { inner: Arc::new(Inner { device, live: Mutex::new(BTreeMap::new()) }) })
+        Ok(Self {
+            inner: Arc::new(Inner {
+                device,
+                live: Mutex::new(BTreeMap::new()),
+                pool: Mutex::new((BTreeMap::new(), 0)),
+            }),
+        })
     }
 
     pub fn device(&self) -> &Device {
@@ -82,13 +96,27 @@ impl MetalBackend {
     pub fn live_allocations(&self) -> usize {
         self.inner.live.lock().expect("allocation table poisoned").len()
     }
+
+    /// Bytes currently held in the reuse pool, for tests.
+    pub fn pooled_bytes(&self) -> usize {
+        self.inner.pool.lock().expect("pool poisoned").1
+    }
 }
 
 unsafe impl Allocator for MetalBackend {
     unsafe fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let len = layout.size().max(1);
-        let buffer =
-            self.inner.device.new_buffer(len as u64, MTLResourceOptions::StorageModeShared);
+        let pooled = {
+            let mut pool = self.inner.pool.lock().expect("pool poisoned");
+            let taken = pool.0.get_mut(&len).and_then(Vec::pop);
+            if taken.is_some() {
+                pool.1 -= len;
+            }
+            taken
+        };
+        let buffer = pooled.unwrap_or_else(|| {
+            self.inner.device.new_buffer(len as u64, MTLResourceOptions::StorageModeShared)
+        });
         let ptr = NonNull::new(buffer.contents().cast::<u8>()).ok_or(AllocError)?;
         // Metal hands back page-aligned mappings, so any alignment slop asks
         // for is already satisfied; refuse rather than hand back a lie if not.
@@ -104,11 +132,19 @@ unsafe impl Allocator for MetalBackend {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
-        self.inner
+        let freed = self
+            .inner
             .live
             .lock()
             .expect("allocation table poisoned")
             .remove(&(ptr.as_ptr() as usize));
+        if let Some(Allocation { buffer, len }) = freed {
+            let mut pool = self.inner.pool.lock().expect("pool poisoned");
+            if pool.1 + len <= POOL_BUDGET_BYTES {
+                pool.1 += len;
+                pool.0.entry(len).or_default().push(buffer);
+            }
+        }
     }
 }
 

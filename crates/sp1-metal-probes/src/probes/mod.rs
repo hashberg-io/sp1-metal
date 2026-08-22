@@ -6,7 +6,9 @@ pub mod gkr;
 pub mod fold;
 pub mod imul;
 pub mod launch;
+pub mod merkle;
 pub mod poseidon2;
+pub mod sumcheck;
 pub mod triad;
 pub mod zerocheck;
 
