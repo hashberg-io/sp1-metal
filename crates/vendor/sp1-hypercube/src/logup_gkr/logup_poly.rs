@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use slop_algebra::{
     interpolate_univariate_polynomial, ExtensionField, Field, UnivariatePolynomial,
 };
-use slop_multilinear::{Mle, Point};
+use slop_multilinear::{Mle, PaddedMle, Point};
 use slop_sumcheck::{ComponentPoly, SumcheckPoly, SumcheckPolyBase, SumcheckPolyFirstRound};
 
 use super::{InteractionLayer, LogUpGkrCpuLayer};
@@ -29,6 +29,18 @@ pub trait LogupRoundOps<F: Field, K: ExtensionField<F>>: Sized + Send + Sync + '
     /// denominator evaluation at zero, the same at the pair-sum point, and the
     /// sum of the eq polynomial, which corrects for padded rows.
     fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K);
+
+    /// Fixes a numerator's last variable. Reads as much data as `round_evals`
+    /// does, so a backend that moves only the reduction leaves half the round
+    /// behind.
+    fn fix_numerator(mle: &PaddedMle<F>, alpha: K) -> PaddedMle<K> {
+        mle.fix_last_variable(alpha)
+    }
+
+    /// Fixes a denominator's last variable.
+    fn fix_denominator(mle: &PaddedMle<K>, alpha: K) -> PaddedMle<K> {
+        mle.fix_last_variable(alpha)
+    }
 }
 
 /// The reduction as the CPU prover performs it, over rayon.
@@ -36,8 +48,21 @@ pub trait LogupRoundOps<F: Field, K: ExtensionField<F>>: Sized + Send + Sync + '
 pub struct CpuRoundOps;
 
 impl<F: Field, K: ExtensionField<F>> LogupRoundOps<F, K> for CpuRoundOps {
-    #[allow(clippy::too_many_lines)]
     fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K) {
+        cpu_round_evals(poly)
+    }
+}
+
+/// The reduction as the CPU prover performs it, as a free function generic in
+/// the backend marker, so that a backend can defer to it for the layer shapes
+/// it does not handle itself.
+#[allow(clippy::too_many_lines)]
+pub fn cpu_round_evals<F, K, B>(poly: &LogupRoundPolynomial<F, K, B>) -> (K, K, K)
+where
+    F: Field,
+    K: ExtensionField<F>,
+{
+    {
         let (eval_zero, eval_half, eq_sum) = match &poly.layer {
             PolynomialLayer::InteractionLayer(layer) => {
                 let numerator_0 = layer.numerator_0.clone();
@@ -428,25 +453,19 @@ impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps<F, K> + LogupRoundOps<K, K
             }
             PolynomialLayer::CircuitLayer(layer) => {
                 if layer.num_row_variables == 1 {
-                    let numerator_0: Vec<_> = layer
-                        .numerator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
+                    let numerator_0: Vec<_> =
+                        layer.numerator_0.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
                     let denominator_0: Vec<_> = layer
                         .denominator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
+                        .iter()
+                        .map(|mle| B::fix_denominator(mle, alpha))
                         .collect();
-                    let numerator_1: Vec<_> = layer
-                        .numerator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
+                    let numerator_1: Vec<_> =
+                        layer.numerator_1.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
                     let denominator_1: Vec<_> = layer
                         .denominator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
+                        .iter()
+                        .map(|mle| B::fix_denominator(mle, alpha))
                         .collect();
 
                     let mut numerator_0_interactions: Vec<_> = numerator_0
@@ -502,28 +521,22 @@ impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps<F, K> + LogupRoundOps<K, K
                         ops: PhantomData,
                     }
                 } else {
-                    let numerator_0: Vec<_> = layer
-                        .numerator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
+                    let numerator_0: Vec<_> =
+                        layer.numerator_0.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
 
                     let denominator_0: Vec<_> = layer
                         .denominator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
+                        .iter()
+                        .map(|mle| B::fix_denominator(mle, alpha))
                         .collect();
 
-                    let numerator_1: Vec<_> = layer
-                        .numerator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
+                    let numerator_1: Vec<_> =
+                        layer.numerator_1.iter().map(|mle| B::fix_numerator(mle, alpha)).collect();
 
                     let denominator_1: Vec<_> = layer
                         .denominator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
+                        .iter()
+                        .map(|mle| B::fix_denominator(mle, alpha))
                         .collect();
 
                     let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
