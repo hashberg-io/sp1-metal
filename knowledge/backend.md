@@ -151,6 +151,16 @@ So every "the Metal prover is slow" result from that stretch measured a corrupte
 
 Real defects were found and fixed along the way and all of them stand — the fixes below are each backed by an isolated measurement, not by the integration runs. But no conclusion about integrated performance should be drawn from that stretch, and none is drawn here.
 
+### What the integration actually does, measured properly
+
+Run from `target/release`, the Metal-enabled prover **stalls**. Not slowly: it stops.
+
+A sample of the live process shows 36 threads — the main thread, 16 tokio workers, the rayon pool — every one of them parked for the whole sampling window, with no frame anywhere in `sp1_hypercube`, in this crate, or in Metal. Nothing is running and nothing completes. The CPU build proves and verifies the same workload in 18.2 s.
+
+Every thread parked with no panic message on stderr is the signature of a task that died where its failure was swallowed, leaving the pipeline waiting on a sender that will never send. SP1 runs its shard proving through `spawn_blocking`, where a panic becomes a `JoinError` rather than a crash. That is a hypothesis, not a finding.
+
+The next step is specific and small: build the host in debug with `RUST_BACKTRACE=full` and stderr unbuffered, and run the same workload. If a task is panicking, that will name the line.
+
 What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
 
 Under `RUST_LOGGER=flat RUST_LOG=debug` the CPU build emits 211 span lines and finishes while the Metal build emits none, which looked like evidence of a stall and was not: the process was being killed before its buffered output was flushed. Silence from a killed process says nothing about progress, and the exit status says everything.
