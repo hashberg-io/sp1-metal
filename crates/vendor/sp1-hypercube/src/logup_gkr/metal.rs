@@ -23,6 +23,7 @@
 //! construction, and the point of moving a phase to the GPU is the part that is
 //! not.
 
+use rayon::prelude::*;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
@@ -251,10 +252,12 @@ where
 {
     let rows = n0.len() / width;
     let n_pairs = (rows.div_ceil(2)).min(eq_row.len() / 2);
-    let mut eval_0 = EF::zero();
-    let mut eval_half = EF::zero();
-    let mut eq_sum = EF::zero();
-    for p in 0..n_pairs {
+    // Over rayon, as upstream's own reduction is: a serial fallback here would
+    // be slower than the code it stands in for, which is the opposite of the
+    // point.
+    (0..n_pairs)
+        .into_par_iter()
+        .map(|p| {
         let eq0 = eq_row[2 * p];
         let eqs = eq0 + eq_row[2 * p + 1];
         let full = 2 * p + 1 < rows;
@@ -278,11 +281,12 @@ where
             s_denh += e * (b0s * b1s);
             s_eq += e * eqs;
         }
-        eval_0 += (s_num0 * lambda + s_den0) * eq0;
-        eval_half += (s_numh * lambda + s_denh) * eqs;
-        eq_sum += s_eq;
-    }
-    (eval_0, eval_half, eq_sum)
+            ((s_num0 * lambda + s_den0) * eq0, (s_numh * lambda + s_denh) * eqs, s_eq)
+        })
+        .reduce(
+            || (EF::zero(), EF::zero(), EF::zero()),
+            |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
+        )
 }
 
 /// The reduction for one circuit layer, one dispatch per chip.
