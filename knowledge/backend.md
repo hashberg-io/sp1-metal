@@ -161,6 +161,19 @@ With that fixed, the workload that had been hanging **proves and verifies in 15.
 
 Finding it took reading the CPU code against the kernel line by line rather than another experiment, after the threshold bisect had narrowed the failure to the dispatching path and the harness had ruled out size as the trigger. The parked-threads signature was a panic in a `spawn_blocking` task after all — swallowed, leaving the pipeline waiting on a sender that would never send.
 
+### End to end
+
+The same binary, back to back, on a core proof of a fibonacci guest:
+
+| | |
+|---|---|
+| every layer forced to the CPU | 15.70 s, 15.83 s |
+| the GPU path as configured | 15.01 s, 15.23 s |
+
+Both prove and verify. **The Metal GKR round runs inside a real SP1 proof and the proof is accepted**, which is the thing steps 6 and 7 existed to establish.
+
+Four percent is not a headline and should not be read as one. A core proof of a fibonacci guest barely exercises the phase: its layers are small, most fall below the dispatch threshold, and GKR is a much smaller share of it than the 46.8% the profiled compressed proof spends there. The 9.06x round factor is measured on shard-sized layers, which this workload does not produce, and the 8.15x the model projects from it is a projection about the profiled workload, not a result. Demonstrating that needs D7's workload regenerated — which is step 9, and is the next thing to do.
+
 It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
 
 That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding. At a threshold of 4,194,304 entries, where no layer in this workload reaches the GPU, the proof completes in 15.78 s; lower it and the stall returns.
