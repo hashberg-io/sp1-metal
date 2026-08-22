@@ -339,3 +339,67 @@ So the rule is not "memory-bound work cannot win" but something narrower and mor
 - **And some of it is not worth taking either way**: the Reed-Solomon encode measures 1.02x against a packed CPU, because the CPU is already at memory speed there and there is no arithmetic to win back.
 
 The paired figure is now **63.07 s against 24.53 s, 2.57x.**
+
+## 16. Residency, and a page-alignment rule that was never real
+
+The plan in `resident-plan.md` was written against three numbers: the GPU busy 4.3% of the proof, 163 GB uploaded to keep it that busy, and peak memory 24% *above* the CPU path rather than below it. Its thesis was that the pipeline is a sequence of host-resident values with GPU stages between them, and should be the reverse.
+
+The first thing built was the instrument the plan asked for, and it corrected all three numbers before a line of the re-architecture was written.
+
+**The counters could not see most of the backend.** They lived inside the GKR module and only ever recorded its own dispatches, so the zerocheck, the Merkle commitment and the jagged sumcheck contributed nothing to any figure the profiling host printed. They also added kernel *outputs* to the upload total, so a write counted as a read. Moved below the fork and split by phase, they say a proof reads 494 GB and writes 110 GB, not 163 GB of "uploads".
+
+**"GPU busy" was measuring the wrong thing twice over.** It summed each command buffer's execution interval, and with four shards proving at once a sum counts one device four times. The union of those intervals is the utilisation, and it was 22%, not 4.3%.
+
+### The rule that cost 155 GB of memcpy
+
+Every place the backend handed a slice to Metal asked two questions before deciding it could avoid a copy: is the pointer page-aligned, and is the length a whole number of pages. Instrumenting the two separately showed the pointer passes 98.4% of the time and the length 9.5%.
+
+Only the first is a real requirement. `newBufferWithBytesNoCopy` wires the pages spanning `[ptr, ptr + len)`; when the pointer starts a page, every page in that range holds at least one byte of the caller's own allocation and is therefore already mapped, so rounding up to a page boundary cannot reach unmapped memory. The length may be anything. A test in `sp1-metal-probes::nocopy` runs a kernel through such a buffer and checks it wrote the caller's `Vec`.
+
+The invented second question was expensive precisely because field arrays satisfy the first and fail the second: they are large enough that the allocator gives them their own mapping, and their length is a row count times an interaction count, which is a page multiple only by accident. It turned 155 GB per proof into memcpy — 96 GB in, 59 GB copied back out of staging buffers that existed only because of it.
+
+### What removing it did
+
+| | before | after |
+|---|---:|---:|
+| copying, thread-seconds | 8.74 | **0.04** |
+| bytes read that were copied | 96 GB | 0 |
+| bytes written that were copied back | 59 GB | 0.2 GB |
+| peak resident memory | 72.4 GB, +24% vs CPU | **44.9 GB, −22% vs CPU** |
+| wall, paired | 24.6 s vs 64.4 s, 2.60x | **18.5 s vs 62.9 s, 3.40x** |
+| thread-seconds, Metal arm | 65.4 | 53.1 |
+| `generate GKR circuit` | 1.22x | 1.90x |
+
+The memory result is the one worth dwelling on. A `StorageModeShared` buffer is process pages, so a value staged for the GPU existed twice: once in the `Vec` that owned it and once in the buffer that read it. The staging buffers *were* the extra 24%. Removing them took peak memory below the CPU path, which is the plan's target met outright and by a route it did not anticipate.
+
+Two smaller changes followed from the same instrument. The Merkle kernels now write their digest layers into the vectors the commitment hands back rather than into device buffers copied out afterwards, which was the last 9 GB. And each proving thread got its own command queue, since a queue runs its buffers in commit order and one shared queue made four independent shards take turns: blocked time fell from 7.3 thread-seconds to 5.8, though the wall did not move, because the waiting already overlapped other threads' work.
+
+### Why stages 2 to 4 of the plan should not be built
+
+Those stages exist to remove the cost of moving data between host and device. That cost is now 0.04 thread-seconds out of 53. Making `Mle` live in `MetalBackend` would remove buffer-object creation, measured at 0.03 thread-seconds, and nothing else — and it would cost the vendoring of `slop-multilinear`, because while `MetalBackend` satisfies `Backend` and `MleBaseBackend` is four shape methods away, every operation the layer code actually calls — `inner`, `num_polynomials`, `fix_last_variable`, `From<RowMajorMatrix>`, `partial_lagrange` — is implemented for `CpuBackend` alone.
+
+The plan named an abandon condition for the opposite outcome, stage 1 failing to move the numbers. This is the mirror image: stage 1 moved them so far, by a cheaper route, that the rest has nothing left to win.
+
+What remains is not data movement. Of 53 thread-seconds on the Metal arm, about 6 are the GPU running, 6 are blocked waiting on it, and the rest is CPU arithmetic that has never been ported. Going faster from here means porting more work, not moving less data.
+
+### Acceptance, re-run
+
+The same three axes and the same paired method, every switch set together so the CPU arm really is one:
+
+| axis | point | CPU | Metal | |
+|---|---|---:|---:|---:|
+| shard size | 1 MiB | 62.37 s | 19.37 s | 3.220x |
+| | 2 MiB | 63.40 s | 19.59 s | 3.236x |
+| | 4 MiB | 63.50 s | 18.55 s | **3.423x** |
+| | 8 MiB | 62.65 s | 18.78 s | 3.336x |
+| | 16 MiB | 62.65 s | 19.03 s | 3.332x |
+| work | fib n=250k | 17.08 s | 9.39 s | 1.820x |
+| | fib n=500k | 24.64 s | 12.30 s | 2.003x |
+| | fib n=1M | 39.12 s | 16.99 s | 2.302x |
+| | fib n=2M | 63.19 s | 19.82 s | 3.187x |
+| guest | mem n=400k | 36.05 s | 16.85 s | 2.139x |
+| | bits n=1M | 53.11 s | 18.52 s | 2.868x |
+
+The law holds and has moved up again: **flat in shard size** across a sixteen-fold range, **climbing with total work**. The envelope was 1.07 – 1.26x before any of this, 1.55 – 2.58x after the PCS opening, and is now **1.82 – 3.42x**.
+
+The climb with work has steepened once more, and for the same reason as before: what is left on the critical path is increasingly fixed cost, so a small proof pays a few seconds of constraint-kernel compilation that a large one amortises away. The floor rose most — 1.07x to 1.82x at the smallest size — because copying was a per-byte cost that small proofs could not amortise either.

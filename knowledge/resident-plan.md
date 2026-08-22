@@ -86,3 +86,29 @@ The one genuinely new risk is lifetime: a device-resident value whose host alloc
 If, after stage 1, the GPU busy fraction has not moved and the uploaded bytes have not fallen, then the cost is not where this plan says it is, and the plan should be abandoned rather than continued into stages 2-4. The measurement in stage 0 exists to make that call cheap.
 
 The honest ceiling: the phases that stay on the CPU by choice — trace generation, the Reed-Solomon encode, the scalar tails of every sumcheck — are about 10 thread-seconds together. If residency removed *everything* else, the wall would be bounded near 5 seconds, which is where D7's 5x lives. That is the case for doing this, and also the reason not to expect more than it.
+
+---
+
+## What happened
+
+Written after the work, against the same acceptance workload.
+
+**Stage 0 was built as specified and immediately corrected the three numbers this plan was written against.** The counters lived inside the GKR module, so the zerocheck, the commitment and the jagged sumcheck were absent from every figure above; and "GPU busy" summed each command buffer's interval across four proving threads, which counts one device four times. Read properly, the device was busy 22%, not 4.3%, and a proof moved 494 GB, not 163 GB.
+
+**Stage 1 was not needed in the form written here.** The instrument showed that the copying had a single cause: every upload site required the *length* to be a page multiple as well as the pointer, and only the pointer requirement is real. Removing the invented one took copying from 8.74 thread-seconds to 0.04 with no type changes at all, which is what the type changes were for.
+
+| | before | target | after |
+|---|---:|---:|---:|
+| device busy, fraction of wall | 4.3% (mismeasured; really 22.3%) | > 30% | 22.9% |
+| bytes uploaded per proof | 163.45 GB (mismeasured; really 494 GB read) | < 20 GB | 494 GB, at a cost of 0.04 thread-seconds |
+| peak resident memory | 72.4 GB (+24% vs CPU) | <= CPU path | **44.9 GB (-22% vs CPU)** |
+| `generate GKR circuit` | 1.22x | > 3x | 1.90x |
+| wall, acceptance workload | 2.60x | >= 4x | **3.40x** |
+
+The memory target is met, and by the mechanism this plan identified: a staged value existed twice on unified memory, and the staging buffers were the whole of the excess. The bytes-uploaded target turns out to have been a proxy for a cost rather than a cost — moving 494 GB is now cheaper than moving 163 GB was.
+
+**Stages 2 to 4 should not be built.** They exist to remove host-device round trips whose cost is now 0.04 thread-seconds out of 53. Making `Mle` live in `MetalBackend` would remove buffer-object creation, 0.03 thread-seconds, and would cost the vendoring of `slop-multilinear`: `MleBaseBackend` is four shape methods away, but `inner`, `num_polynomials`, `fix_last_variable`, `From<RowMajorMatrix>` and `partial_lagrange` are all `CpuBackend`-only, so every operation the layer code calls would have to be reimplemented.
+
+This plan named an abandon condition for stage 1 failing to move the numbers. The outcome is its mirror image, and the conclusion is the same: stop here.
+
+**What the ceiling actually is.** This plan estimated about 10 thread-seconds of work that stays on the CPU by choice. The real figure is roughly 40 of the 53 thread-seconds the Metal arm now spends: about 6 are the GPU running, about 6 are blocked waiting on it, and the rest is CPU arithmetic that was never ported -- the sumcheck scalar tails, the interaction layers, the Reed-Solomon encode, trace generation. Going beyond 3.4x means porting more of that, which is a different piece of work from this one.
