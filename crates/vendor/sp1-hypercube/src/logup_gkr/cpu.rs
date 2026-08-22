@@ -148,7 +148,14 @@ impl<F: Field, EF: ExtensionField<F>> LogupGkrCpuCircuit<F, EF> {
     }
 }
 
-pub(crate) fn prove_gkr_round<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F>>(
+/// `B` chooses where the round's reduction runs; the caller's choice of prover
+/// carries it through.
+pub(crate) fn prove_gkr_round<
+    F: Field,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F>,
+    B: crate::LogupRoundOps,
+>(
     circuit: GkrCircuitLayer<F, EF>,
     eval_point: &slop_multilinear::Point<EF>,
     numerator_eval: EF,
@@ -163,7 +170,7 @@ pub(crate) fn prove_gkr_round<F: Field, EF: ExtensionField<F>, Challenger: Field
                 eval_point.split_at(layer.num_interaction_variables);
             let eq_interaction = Mle::partial_lagrange(&interaction_point);
             let eq_row = Mle::partial_lagrange(&row_point);
-            let sumcheck_poly = LogupRoundPolynomial {
+            let sumcheck_poly = LogupRoundPolynomial::<_, _, B> {
                 layer: PolynomialLayer::CircuitLayer(layer),
                 eq_row: Arc::new(eq_row),
                 eq_interaction: Arc::new(eq_interaction),
@@ -171,6 +178,7 @@ pub(crate) fn prove_gkr_round<F: Field, EF: ExtensionField<F>, Challenger: Field
                 eq_adjustment: EF::one(),
                 padding_adjustment: EF::one(),
                 point: eval_point.clone(),
+                ops: std::marker::PhantomData,
             };
             let claim = numerator_eval * lambda + denominator_eval;
 
@@ -192,7 +200,7 @@ pub(crate) fn prove_gkr_round<F: Field, EF: ExtensionField<F>, Challenger: Field
                 eval_point.split_at(layer.num_interaction_variables);
             let eq_interaction = Mle::partial_lagrange(&interaction_point);
             let eq_row = Mle::partial_lagrange(&row_point);
-            let sumcheck_poly = LogupRoundPolynomial {
+            let sumcheck_poly = LogupRoundPolynomial::<_, _, B> {
                 layer: PolynomialLayer::CircuitLayer(layer),
                 eq_row: Arc::new(eq_row),
                 eq_interaction: Arc::new(eq_interaction),
@@ -200,6 +208,7 @@ pub(crate) fn prove_gkr_round<F: Field, EF: ExtensionField<F>, Challenger: Field
                 eq_adjustment: EF::one(),
                 padding_adjustment: EF::one(),
                 point: eval_point.clone(),
+                ops: std::marker::PhantomData,
             };
             let claim = numerator_eval * lambda + denominator_eval;
             let (sumcheck_proof, mut openings) = reduce_sumcheck_to_evaluation(

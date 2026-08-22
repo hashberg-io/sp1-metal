@@ -196,3 +196,9 @@ check-cfg = [
     "cfg(sp1_use_portable_executor)",
     "cfg(sp1_native_executor_available)",
 ]
+
+# crates.io packaging drops dev-dependencies, so the crate as published
+# cannot build its own tests. Restored, because those tests are how this fork
+# proves its changes leave the CPU path alone.
+[dev-dependencies]
+rand = "0.8"

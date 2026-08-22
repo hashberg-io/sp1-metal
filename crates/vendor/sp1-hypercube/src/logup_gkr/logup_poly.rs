@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -9,241 +10,46 @@ use slop_sumcheck::{ComponentPoly, SumcheckPoly, SumcheckPolyBase, SumcheckPolyF
 
 use super::{InteractionLayer, LogUpGkrCpuLayer};
 
-/// Polynomial representing a round of the GKR circuit.
-pub struct LogupRoundPolynomial<F, EF> {
-    /// The values of the numerator and denominator polynomials
-    pub layer: PolynomialLayer<F, EF>,
-    /// The partial lagrange evaluation for the row variables
-    pub eq_row: Arc<Mle<EF>>,
-    /// The partial lagrange evaluation for the interaction variables
-    pub eq_interaction: Arc<Mle<EF>>,
-    /// The correction term for the eq polynomial.
-    pub eq_adjustment: EF,
-    /// The correction term for padding
-    pub padding_adjustment: EF,
-    /// The batching factor for the numerator and denominator claims.
-    pub lambda: EF,
-    /// The random point for the current GKR round.
-    pub point: Point<EF>,
+
+/// The device-dependent half of a logup GKR sumcheck round.
+///
+/// Everything structural about a round is the same wherever the arithmetic
+/// runs: the layer transitions, the padding and eq adjustments, and the
+/// interpolation of the round message from its evaluations. What differs is a
+/// single reduction over the whole layer, and that is where the round's time
+/// goes -- this is the prover's largest phase.
+///
+/// This trait is that boundary, and it is the only thing a backend has to
+/// supply to move the phase off the CPU.
+pub trait LogupRoundOps: Sized + Send + Sync + 'static {
+    /// The three sums a round message is built from: the batched numerator and
+    /// denominator evaluation at zero, the same at the pair-sum point, and the
+    /// sum of the eq polynomial, which corrects for padded rows.
+    fn round_evals<F, K>(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K)
+    where
+        F: Field,
+        K: ExtensionField<F>;
 }
 
-/// A layer of the GKR circuit for the `LogupRoundPolynomial`.
-pub enum PolynomialLayer<F, EF> {
-    /// A layer of the GKR circuit.
-    CircuitLayer(LogUpGkrCpuLayer<F, EF>),
-    /// An interaction layer of the GKR circuit (`num_row_variables` == 1).
-    InteractionLayer(InteractionLayer<F, EF>),
-}
+/// The reduction as the CPU prover performs it, over rayon.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CpuRoundOps;
 
-impl<F: Field, EF: ExtensionField<F>> SumcheckPolyBase for LogupRoundPolynomial<F, EF> {
-    fn num_variables(&self) -> u32 {
-        self.eq_row.num_variables() + self.eq_interaction.num_variables()
-    }
-}
-
-impl<K: Field> ComponentPoly<K> for LogupRoundPolynomial<K, K> {
-    fn get_component_poly_evals(&self) -> Vec<K> {
-        match &self.layer {
-            PolynomialLayer::InteractionLayer(layer) => {
-                assert_eq!(layer.numerator_0.guts().as_slice().len(), 1);
-                let numerator_0 = layer.numerator_0.guts().as_slice()[0];
-                let denominator_0 = layer.denominator_0.guts().as_slice()[0];
-                let numerator_1 = layer.numerator_1.guts().as_slice()[0];
-                let denominator_1 = layer.denominator_1.guts().as_slice()[0];
-                vec![numerator_0, denominator_0, numerator_1, denominator_1]
-            }
-            PolynomialLayer::CircuitLayer(_) => unreachable!(),
-        }
-    }
-}
-
-impl<K: Field> SumcheckPoly<K> for LogupRoundPolynomial<K, K> {
-    fn fix_last_variable(self, alpha: K) -> Self {
-        self.fix_t_variables(alpha, 1)
-    }
-
-    fn sum_as_poly_in_last_variable(&self, claim: Option<K>) -> UnivariatePolynomial<K> {
-        self.sum_as_poly_in_last_t_variables(claim, 1)
-    }
-}
-
-impl<K: ExtensionField<F>, F: Field> SumcheckPolyFirstRound<K> for LogupRoundPolynomial<F, K> {
-    type NextRoundPoly = LogupRoundPolynomial<K, K>;
+impl LogupRoundOps for CpuRoundOps {
     #[allow(clippy::too_many_lines)]
-    fn fix_t_variables(mut self, alpha: K, t: usize) -> Self::NextRoundPoly {
-        assert_eq!(t, 1);
-        // Remove the last coordinate from the point
-        let last_coordinate = self.point.remove_last_coordinate();
-        let padding_adjustment = self.padding_adjustment
-            * (last_coordinate * alpha + (K::one() - last_coordinate) * (K::one() - alpha));
-        match self.layer {
-            PolynomialLayer::InteractionLayer(layer) => {
-                let numerator_0 =
-                    Arc::new(layer.numerator_0.as_ref().fix_last_variable::<K>(alpha));
-                let denominator_0 =
-                    Arc::new(layer.denominator_0.as_ref().fix_last_variable::<K>(alpha));
-                let numerator_1 =
-                    Arc::new(layer.numerator_1.as_ref().fix_last_variable::<K>(alpha));
-                let denominator_1 =
-                    Arc::new(layer.denominator_1.as_ref().fix_last_variable::<K>(alpha));
-
-                let new_layer =
-                    InteractionLayer { numerator_0, denominator_0, numerator_1, denominator_1 };
-
-                let eq_interaction =
-                    Arc::new(self.eq_interaction.as_ref().fix_last_variable(alpha));
-
-                LogupRoundPolynomial {
-                    layer: PolynomialLayer::InteractionLayer(new_layer),
-                    eq_row: self.eq_row,
-                    eq_interaction,
-                    eq_adjustment: self.eq_adjustment,
-                    padding_adjustment,
-                    lambda: self.lambda,
-                    point: self.point,
-                }
-            }
-            PolynomialLayer::CircuitLayer(layer) => {
-                if layer.num_row_variables == 1 {
-                    let numerator_0: Vec<_> = layer
-                        .numerator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-                    let denominator_0: Vec<_> = layer
-                        .denominator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-                    let numerator_1: Vec<_> = layer
-                        .numerator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-                    let denominator_1: Vec<_> = layer
-                        .denominator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-
-                    let mut numerator_0_interactions: Vec<_> = numerator_0
-                        .into_iter()
-                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
-                        .collect();
-                    numerator_0_interactions
-                        .resize(1 << layer.num_interaction_variables, K::zero());
-
-                    let mut numerator_1_interactions: Vec<_> = numerator_1
-                        .into_iter()
-                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
-                        .collect();
-                    numerator_1_interactions
-                        .resize(1 << layer.num_interaction_variables, K::zero());
-
-                    let mut denominator_0_interactions: Vec<_> = denominator_0
-                        .into_iter()
-                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
-                        .collect();
-                    denominator_0_interactions
-                        .resize(1 << layer.num_interaction_variables, K::one());
-
-                    let mut denominator_1_interactions: Vec<_> = denominator_1
-                        .into_iter()
-                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
-                        .collect();
-                    denominator_1_interactions
-                        .resize(1 << layer.num_interaction_variables, K::one());
-
-                    let numerator_0_mle = Arc::new(Mle::from(numerator_0_interactions));
-                    let denominator_0_mle = Arc::new(Mle::from(denominator_0_interactions));
-                    let numerator_1_mle = Arc::new(Mle::from(numerator_1_interactions));
-                    let denominator_1_mle = Arc::new(Mle::from(denominator_1_interactions));
-
-                    let new_layer = InteractionLayer {
-                        numerator_0: numerator_0_mle,
-                        denominator_0: denominator_0_mle,
-                        numerator_1: numerator_1_mle,
-                        denominator_1: denominator_1_mle,
-                    };
-
-                    let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
-
-                    LogupRoundPolynomial {
-                        layer: PolynomialLayer::InteractionLayer(new_layer),
-                        eq_row,
-                        eq_interaction: self.eq_interaction,
-                        eq_adjustment: padding_adjustment,
-                        padding_adjustment: K::one(),
-                        lambda: self.lambda,
-                        point: self.point,
-                    }
-                } else {
-                    let numerator_0: Vec<_> = layer
-                        .numerator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-
-                    let denominator_0: Vec<_> = layer
-                        .denominator_0
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-
-                    let numerator_1: Vec<_> = layer
-                        .numerator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-
-                    let denominator_1: Vec<_> = layer
-                        .denominator_1
-                        .into_iter()
-                        .map(|mle| mle.fix_last_variable(alpha))
-                        .collect();
-
-                    let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
-
-                    let new_layer = LogUpGkrCpuLayer {
-                        numerator_0,
-                        denominator_0,
-                        numerator_1,
-                        denominator_1,
-                        num_row_variables: layer.num_row_variables - 1,
-                        num_interaction_variables: layer.num_interaction_variables,
-                    };
-
-                    LogupRoundPolynomial {
-                        layer: PolynomialLayer::CircuitLayer(new_layer),
-                        eq_row,
-                        eq_interaction: self.eq_interaction,
-                        eq_adjustment: self.eq_adjustment,
-                        padding_adjustment,
-                        lambda: self.lambda,
-                        point: self.point,
-                    }
-                }
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn sum_as_poly_in_last_t_variables(
-        &self,
-        claim: Option<K>,
-        t: usize,
-    ) -> UnivariatePolynomial<K> {
-        assert_eq!(t, 1);
-        let claim = claim.unwrap();
-
-        let (mut eval_zero, mut eval_half, eq_sum) = match &self.layer {
+    fn round_evals<F, K>(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K)
+    where
+        F: Field,
+        K: ExtensionField<F>,
+    {
+        let (eval_zero, eval_half, eq_sum) = match &poly.layer {
             PolynomialLayer::InteractionLayer(layer) => {
                 let numerator_0 = layer.numerator_0.clone();
                 let numerator_1 = layer.numerator_1.clone();
                 let denominator_0 = layer.denominator_0.clone();
                 let denominator_1 = layer.denominator_1.clone();
-                let eq_interaction = self.eq_interaction.clone();
-                let lambda = self.lambda;
+                let eq_interaction = poly.eq_interaction.clone();
+                let lambda = poly.lambda;
                 let numerator_eval_0 = numerator_0
                     .guts()
                     .as_slice()
@@ -316,11 +122,11 @@ impl<K: ExtensionField<F>, F: Field> SumcheckPolyFirstRound<K> for LogupRoundPol
                 let numerator_1 = layer.numerator_1.clone();
                 let denominator_0 = layer.denominator_0.clone();
                 let denominator_1 = layer.denominator_1.clone();
-                let eq_row = self.eq_row.clone();
+                let eq_row = poly.eq_row.clone();
                 // println!("eq_row.num_non_zero_entries(): {:?}", eq_row.num_non_zero_entries());
                 assert!(eq_row.num_non_zero_entries().is_multiple_of(2));
-                let eq_interaction = self.eq_interaction.clone();
-                let lambda = self.lambda;
+                let eq_interaction = poly.eq_interaction.clone();
+                let lambda = poly.lambda;
 
                 let mut interaction_offset = 0;
                 let mut eval_0 = K::zero();
@@ -516,6 +322,250 @@ impl<K: ExtensionField<F>, F: Field> SumcheckPolyFirstRound<K> for LogupRoundPol
                 (eval_0, eval_half, eq_sum)
             }
         };
+        (eval_zero, eval_half, eq_sum)
+    }
+}
+
+/// Polynomial representing a round of the GKR circuit.
+///
+/// `B` selects where the round's reduction runs; it defaults to the CPU, so
+/// every existing use of this type is unchanged.
+pub struct LogupRoundPolynomial<F, EF, B = CpuRoundOps> {
+    /// The values of the numerator and denominator polynomials
+    pub layer: PolynomialLayer<F, EF>,
+    /// The partial lagrange evaluation for the row variables
+    pub eq_row: Arc<Mle<EF>>,
+    /// The partial lagrange evaluation for the interaction variables
+    pub eq_interaction: Arc<Mle<EF>>,
+    /// The correction term for the eq polynomial.
+    pub eq_adjustment: EF,
+    /// The correction term for padding
+    pub padding_adjustment: EF,
+    /// The batching factor for the numerator and denominator claims.
+    pub lambda: EF,
+    /// The random point for the current GKR round.
+    pub point: Point<EF>,
+    /// Where the round's reduction runs.
+    pub ops: PhantomData<B>,
+}
+
+/// A layer of the GKR circuit for the `LogupRoundPolynomial`.
+pub enum PolynomialLayer<F, EF> {
+    /// A layer of the GKR circuit.
+    CircuitLayer(LogUpGkrCpuLayer<F, EF>),
+    /// An interaction layer of the GKR circuit (`num_row_variables` == 1).
+    InteractionLayer(InteractionLayer<F, EF>),
+}
+
+impl<F: Field, EF: ExtensionField<F>, B: LogupRoundOps> SumcheckPolyBase
+    for LogupRoundPolynomial<F, EF, B>
+{
+    fn num_variables(&self) -> u32 {
+        self.eq_row.num_variables() + self.eq_interaction.num_variables()
+    }
+}
+
+impl<K: Field, B: LogupRoundOps> ComponentPoly<K> for LogupRoundPolynomial<K, K, B> {
+    fn get_component_poly_evals(&self) -> Vec<K> {
+        match &self.layer {
+            PolynomialLayer::InteractionLayer(layer) => {
+                assert_eq!(layer.numerator_0.guts().as_slice().len(), 1);
+                let numerator_0 = layer.numerator_0.guts().as_slice()[0];
+                let denominator_0 = layer.denominator_0.guts().as_slice()[0];
+                let numerator_1 = layer.numerator_1.guts().as_slice()[0];
+                let denominator_1 = layer.denominator_1.guts().as_slice()[0];
+                vec![numerator_0, denominator_0, numerator_1, denominator_1]
+            }
+            PolynomialLayer::CircuitLayer(_) => unreachable!(),
+        }
+    }
+}
+
+impl<K: Field, B: LogupRoundOps> SumcheckPoly<K> for LogupRoundPolynomial<K, K, B> {
+    fn fix_last_variable(self, alpha: K) -> Self {
+        self.fix_t_variables(alpha, 1)
+    }
+
+    fn sum_as_poly_in_last_variable(&self, claim: Option<K>) -> UnivariatePolynomial<K> {
+        self.sum_as_poly_in_last_t_variables(claim, 1)
+    }
+}
+
+impl<K: ExtensionField<F>, F: Field, B: LogupRoundOps> SumcheckPolyFirstRound<K>
+    for LogupRoundPolynomial<F, K, B>
+{
+    type NextRoundPoly = LogupRoundPolynomial<K, K, B>;
+    #[allow(clippy::too_many_lines)]
+    fn fix_t_variables(mut self, alpha: K, t: usize) -> Self::NextRoundPoly {
+        assert_eq!(t, 1);
+        // Remove the last coordinate from the point
+        let last_coordinate = self.point.remove_last_coordinate();
+        let padding_adjustment = self.padding_adjustment
+            * (last_coordinate * alpha + (K::one() - last_coordinate) * (K::one() - alpha));
+        match self.layer {
+            PolynomialLayer::InteractionLayer(layer) => {
+                let numerator_0 =
+                    Arc::new(layer.numerator_0.as_ref().fix_last_variable::<K>(alpha));
+                let denominator_0 =
+                    Arc::new(layer.denominator_0.as_ref().fix_last_variable::<K>(alpha));
+                let numerator_1 =
+                    Arc::new(layer.numerator_1.as_ref().fix_last_variable::<K>(alpha));
+                let denominator_1 =
+                    Arc::new(layer.denominator_1.as_ref().fix_last_variable::<K>(alpha));
+
+                let new_layer =
+                    InteractionLayer { numerator_0, denominator_0, numerator_1, denominator_1 };
+
+                let eq_interaction =
+                    Arc::new(self.eq_interaction.as_ref().fix_last_variable(alpha));
+
+                LogupRoundPolynomial {
+                    layer: PolynomialLayer::InteractionLayer(new_layer),
+                    eq_row: self.eq_row,
+                    eq_interaction,
+                    eq_adjustment: self.eq_adjustment,
+                    padding_adjustment,
+                    lambda: self.lambda,
+                    point: self.point,
+                    ops: PhantomData,
+                }
+            }
+            PolynomialLayer::CircuitLayer(layer) => {
+                if layer.num_row_variables == 1 {
+                    let numerator_0: Vec<_> = layer
+                        .numerator_0
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+                    let denominator_0: Vec<_> = layer
+                        .denominator_0
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+                    let numerator_1: Vec<_> = layer
+                        .numerator_1
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+                    let denominator_1: Vec<_> = layer
+                        .denominator_1
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+
+                    let mut numerator_0_interactions: Vec<_> = numerator_0
+                        .into_iter()
+                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
+                        .collect();
+                    numerator_0_interactions
+                        .resize(1 << layer.num_interaction_variables, K::zero());
+
+                    let mut numerator_1_interactions: Vec<_> = numerator_1
+                        .into_iter()
+                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
+                        .collect();
+                    numerator_1_interactions
+                        .resize(1 << layer.num_interaction_variables, K::zero());
+
+                    let mut denominator_0_interactions: Vec<_> = denominator_0
+                        .into_iter()
+                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
+                        .collect();
+                    denominator_0_interactions
+                        .resize(1 << layer.num_interaction_variables, K::one());
+
+                    let mut denominator_1_interactions: Vec<_> = denominator_1
+                        .into_iter()
+                        .flat_map(|mle| mle.eval_at::<K>(&Point::from(vec![])).to_vec())
+                        .collect();
+                    denominator_1_interactions
+                        .resize(1 << layer.num_interaction_variables, K::one());
+
+                    let numerator_0_mle = Arc::new(Mle::from(numerator_0_interactions));
+                    let denominator_0_mle = Arc::new(Mle::from(denominator_0_interactions));
+                    let numerator_1_mle = Arc::new(Mle::from(numerator_1_interactions));
+                    let denominator_1_mle = Arc::new(Mle::from(denominator_1_interactions));
+
+                    let new_layer = InteractionLayer {
+                        numerator_0: numerator_0_mle,
+                        denominator_0: denominator_0_mle,
+                        numerator_1: numerator_1_mle,
+                        denominator_1: denominator_1_mle,
+                    };
+
+                    let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
+
+                    LogupRoundPolynomial {
+                        layer: PolynomialLayer::InteractionLayer(new_layer),
+                        eq_row,
+                        eq_interaction: self.eq_interaction,
+                        eq_adjustment: padding_adjustment,
+                        padding_adjustment: K::one(),
+                        lambda: self.lambda,
+                        point: self.point,
+                        ops: PhantomData,
+                    }
+                } else {
+                    let numerator_0: Vec<_> = layer
+                        .numerator_0
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+
+                    let denominator_0: Vec<_> = layer
+                        .denominator_0
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+
+                    let numerator_1: Vec<_> = layer
+                        .numerator_1
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+
+                    let denominator_1: Vec<_> = layer
+                        .denominator_1
+                        .into_iter()
+                        .map(|mle| mle.fix_last_variable(alpha))
+                        .collect();
+
+                    let eq_row = Arc::new(self.eq_row.as_ref().fix_last_variable(alpha));
+
+                    let new_layer = LogUpGkrCpuLayer {
+                        numerator_0,
+                        denominator_0,
+                        numerator_1,
+                        denominator_1,
+                        num_row_variables: layer.num_row_variables - 1,
+                        num_interaction_variables: layer.num_interaction_variables,
+                    };
+
+                    LogupRoundPolynomial {
+                        layer: PolynomialLayer::CircuitLayer(new_layer),
+                        eq_row,
+                        eq_interaction: self.eq_interaction,
+                        eq_adjustment: self.eq_adjustment,
+                        padding_adjustment,
+                        lambda: self.lambda,
+                        point: self.point,
+                        ops: PhantomData,
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn sum_as_poly_in_last_t_variables(
+        &self,
+        claim: Option<K>,
+        t: usize,
+    ) -> UnivariatePolynomial<K> {
+        assert_eq!(t, 1);
+        let claim = claim.unwrap();
+
+        let (mut eval_zero, mut eval_half, eq_sum) = B::round_evals(self);
 
         // Correct the evaluations by the sum of the eq polynomial, which accounts for the
         // contribution of padded row for the denominator expression
@@ -694,6 +744,7 @@ mod tests {
             padding_adjustment: EF::one(),
             lambda,
             point: poly_point,
+            ops: PhantomData::<CpuRoundOps>,
         };
 
         let PolynomialLayer::CircuitLayer(layer) = &first_polynomial.layer else {
@@ -830,6 +881,7 @@ mod tests {
             padding_adjustment: EF::one(),
             lambda,
             point: poly_point.clone(),
+            ops: PhantomData::<CpuRoundOps>,
         };
 
         let total_eq = Mle::partial_lagrange(&poly_point);
@@ -1172,7 +1224,7 @@ mod tests {
         let mut eval_point = first_eval_point.clone();
 
         for layer in layers {
-            let round_proof = prove_gkr_round(
+            let round_proof = prove_gkr_round::<_, _, _, CpuRoundOps>(
                 layer,
                 &eval_point,
                 numerator_eval,

@@ -15,17 +15,19 @@ use crate::{
 use super::{LogUpEvaluations, LogUpGkrOutput, LogupGkrProof, LogupGkrRoundProof};
 
 /// TODO
-pub struct GkrProverImpl<GC: IopCtx, SC: ShardContext<GC>> {
+pub struct GkrProverImpl<GC: IopCtx, SC: ShardContext<GC>, B = crate::CpuRoundOps> {
     /// TODO
     trace_generator: LogupGkrCpuTraceGenerator<GC::F, GC::EF, SC::Air>,
+    /// Where each round's reduction runs.
+    ops: std::marker::PhantomData<B>,
 }
 
 /// TODO
-impl<GC: IopCtx, SC: ShardContext<GC>> GkrProverImpl<GC, SC> {
+impl<GC: IopCtx, SC: ShardContext<GC>, B: crate::LogupRoundOps> GkrProverImpl<GC, SC, B> {
     /// TODO
     #[must_use]
     pub fn new(trace_generator: LogupGkrCpuTraceGenerator<GC::F, GC::EF, SC::Air>) -> Self {
-        Self { trace_generator }
+        Self { trace_generator, ops: std::marker::PhantomData }
     }
 
     /// TODO
@@ -44,7 +46,7 @@ impl<GC: IopCtx, SC: ShardContext<GC>> GkrProverImpl<GC, SC> {
         let mut eval_point = eval_point;
         while let Some(layer) = circuit.next_layer() {
             let round_proof =
-                prove_gkr_round(layer, &eval_point, numerator_eval, denominator_eval, challenger);
+                prove_gkr_round::<_, _, _, B>(layer, &eval_point, numerator_eval, denominator_eval, challenger);
             // Observe the prover message.
             challenger.observe_ext_element(round_proof.numerator_0);
             challenger.observe_ext_element(round_proof.numerator_1);

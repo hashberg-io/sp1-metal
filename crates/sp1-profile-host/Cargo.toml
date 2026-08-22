@@ -13,3 +13,8 @@ anyhow = "1"
 bincode = "1.3.3"
 sp1-sdk = "=6.4.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Prove through the fork in crates/vendor, not the published crate, so that
+# what this host measures is what this project builds.
+[patch.crates-io]
+sp1-hypercube = { path = "../vendor/sp1-hypercube" }
