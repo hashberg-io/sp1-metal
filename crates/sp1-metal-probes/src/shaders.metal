@@ -964,3 +964,21 @@ kernel void merkle_finalize(device const uint* root [[buffer(0)]],
         out[i] = s[i];
     }
 }
+
+// Gathers one tensor's columns into the interleaved row-major layout the leaf
+// hash reads. slop hashes the concatenation of every tensor's row, and the
+// tensors arrive as separate buffers.
+kernel void merkle_gather(device const uint* src [[buffer(0)]],
+                          device uint* dst [[buffer(1)]],
+                          constant uint& src_width [[buffer(2)]],
+                          constant uint& dst_width [[buffer(3)]],
+                          constant uint& col_offset [[buffer(4)]],
+                          constant uint& n [[buffer(5)]],
+                          uint gid [[thread_position_in_grid]]) {
+    if (gid >= n) {
+        return;
+    }
+    uint r = gid / src_width;
+    uint c = gid - r * src_width;
+    dst[r * dst_width + col_offset + c] = src[gid];
+}

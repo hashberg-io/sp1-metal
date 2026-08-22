@@ -5,6 +5,7 @@
 //! benchmark (large inputs, run explicitly via the `probes` binary).
 
 pub mod backend;
+pub mod commit;
 pub mod gpu;
 pub mod kb;
 pub mod packed;
