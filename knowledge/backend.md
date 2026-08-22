@@ -300,3 +300,19 @@ Section 8 said the reduction needed a transpiler that could not live in the fork
 **How it is checked.** Twice, independently. Before any of it was wired up, the generated reduction was compared against `increment_y_values` itself, pair by pair, for sixty-two chips, agreeing on all three points; that is the code the CPU path runs, not a second reading of the specification. And then the proof verifies.
 
 Zerocheck fell from 21.9 to 10.7 thread-seconds and the proof from 33.8 to 27.03 seconds: **63.33 s on the CPU against 27.03 s on Metal, 2.34x.**
+
+## 14. Acceptance, measured a third time
+
+The same three axes, the same paired method, every switch set together so the CPU arm is one:
+
+| axis | setting | CPU | Metal | |
+|---|---|---|---|---|
+| shard size | 1 MiB … 16 MiB, fib n=2M | 62.5 → 61.5 s | 27.6 → 27.2 s | 2.265 → 2.263 |
+| work | fib n=250k … 2M, 4 MiB shards | 16.8 → 62.8 s | 11.1 → 27.5 s | 1.507 → 2.287 |
+| guest | mem n=400k / bits n=1M | 35.1 / 52.3 s | 22.0 / 25.3 s | 1.596 / 2.069 |
+
+The law keeps its shape through all three measurements of it: **flat in shard size** — now +0.001x per doubling across a sixteen-fold range, which is as flat as this can be read — and **climbing with total work**, at +0.246x per doubling where it was +0.056x. The slope steepened because what is left on the critical path is increasingly fixed cost rather than per-shard work: a small proof now pays a few seconds compiling constraint kernels that a large one amortises away.
+
+Every point sits between **1.51x and 2.29x**, where the same study gave 1.07x to 1.26x at the start of this work and 1.40x to 1.93x in the middle of it.
+
+**What remains, in one place.** Of 71 thread-seconds over a 27 second wall: GKR 40.9%, the PCS opening 25.6%, zerocheck 15.2%, commit 12.6%. The opening is the largest untouched thing and the only one that cannot be reached the way everything else here was — `prove_trusted_evaluations` takes `Rounds<Evaluations<GC::EF>>`, which is `CpuBackend`, and `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself, so its data is CPU-backed by construction rather than by choice. Reaching it means forking `slop-jagged`, and that forfeits the property that made the commitment worth doing this way: it ships against unmodified upstream and survives a version bump.
