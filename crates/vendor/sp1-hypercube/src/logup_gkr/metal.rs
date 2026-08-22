@@ -71,6 +71,25 @@ fn layer_entries<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> usize {
         .sum()
 }
 
+/// Whether the chips big enough to dispatch account for most of the layer.
+///
+/// Chips below the threshold are summed by `cpu_chip`, which reproduces
+/// upstream's arithmetic but not its loop structure. Standing in for a little
+/// of the layer is fine; standing in for most of it is not, and in that case
+/// the whole layer goes back to upstream's own reduction untouched.
+fn worth_dispatching<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> bool {
+    let min = min_entries_for_gpu();
+    let (mut big, mut all) = (0usize, 0usize);
+    for m in mles {
+        let len = m.inner().as_ref().map_or(0, |i| i.guts().as_slice().len());
+        all += len;
+        if len >= min {
+            big += len;
+        }
+    }
+    all > 0 && big * 2 >= all
+}
+
 /// Shader source: the probe suite's field arithmetic verbatim, so the kernels
 /// here compute in the representation everything else was parity-checked in,
 /// plus the round kernels.
@@ -307,7 +326,11 @@ where
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
     let mut totals = (EF::zero(), EF::zero(), EF::zero());
-    let cb = ctx.queue.new_command_buffer();
+    // Created on first use, not up front: a command buffer that is never
+    // committed still occupies a slot in the queue, and a queue whose slots are
+    // all held blocks the next request for one. A layer whose chips all fall to
+    // the CPU asks for no dispatches at all.
+    let mut command_buffer: Option<&metal::CommandBufferRef> = None;
     let mut held: Vec<(Buffer, usize, Vec<Option<Buffer>>)> = Vec::new();
     for (((n0, n1), d0), d1) in
         numerators.0.iter().zip(numerators.1).zip(denominators.0).zip(denominators.1)
@@ -368,6 +391,7 @@ where
         let params =
             Params { n_pairs: n_pairs as u32, n_full_pairs: n_full as u32, width: width as u32 };
 
+        let cb = *command_buffer.get_or_insert_with(|| ctx.queue.new_command_buffer());
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(pso);
         for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1].into_iter().enumerate() {
@@ -392,9 +416,9 @@ where
         interaction_offset += width;
         let _ = numerator_words;
     }
-    if held.is_empty() {
+    let Some(cb) = command_buffer else {
         return totals;
-    }
+    };
     cb.commit();
     cb.wait_until_completed();
     for (partials, groups, _) in held {
@@ -542,6 +566,9 @@ fn is<A: 'static + ?Sized, B: 'static + ?Sized>() -> bool {
 fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
+            cpu_round_evals(poly)
+        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<BaseField>(
             &context().base,
             (&layer.numerator_0, &layer.numerator_1),
@@ -557,6 +584,9 @@ fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -
 fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
+            cpu_round_evals(poly)
+        }
         PolynomialLayer::CircuitLayer(layer) => circuit_layer::<EF>(
             &context().ext,
             (&layer.numerator_0, &layer.numerator_1),
