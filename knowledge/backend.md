@@ -130,11 +130,19 @@ Three rounds of fixes each moved it a long way and none was enough:
 
 The lesson is the one the challenger spike ended on, now at prover scale: the arithmetic was never the problem. Every gain here came from submitting less often, and every setback from a fixed cost paid per dispatch rather than per unit of work.
 
+- **A parallel fallback.** The per-chip CPU path was a serial loop where upstream's reduction is rayon-parallel, so every chip below the threshold was computed about ten times slower than if the seam had never been touched. This one was isolated by disabling the kernels entirely and finding the Metal build *still* slow, which is a diagnostic worth remembering.
+- **A command buffer taken only when there is a dispatch for it.** The reduction took one up front and returned without committing it whenever every chip fell to the CPU. An uncommitted command buffer holds a slot in its queue, and a queue with no free slots blocks the next request for one, so a proof stalled after the first few dozen such rounds.
+
 ### Where it stands
 
-The pieces are in place and correct — the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including mixed layers — and the isolated measurement is 9.06x on a shard-sized layer.
-Whether that survives integration is a question about scheduling, not arithmetic, and the answer at the last measurement was still no.
-What remains is not new capability but the same kind of work again: fewer submissions, fewer allocations, and a threshold chosen by measurement rather than by guess.
+The pieces are in place and correct: the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including layers whose chips straddle the threshold.
+In isolation the round is **9.06x**.
+
+**In a real proof it is still slower than the CPU, and the remaining cause is not identified.**
+After all five fixes above, a fibonacci core proof does not finish in 400 s where the CPU path takes 18.2 s.
+Each fix was a real defect with a measured cause, and each moved the number without reaching it; whatever is left has not been isolated, and it would be wrong to guess at it here.
+
+What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout. The next step is a profile of the Metal-enabled prover rather than another hypothesis: the span profiler that produced `results/profile.json` works on this build unchanged, and comparing its phase table against the CPU one would say directly which phase grew.
 
 ## 8 and 9: not reached
 
