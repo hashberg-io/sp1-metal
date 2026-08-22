@@ -24,6 +24,7 @@
 //! not.
 
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use metal::objc::{msg_send, sel, sel_impl};
@@ -173,6 +174,64 @@ fn context() -> &'static Context {
 /// the small per-chip slices a GKR layer is full of, costs more than the work.
 const SET_BYTES_LIMIT: usize = 4096;
 
+/// Staging buffers, kept and reused instead of made fresh for every upload.
+///
+/// A brand new `MTLBuffer` has cold pages, so `newBufferWithBytes` faults them
+/// in while it copies and reaches about a fifth of memcpy speed — measured at
+/// 21.7 GB/s against 91.2 GB/s into a buffer that has been written before.
+/// Since the copy is the largest cost on this path, that difference is worth
+/// more than everything the kernels do.
+///
+/// The buffers are per-thread and are only released at the start of the next
+/// operation, never after a wait. Every entry point here awaits its own work
+/// before returning, so at the moment one begins nothing from a previous call
+/// can still be reading them; releasing after a wait instead would be wrong for
+/// [`fix_layer`], which stages many folds before awaiting any of them.
+struct Arena {
+    bufs: Vec<Buffer>,
+    next: usize,
+}
+
+thread_local! {
+    static ARENA: RefCell<Arena> = const { RefCell::new(Arena { bufs: Vec::new(), next: 0 }) };
+}
+
+/// The most staging buffers one thread will hold. A layer stages four arrays
+/// per chip; past this an upload just makes its own buffer, so a pathological
+/// shape costs time rather than unbounded memory.
+const ARENA_SLOTS: usize = 96;
+
+/// Releases this thread's staging buffers for reuse. Sound only where no
+/// dispatch of ours is outstanding on this thread.
+fn arena_reset() {
+    ARENA.with(|a| a.borrow_mut().next = 0);
+}
+
+/// A staging buffer of at least `len` bytes, or `None` if this thread is
+/// already holding as many as it will.
+fn arena_take(len: usize) -> Option<Buffer> {
+    ARENA.with(|a| {
+        let mut a = a.borrow_mut();
+        let i = a.next;
+        if i >= ARENA_SLOTS {
+            return None;
+        }
+        a.next += 1;
+        let big_enough = a.bufs.get(i).is_some_and(|b| b.length() >= len as u64);
+        if !big_enough {
+            let b = context()
+                .device
+                .new_buffer(len.max(1) as u64, MTLResourceOptions::StorageModeShared);
+            if i == a.bufs.len() {
+                a.bufs.push(b);
+            } else {
+                a.bufs[i] = b;
+            }
+        }
+        Some(a.bufs[i].clone())
+    })
+}
+
 /// Binds a small slice inline, or through a buffer if it is too large.
 fn bind_small(enc: &metal::ComputeCommandEncoderRef, index: u64, bytes: &[u8]) -> Option<Buffer> {
     if bytes.len() <= SET_BYTES_LIMIT && !bytes.is_empty() {
@@ -215,6 +274,17 @@ fn upload_inner(device: &Device, bytes: &[u8], aligned: bool) -> Buffer {
                 None,
             )
         }
+    } else if let Some(buf) = arena_take(bytes.len().max(1)) {
+        // SAFETY: the buffer was made with at least this many bytes, and shared
+        // storage means the pointer is host-writable.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                buf.contents().cast::<u8>(),
+                bytes.len(),
+            );
+        }
+        buf
     } else {
         device.new_buffer_with_data(
             bytes.as_ptr().cast(),
@@ -442,6 +512,7 @@ where
     EF: slop_algebra::ExtensionField<N>,
 {
     STATS.see_thread();
+    arena_reset();
     let ctx = context();
     let lambda_words: [u32; 4] = unsafe { std::mem::transmute_copy(&lambda) };
     let mut interaction_offset = 0usize;
@@ -637,7 +708,8 @@ where
         }
         // SAFETY: the type ids match, so these are the same types.
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
-            pooled(|| {
+        arena_reset();
+        pooled(|| {
         let ctx = context();
         let cb = ctx.queue.new_command_buffer();
         let num_pso = if is::<F, BaseField>() { &ctx.fold_base } else { &ctx.fold_ext };
@@ -777,6 +849,7 @@ fn fix_padded<T: slop_algebra::Field>(
 where
     EF: slop_algebra::ExtensionField<T>,
 {
+    arena_reset();
     let out_vars = mle.num_variables() - 1;
     let Some(inner) = chip_inner(mle) else {
         return PaddedMle::dummy(out_vars, new_padding);
