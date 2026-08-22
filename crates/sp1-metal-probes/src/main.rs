@@ -18,6 +18,7 @@ Commands:
   zerocheck  [--n N] [--cols C] [--terms T] [--reps R] [--cpu]  Synthetic zerocheck round.
   gkr        [--n N] [--reps R] [--cpu]          One sumcheck round of a logup GKR layer.
   launch     [--n N] [--reps R]                  Dispatch, round-trip and fold-tail fixed costs.
+  challenger [--n N] [--reps R]                  Duplex sponge on the GPU: a fold with Fiat-Shamir in the loop.
   encode     [--rows N] [--cols C] [--reps R]    Reed-Solomon encode inside a BaseFold commitment (CPU only).
   all        [--reps R] [--cpu]                  All throughput probes at default sizes.
 
@@ -61,7 +62,7 @@ fn info(gpu: &Gpu) -> Value {
 }
 
 fn run_checks(gpu: &Gpu) -> Result<(), String> {
-    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 9] = [
+    let checks: [(&str, fn(&Gpu) -> Result<(), String>); 10] = [
         ("triad", probes::triad::check),
         ("imul", probes::imul::check),
         ("fieldops", probes::fieldops::check),
@@ -71,6 +72,7 @@ fn run_checks(gpu: &Gpu) -> Result<(), String> {
         ("launch", probes::launch::check),
         ("encode", probes::encode::check),
         ("gkr", probes::gkr::check),
+        ("challenger", probes::challenger::check),
     ];
     let mut failed = false;
     for (name, check) in checks {
@@ -108,6 +110,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
             reps,
         ),
         "launch" => probes::launch::bench(gpu, flag_usize(flags, "n", 1 << 24)?, reps),
+        "challenger" => probes::challenger::bench(gpu, flag_usize(flags, "n", 1 << 24)?, reps),
         "fieldops" => probes::fieldops::bench(gpu, flag_usize(flags, "n", 1 << 27)?, reps, with_cpu),
         "gkr" => probes::gkr::bench(gpu, flag_usize(flags, "n", 1 << 23)?, reps, with_cpu),
         "fold" => probes::fold::bench(gpu, flag_usize(flags, "n-out", 1 << 25)?, reps, with_cpu),
@@ -132,6 +135,7 @@ fn run(command: &str, flags: &HashMap<String, String>, gpu: &Gpu) -> Result<Valu
                 probes::zerocheck::bench(gpu, 1 << 22, 64, 128, reps, with_cpu)?,
                 probes::gkr::bench(gpu, 1 << 23, reps, with_cpu)?,
                 probes::launch::bench(gpu, 1 << 24, reps)?,
+                probes::challenger::bench(gpu, 1 << 24, reps)?,
                 probes::encode::bench(gpu, 1 << 20, 64, reps)?,
             ];
             Ok(Value::Array(results))

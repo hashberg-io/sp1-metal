@@ -10,6 +10,7 @@ edition = "2021"
 [workspace.dependencies]
 slop-algebra = "=6.4.0"
 slop-alloc = "=6.4.0"
+slop-challenger = "=6.4.0"
 slop-dft = "=6.4.0"
 slop-koala-bear = "=6.4.0"
 slop-multilinear = "=6.4.0"

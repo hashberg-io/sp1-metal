@@ -885,6 +885,7 @@ dependencies = [
  "serde_json",
  "slop-algebra",
  "slop-alloc",
+ "slop-challenger",
  "slop-dft",
  "slop-koala-bear",
  "slop-multilinear",

@@ -19,7 +19,7 @@ use crate::probes::{cpu_bench, times_json};
 /// Round constants in kernel layout: 4 beginning full rounds (16 each), then
 /// 4 ending full rounds (16 each), then 20 partial-round constants; all in
 /// Montgomery form.
-fn rc_monty() -> Vec<u32> {
+pub fn rc_monty() -> Vec<u32> {
     let mut rc = Vec::with_capacity(8 * 16 + 20);
     for round in KoalaBear_BEGIN_EXT_CONSTS.iter() {
         rc.extend(round.iter().map(|&c| monty_of_f(c)));

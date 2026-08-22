@@ -1,3 +1,4 @@
+pub mod challenger;
 pub mod encode;
 pub mod fieldops;
 pub mod gkr;

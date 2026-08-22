@@ -462,3 +462,211 @@ kernel void gkr_round(device const uint4* num_0 [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Step 1: the GPU-side challenger.
+//
+// Every Fiat-Shamir challenge in SP1 comes from a duplex sponge over the same
+// width-16 Poseidon2 permutation above: SP1GlobalContext is
+// KoalaBearDegree4Duplex, whose Challenger is p3's
+// DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>. Because each sumcheck round's
+// challenge is derived from the previous round's output, a challenger that
+// lives on the host forces one command-buffer round trip per round, and the
+// launch probe measured that at 87 us against a 1.6 us marginal dispatch.
+// Running the sponge on the device instead lets every round of a fold be
+// encoded into a single submission.
+//
+// The state machine mirrors p3 exactly, including the details that matter for
+// parity: observing clears the output buffer, a full input buffer duplexes
+// immediately, sampling duplexes if there is pending input or no output left,
+// and samples are *popped from the end* of the output buffer.
+// ---------------------------------------------------------------------------
+
+struct Challenger {
+    uint sponge[16];
+    uint input_buf[8];
+    uint output_buf[8];
+    uint input_len;
+    uint output_len;
+};
+
+inline void chal_duplex(thread Challenger* c, constant uint* rc) {
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = c->sponge[i];
+    }
+    // Overwrite the first `input_len` elements with the buffered input.
+    for (uint i = 0; i < c->input_len; i++) {
+        s[i] = c->input_buf[i];
+    }
+    c->input_len = 0u;
+    p2_external(s);
+    for (uint r = 0; r < 4; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+    for (uint r = 0; r < 20; r++) {
+        p2_internal(s, rc[128u + r]);
+    }
+    for (uint r = 4; r < 8; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+    for (uint i = 0; i < 16; i++) {
+        c->sponge[i] = s[i];
+    }
+    for (uint i = 0; i < 8; i++) {
+        c->output_buf[i] = s[i];
+    }
+    c->output_len = 8u;
+}
+
+inline void chal_observe(thread Challenger* c, constant uint* rc, uint v) {
+    c->output_len = 0u;
+    c->input_buf[c->input_len] = v;
+    c->input_len += 1u;
+    if (c->input_len == 8u) {
+        chal_duplex(c, rc);
+    }
+}
+
+inline uint chal_sample_base(thread Challenger* c, constant uint* rc) {
+    if (c->input_len != 0u || c->output_len == 0u) {
+        chal_duplex(c, rc);
+    }
+    c->output_len -= 1u;
+    return c->output_buf[c->output_len];
+}
+
+inline void chal_observe_ext(thread Challenger* c, constant uint* rc, uint4 v) {
+    chal_observe(c, rc, v.x);
+    chal_observe(c, rc, v.y);
+    chal_observe(c, rc, v.z);
+    chal_observe(c, rc, v.w);
+}
+
+inline uint4 chal_sample_ext(thread Challenger* c, constant uint* rc) {
+    uint c0 = chal_sample_base(c, rc);
+    uint c1 = chal_sample_base(c, rc);
+    uint c2 = chal_sample_base(c, rc);
+    uint c3 = chal_sample_base(c, rc);
+    return uint4(c0, c1, c2, c3);
+}
+
+kernel void chal_init(device Challenger* c [[buffer(0)]]) {
+    for (uint i = 0; i < 16; i++) {
+        c->sponge[i] = 0u;
+    }
+    c->input_len = 0u;
+    c->output_len = 0u;
+}
+
+// Observe `n_obs` base elements, then sample `n_samp` extension elements.
+// One thread: the sponge is inherently sequential.
+kernel void chal_observe_sample(device Challenger* state [[buffer(0)]],
+                                device const uint* vals [[buffer(1)]],
+                                device uint4* out [[buffer(2)]],
+                                constant uint& n_obs [[buffer(3)]],
+                                constant uint& n_samp [[buffer(4)]],
+                                constant uint* rc [[buffer(5)]]) {
+    Challenger c = *state;
+    for (uint i = 0; i < n_obs; i++) {
+        chal_observe(&c, rc, vals[i]);
+    }
+    for (uint i = 0; i < n_samp; i++) {
+        out[i] = chal_sample_ext(&c, rc);
+    }
+    *state = c;
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: a BaseFold round with Fiat-Shamir in the loop.
+//
+// One round of the fold slop's `fold_mle` performs, in the shape the prover
+// runs it: sum the even and odd entries to form the round message, observe both
+// into the challenger, sample the fold challenge, then fold. Splitting the
+// reduction from the challenger keeps one kernel usable by both the host-driven
+// and the device-driven paths, so the two differ only in where the challenge
+// comes from.
+// ---------------------------------------------------------------------------
+
+// Per-threadgroup partial sums of the even and odd entries.
+kernel void sc_partials(device const uint4* in [[buffer(0)]],
+                        device uint4* partials [[buffer(1)]],
+                        constant uint& n_pairs [[buffer(2)]],
+                        uint gid [[thread_position_in_grid]],
+                        uint tid [[thread_position_in_threadgroup]],
+                        uint tgid [[threadgroup_position_in_grid]]) {
+    threadgroup uint4 sh_even[256];
+    threadgroup uint4 sh_odd[256];
+    uint4 e = uint4(0u, 0u, 0u, 0u);
+    uint4 o = uint4(0u, 0u, 0u, 0u);
+    if (gid < n_pairs) {
+        e = in[2u * gid];
+        o = in[2u * gid + 1u];
+    }
+    sh_even[tid] = e;
+    sh_odd[tid] = o;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            sh_even[tid] = ext_add(sh_even[tid], sh_even[tid + s]);
+            sh_odd[tid] = ext_add(sh_odd[tid], sh_odd[tid + s]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        partials[2u * tgid] = sh_even[0];
+        partials[2u * tgid + 1u] = sh_odd[0];
+    }
+}
+
+// Reduce the per-threadgroup partials to the two-element round message.
+// One threadgroup.
+kernel void sc_reduce(device const uint4* partials [[buffer(0)]],
+                      device uint4* msg [[buffer(1)]],
+                      constant uint& n_partials [[buffer(2)]],
+                      uint tid [[thread_position_in_threadgroup]]) {
+    threadgroup uint4 sh_even[256];
+    threadgroup uint4 sh_odd[256];
+    uint4 e = uint4(0u, 0u, 0u, 0u);
+    uint4 o = uint4(0u, 0u, 0u, 0u);
+    for (uint i = tid; i < n_partials; i += 256u) {
+        e = ext_add(e, partials[2u * i]);
+        o = ext_add(o, partials[2u * i + 1u]);
+    }
+    sh_even[tid] = e;
+    sh_odd[tid] = o;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            sh_even[tid] = ext_add(sh_even[tid], sh_even[tid + s]);
+            sh_odd[tid] = ext_add(sh_odd[tid], sh_odd[tid + s]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        msg[0] = sh_even[0];
+        msg[1] = sh_odd[0];
+    }
+}
+
+// Observe the round message and sample the fold challenge, on the device.
+// This is the dispatch that removes the host from the round loop.
+kernel void sc_challenge(device const uint4* msg [[buffer(0)]],
+                         device Challenger* state [[buffer(1)]],
+                         device uint4* beta [[buffer(2)]],
+                         constant uint* rc [[buffer(3)]]) {
+    Challenger c = *state;
+    chal_observe_ext(&c, rc, msg[0]);
+    chal_observe_ext(&c, rc, msg[1]);
+    beta[0] = chal_sample_ext(&c, rc);
+    *state = c;
+}
+
+// `fold_ext` with the challenge read from device memory rather than baked into
+// the command buffer, so the fold can be encoded before the challenge exists.
+kernel void fold_ext_dev(device const uint4* in [[buffer(0)]],
+                         device uint4* out [[buffer(1)]],
+                         device const uint4* beta [[buffer(2)]],
+                         uint gid [[thread_position_in_grid]]) {
+    out[gid] = ext_add(in[2u * gid], ext_mul(beta[0], in[2u * gid + 1u]));
+}

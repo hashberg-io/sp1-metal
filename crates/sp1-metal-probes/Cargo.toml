@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 slop-algebra.workspace = true
 slop-alloc.workspace = true
+slop-challenger.workspace = true
 slop-dft.workspace = true
 slop-koala-bear.workspace = true
 slop-multilinear.workspace = true

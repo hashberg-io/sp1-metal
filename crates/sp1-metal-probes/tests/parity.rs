@@ -53,3 +53,8 @@ fn ntt_butterfly_stage_parity() {
 fn gkr_round_parity() {
     probes::gkr::check(&gpu()).unwrap();
 }
+
+#[test]
+fn duplex_challenger_parity() {
+    probes::challenger::check(&gpu()).unwrap();
+}

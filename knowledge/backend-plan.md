@@ -88,7 +88,7 @@ At 1.9% of the proof this costs nothing, and unified memory means the traces it 
 
 Each can be answered by a spike against the existing probe harness, before any backend code is written, and each can sink the project on its own.
 
-**A GPU-side challenger.**
+**A GPU-side challenger.** *(Answered — see [spikes.md](spikes.md): not blocking the host matters more than moving the sponge does.)*
 A command buffer of its own costs 87 µs, sumcheck and BaseFold rounds halve every round, and each round's challenge is derived from the previous round's output — so a naive port pays a full round trip per round and the tails become the whole cost.
 The `launch` probe already measured the size of this: folding 2²⁴ elements one round trip at a time takes 2.88 ms, of which 2.2 ms is round trips, against 0.63 ms for the same rounds in a single submission.
 Closing it means a Poseidon2 duplex sponge and Fiat-Shamir running on the device, so challenges never touch the host.
@@ -115,6 +115,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
    A Poseidon2 duplex sponge and Fiat-Shamir on the device, plus a sumcheck round loop that batches into one submission instead of one command buffer per round.
    Goes first because it constrains the shape of every other kernel.
    *Machine: yes, GPU only.* Seconds per run, and the CPU side of the comparison is already measured, so it does not need a quiet machine.
+   **Done**, and it revised its own premise: not blocking the host is worth more than moving the sponge, and the two together are worth 3.35x rather than the 4.5x assumed here. See [spikes.md](spikes.md).
 2. **Blocked Reed-Solomon encode spike.**
    Bit-reversed, matching slop's convention, holding a block in threadgroup memory across stages.
    *Machine: yes, GPU and CPU.* Roughly 1 GiB working sets and seconds per run, but the packed-CPU baseline is invalidated by a competing job, so this one wants the machine idle.

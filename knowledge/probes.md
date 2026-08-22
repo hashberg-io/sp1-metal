@@ -31,7 +31,10 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    A full Metal encode matching slop's bit-reversed convention is still missing.
 9. `probes gkr` — one sumcheck round of a logup GKR layer, in the shape `sp1_hypercube::logup_gkr` computes it: over each pair of consecutive entries, a numerator term `eq·(den_0·num_1 + den_1·num_0)` and a denominator term `eq·(den_0·den_1)` at each of two evaluation points, all in the degree-4 extension.
    This is the prover's largest phase, and the round's arithmetic intensity — five extension multiplies per row against eighty bytes read — puts both the GPU and the CPU on the compute side of their rooflines.
-10. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+10. `probes challenger` — the duplex sponge SP1 derives every Fiat-Shamir challenge from, running on the GPU, and a complete BaseFold-shaped fold with the challenger in the loop: reduce the working set to the round message, observe it, sample the fold challenge, fold.
+   It times that fold four ways — challenger on the host or on the device, one fold at a time or several in flight — because the round-trip cost `probes launch` measures is a latency, and a prover with many folds available need not pay it once per fold.
+   Parity is against slop's own `DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>`: a scripted observe/sample sequence that crosses the sponge's rate boundary in both directions, and then the challenges and final value of the whole fold, for both the host-driven and device-driven paths.
+11. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
 
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.
