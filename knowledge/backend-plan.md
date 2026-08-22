@@ -146,6 +146,7 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 8. **Zerocheck.**
    A device polynomial type implementing the three sumcheck backend traits, plus the transpiler extended across all thirty-odd chips.
    *Machine: yes.* Parity runs per chip, individually cheap and collectively a long loop.
+   **Done**, and two of the assumptions above it were wrong. The generator did not have to live outside the fork: the round prover is handed the AIR, and the crate already asks AIRs for their symbolic constraints, so nothing needs enumerating and no dependency cycle appears. Nor did compiling have to happen ahead of time: the eight minutes measured in the spike belongs to the elliptic-curve precompiles, at up to 178,000 constraint nodes, while the sixty-two core chips compile in 15.5 seconds between them and Metal caches the result on disk. Both column types are generated, so the first round moved too. Zerocheck fell from 21.9 to 10.7 thread-seconds. See [backend.md](backend.md).
 9. **Acceptance** on D7's canonical workload, the ProofofSeed classical-128 lift, measured with `tools/span_profile.py` against the CPU run already profiled.
    *Machine: yes, heavily.* The CPU reference took about 7.3 hours uncapped, so this wants the machine to itself for the better part of a day, and again once the first result raises questions.
 

@@ -18,9 +18,12 @@ elf() { echo "$GUESTS/$1/target/elf-compilation/riscv64im-succinct-zkvm-elf/rele
 
 # $5 = on|off for the whole Metal path
 run() { # guest_dir guest_name n shard_size on|off
-  local min merkle
-  if [ "$5" = on ]; then min=16384; merkle=1; else min=999999999; merkle=0; fi
-  SHARD_SIZE=$4 SP1_METAL_MIN_ENTRIES=$min SP1_METAL_MERKLE=$merkle \
+  # Every switch together, so the CPU arm really is one: leaving any of them on
+  # would understate the pair.
+  local min on
+  if [ "$5" = on ]; then min=16384; on=1; else min=999999999; on=0; fi
+  SHARD_SIZE=$4 SP1_METAL_MIN_ENTRIES=$min SP1_METAL_MERKLE=$on \
+    SP1_METAL_TRANSITION=$on SP1_METAL_ZEROCHECK=$on SP1_METAL_UPLOAD_CACHE=$on \
     timeout 900 nice -n 5 "$HOST" --elf "$(elf "$1" "$2")" --stdin-u32 "$3" --mode core 2>&1 |
     grep -oE "proved and verified in [0-9.]+" | grep -oE "[0-9.]+$"
 }
