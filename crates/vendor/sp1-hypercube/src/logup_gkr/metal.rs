@@ -505,6 +505,7 @@ where
         }
         // SAFETY: the type ids match, so these are the same types.
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
+        pooled(|| {
         let ctx = context();
         let cb = ctx.queue.new_command_buffer();
         let num_pso = if is::<F, BaseField>() { &ctx.fold_base } else { &ctx.fold_ext };
@@ -545,6 +546,7 @@ where
         );
         // SAFETY: K is EF, checked above.
         unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) }
+        })
     }
 
     fn fix_denominator(mle: &PaddedMle<K>, alpha: K) -> PaddedMle<K> {
@@ -563,13 +565,23 @@ fn is<A: 'static + ?Sized, B: 'static + ?Sized>() -> bool {
     std::any::TypeId::of::<A>() == std::any::TypeId::of::<B>()
 }
 
+/// Runs `f` inside an autorelease pool.
+///
+/// Every object Metal hands back is autoreleased, and a Rust program has no
+/// pool of its own: without one they accumulate for the life of the thread. A
+/// benchmark of a few hundred dispatches never notices; a proof makes millions
+/// and is killed for it.
+fn pooled<T>(f: impl FnOnce() -> T) -> T {
+    metal::objc::rc::autoreleasepool(f)
+}
+
 fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
         PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
         PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
             cpu_round_evals(poly)
         }
-        PolynomialLayer::CircuitLayer(layer) => circuit_layer::<BaseField>(
+        PolynomialLayer::CircuitLayer(layer) => pooled(|| circuit_layer::<BaseField>(
             &context().base,
             (&layer.numerator_0, &layer.numerator_1),
             (&layer.denominator_0, &layer.denominator_1),
@@ -577,7 +589,7 @@ fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -
             poly.eq_row.guts().as_slice(),
             poly.lambda,
             1,
-        ),
+        )),
     }
 }
 
@@ -587,7 +599,7 @@ fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, E
         PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
             cpu_round_evals(poly)
         }
-        PolynomialLayer::CircuitLayer(layer) => circuit_layer::<EF>(
+        PolynomialLayer::CircuitLayer(layer) => pooled(|| circuit_layer::<EF>(
             &context().ext,
             (&layer.numerator_0, &layer.numerator_1),
             (&layer.denominator_0, &layer.denominator_1),
@@ -595,7 +607,7 @@ fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, E
             poly.eq_row.guts().as_slice(),
             poly.lambda,
             4,
-        ),
+        )),
     }
 }
 
@@ -647,6 +659,7 @@ where
         return mle.fix_last_variable(alpha);
     }
 
+    pooled(|| {
     let mut values: Vec<EF> = Vec::with_capacity(total);
     // SAFETY: the kernel writes every element before anything reads them.
     unsafe { values.set_len(total) };
@@ -692,6 +705,7 @@ where
     }
     let guts = slop_tensor::Tensor::from(values).reshape([out_rows, width]);
     PaddedMle::padded(Arc::new(Mle::new(guts)), out_vars, new_padding)
+    })
 }
 
 /// The padding a fold produces, and its words for the kernel.
