@@ -46,6 +46,7 @@ fn parse_args() -> Result<Args> {
             "--mode" => mode = args.next().context("--mode needs core|compressed")?,
             "--stdin-file" => stdin_file = Some(args.next().context("--stdin-file needs a path")?),
             "--stdin-bin" => stdin_bin = Some(args.next().context("--stdin-bin needs a path")?),
+            "--execute" => mode = "execute".to_string(),
             "--stdin-u32" => {
                 stdin_u32 = Some(
                     args.next().context("--stdin-u32 needs a number")?.parse().context("parsing --stdin-u32")?,
@@ -84,12 +85,20 @@ async fn main() -> Result<()> {
         stdin.write_slice(&bytes);
     }
     let prover = ProverClient::builder().cpu().build().await;
+    if args.mode == "execute" {
+        // Cycles without proving: the cheap way to tell "more shards" from
+        // "bigger shards" when reading a scaling study.
+        let (_, report) =
+            prover.execute(elf, stdin).await.map_err(|e| anyhow!("execution failed: {e:?}"))?;
+        println!("cycles {}", report.total_instruction_count());
+        return Ok(());
+    }
     let pk = prover.setup(elf).await.map_err(|e| anyhow!("setup failed: {e:?}"))?;
     let t0 = Instant::now();
     let proof = match args.mode.as_str() {
         "core" => prover.prove(&pk, stdin).core().await,
         "compressed" => prover.prove(&pk, stdin).compressed().await,
-        other => bail!("unknown mode `{other}` (use core or compressed)"),
+        other => bail!("unknown mode `{other}` (use core, compressed or --execute)"),
     }
     .map_err(|e| anyhow!("proving failed: {e:?}"))?;
     let elapsed = t0.elapsed();
