@@ -40,9 +40,26 @@ pub struct ProverSemaphore {
 
 impl ProverSemaphore {
     /// Create a new prover semaphore with the given number of permits.
+    ///
+    /// `SP1_METAL_PERMITS` raises a cap of more than one, which is the one that
+    /// decides how many shards prove at once. `sp1-prover` hardcodes it to four
+    /// -- `cpu_worker_builder_with_machine` builds the semaphore itself and the
+    /// SDK offers no way past it -- and four shards keep this machine about
+    /// half busy, so whether more of them would fill it is a question nothing
+    /// else can ask. The caps of one, which serialise setup and recursion, are
+    /// left alone.
     #[must_use]
     #[inline]
     pub fn new(max_permits: usize) -> Self {
+        let max_permits = if max_permits > 1 {
+            std::env::var("SP1_METAL_PERMITS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(max_permits)
+        } else {
+            max_permits
+        };
         Self { sem: Arc::new(Semaphore::new(max_permits)) }
     }
 
