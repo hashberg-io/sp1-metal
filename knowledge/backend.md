@@ -248,7 +248,7 @@ Asking where a proof's time goes, rather than assuming, turned up something the 
 
 Almost all of it is one Merkle tree, and the probe suite already had kernels for it, checked against slop's own committer and running at 152x. What was missing was not a kernel but the shape the prover actually calls with.
 
-**The seam needs no fork.** `BasefoldProver` takes its committer as a type parameter, `P: ComputeTcsOpenings<GC, CpuBackend>`, so the whole diff is aliasing `SP1MerkleTreeProver` to a wrapper. The encoder beside it is a concrete `Arc<Radix2DitParallel>` and could not be swapped this way — which does not matter, because the encode probe measures 429.8 GB/s against a packed CPU's 422.0, a ratio of 1.02x. There is nothing there to win.
+**The seam needs no fork.** `BasefoldProver` takes its committer as a type parameter, `P: ComputeTcsOpenings<GC, CpuBackend>`, so the whole diff is aliasing `SP1MerkleTreeProver` to a wrapper. The encoder beside it is a concrete `Arc<Radix2DitParallel>` and could not be swapped this way — which does not matter here, though not for the reason first given: the 1.02x quoted from the encode probe is 429.8 GB/s against a packed CPU's 422.0 for **one butterfly stage**, and the same probe's full Metal encode runs at 0.517 ns per input cell against slop's 6.78. See section 18.
 
 **Three details decide whether the commitment matches**, and a commitment that differs is worse than one that is slow:
 
@@ -282,7 +282,7 @@ Building the circuit layers went to the GPU as well, taking that span from 11.0 
 
 - **Zerocheck, 21.9 thread-seconds (25.6%)** — now the largest single phase. Still needs the reduction's per-chip kernels generated offline, for the reasons under section 8. The transpiler spike is done; the build step around it is not.
 - **The PCS opening, 18.4 thread-seconds (21.4%)** — and this one carries a decision. `prove_trusted_evaluations` takes `Rounds<Evaluations<GC::EF>>`, which is `CpuBackend`, and `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself, so the jagged sumcheck's data is CPU-backed by construction rather than by choice. Reaching it means forking `slop-jagged`, which gives up exactly the property that made the commit half attractive: that it ships against unmodified upstream and survives version bumps.
-- **The encode, about 5 thread-seconds** — measured at 1.02x against a packed CPU. Not worth taking, and the concrete `Arc<Radix2DitParallel>` in the encoder means it could not be taken forklessly anyway.
+- **The encode, about 5 thread-seconds** — read at the time as 1.02x against a packed CPU and set aside; that was the per-stage ratio, not the encode's, and section 18 corrects it. The concrete `Arc<Radix2DitParallel>` in the encoder still means it cannot be taken forklessly.
 - **The uploads** — still larger than everything the GPU computes, and now partly dealt with. The round reduction and the fold read the same four MLEs per chip one after the other and each was uploading them for itself. Keying buffers on the data pointer fixes that, and is sound rather than fragile because the entry also holds an `Arc` to the MLE: while it lives the allocation cannot be freed, so its address cannot have been reused. Uploading fell from 220.71 GB in 17023 to 163.45 GB in 12771, and from 6.85 to 5.02 thread-seconds. Not half, because the chips the reduction leaves on the CPU are still uploaded once by the fold, and building the layers reads different data again.
 
 **Where the paired figure stands: 64.14 s on the CPU against 33.83 s on Metal, 1.90x**, from 1.246x when this began. Every switch — `SP1_METAL_MIN_ENTRIES`, `SP1_METAL_MERKLE`, `SP1_METAL_TRANSITION`, `SP1_METAL_UPLOAD_CACHE` — takes its own pair through the same binary, so each of these claims can be re-checked without a rebuild.
@@ -336,7 +336,7 @@ So the rule is not "memory-bound work cannot win" but something narrower and mor
 
 - **Compute-bound work wins large however it is fed.** Merkle hashing (152x in isolation), constraint evaluation (zerocheck 21.9 to 10.7 thread-seconds), the logup round's arithmetic (23x).
 - **Memory-bound work wins only if nothing is copied.** The GKR fold at 3.7x and the jagged fold at 10% of a whole proof do it with no-copy buffers at both ends; the same fold uploaded conventionally loses to the CPU outright. This is the single most load-bearing implementation detail in the backend.
-- **And some of it is not worth taking either way**: the Reed-Solomon encode measures 1.02x against a packed CPU, because the CPU is already at memory speed there and there is no arithmetic to win back.
+- **And some of it looked as though it were not worth taking either way**: the Reed-Solomon encode measures 1.02x against a packed CPU *for one butterfly stage*, which reads as "the CPU is already at memory speed and there is no arithmetic to win back". Section 18 shows that reading was wrong about the encode as a whole.
 
 The paired figure is now **63.07 s against 24.53 s, 2.57x.**
 

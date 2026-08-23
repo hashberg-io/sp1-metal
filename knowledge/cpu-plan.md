@@ -78,7 +78,11 @@ The threshold sweep above is the evidence for *how* rather than *whether*: dispa
 
 ## What is not worth moving
 
-**The Reed-Solomon encode, 22.0 thread-seconds** — the second-largest block, and a trap. It was previously dismissed on a probe measuring 1.02x against a *packed* CPU baseline, which raised the question of whether the shipped encode is packed. It is: `p3-dft`'s butterflies use `F::Packing::pack_slice_with_suffix_mut`, so the baseline is what actually runs and the 1.02x stands. Leave it.
+**The Reed-Solomon encode, 22.0 thread-seconds — this entry was wrong, and is corrected in `next-levers.md`.**
+
+It was dismissed here on a probe measuring 1.02x against a *packed* CPU baseline, and the check made of that -- whether the shipped encoder is packed -- came back yes: `p3-dft`'s butterflies use `F::Packing::pack_slice_with_suffix_mut`. But the 1.02x is the ratio for **one butterfly stage** against a hand-written packed stage, not for the encode. `results/encode.json` also holds a full Metal encode at **0.517 ns per input cell against slop's 6.78 -- 13.1x** what actually ships. Being packed and being fast are different things: `Radix2DitParallel` is packed and still 7.6x slower than a blocked packed implementation, because it makes many passes with bit reversal and transposes.
+
+The encode is the first item of the next plan, not a ruled-out one.
 
 **Trace generation and guest execution, 19.9 thread-seconds together.** Not field arithmetic, and not GPU-shaped.
 
@@ -114,4 +118,4 @@ All three were built, and the analysis is `backend.md` §17. Paired on the accep
 
 ### What is left
 
-Of the roughly 126 CPU-seconds still spent, the blocks worth naming are the Reed-Solomon encode (~22 thread-seconds, ruled out above and still ruled out), folding MLEs (~20, mostly GKR's own and partly unavoidable), trace generation and guest execution (~20, not GPU-shaped), the basefold Dense PCS proof (~11), and rayon and allocator overhead (~10). Nothing left is both large and obviously portable, and the floor named above -- startup plus tail, neither CPU-throughput-bound -- has not moved.
+Of the roughly 126 CPU-seconds still spent, the blocks worth naming are the Reed-Solomon encode (~25 thread-seconds, **not** ruled out -- see the correction above), folding MLEs (~28, owner not yet established), trace generation and guest execution (~20, not GPU-shaped), the basefold Dense PCS proof (~11), and rayon and allocator overhead (~10). The floor named above -- startup plus tail, neither CPU-throughput-bound -- has not moved. `next-levers.md` ranks what to do about the rest.
