@@ -16,7 +16,7 @@ run() { # on|off outfile
   SHARD_SIZE=$SHARD SP1_METAL_MIN_ENTRIES=$min SP1_METAL_MERKLE=$on \
     SP1_METAL_TRANSITION=$on SP1_METAL_ZEROCHECK=$on SP1_METAL_UPLOAD_CACHE=$on \
     SP1_METAL_JAGGED=$on SP1_METAL_FIRST_LAYER=$on SP1_METAL_JAGGED_VALUES=$on \
-    SP1_METAL_JAGGED_ASSIST=$on SP1_METAL_BATCH=$on \
+    SP1_METAL_JAGGED_ASSIST=$on SP1_METAL_BATCH=$on SP1_METAL_ENCODE=$on \
     nice -n 5 "$HOST" --elf "$ELF" --stdin-u32 "$N" --mode core > "$2" 2>&1 &
   local pid=$!
   local peak=0 rss

@@ -3537,15 +3537,16 @@ dependencies = [
 [[package]]
 name = "slop-dft"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb7f508dd516fa67da538d2efd61fafc70164786953b032d0ce7558288ec8df1"
 dependencies = [
+ "metal",
  "p3-dft",
+ "p3-koala-bear",
  "serde",
  "slop-algebra",
  "slop-alloc",
  "slop-matrix",
  "slop-tensor",
+ "sp1-metal-core",
 ]
 
 [[package]]
@@ -4112,6 +4113,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-metal-core"
+version = "0.1.0"
+dependencies = [
+ "metal",
+]
+
+[[package]]
 name = "sp1-metal-probes"
 version = "0.1.0"
 dependencies = [
@@ -4131,6 +4139,7 @@ dependencies = [
  "slop-sumcheck",
  "slop-symmetric",
  "slop-tensor",
+ "sp1-metal-core",
 ]
 
 [[package]]
@@ -4163,6 +4172,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
+ "slop-dft",
  "sp1-hypercube",
  "sp1-sdk",
  "tokio",

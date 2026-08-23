@@ -25,7 +25,7 @@ run() { # guest_dir guest_name n shard_size on|off
   SHARD_SIZE=$4 SP1_METAL_MIN_ENTRIES=$min SP1_METAL_MERKLE=$on \
     SP1_METAL_TRANSITION=$on SP1_METAL_ZEROCHECK=$on SP1_METAL_UPLOAD_CACHE=$on \
     SP1_METAL_JAGGED=$on SP1_METAL_FIRST_LAYER=$on SP1_METAL_JAGGED_VALUES=$on \
-    SP1_METAL_JAGGED_ASSIST=$on SP1_METAL_BATCH=$on \
+    SP1_METAL_JAGGED_ASSIST=$on SP1_METAL_BATCH=$on SP1_METAL_ENCODE=$on \
     timeout 900 nice -n 5 "$HOST" --elf "$(elf "$1" "$2")" --stdin-u32 "$3" --mode core 2>&1 |
     grep -oE "proved and verified in [0-9.]+" | grep -oE "[0-9.]+$"
 }

@@ -19,6 +19,7 @@ slop-multilinear = "=6.4.0"
 slop-sumcheck = "=6.4.0"
 slop-tensor = "=6.4.0"
 sp1-hypercube = { version = "=6.4.0", features = ["metal"] }
+slop-dft = { version = "=6.4.0", features = ["metal"] }
 
 [profile.release]
 lto = "thin"
@@ -26,3 +27,4 @@ lto = "thin"
 [patch.crates-io]
 sp1-hypercube = { path = "../vendor/sp1-hypercube" }
 slop-jagged = { path = "../vendor/slop-jagged" }
+slop-dft = { path = "../vendor/slop-dft" }

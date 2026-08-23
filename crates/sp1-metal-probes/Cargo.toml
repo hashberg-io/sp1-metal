@@ -22,6 +22,7 @@ slop-multilinear.workspace = true
 slop-sumcheck.workspace = true
 slop-symmetric.workspace = true
 slop-tensor.workspace = true
+sp1-metal-core.workspace = true
 
 [[bin]]
 name = "probes"

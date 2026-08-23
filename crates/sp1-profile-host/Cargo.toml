@@ -11,10 +11,13 @@ publish = false
 [features]
 # Turns on the fork's Metal GKR round for the whole dependency graph: cargo
 # unifies features, so naming it here reaches sp1-sdk's copy of the crate too.
-metal = ["sp1-hypercube/metal"]
+metal = ["sp1-hypercube/metal", "slop-dft/metal"]
 
 [dependencies]
 sp1-hypercube = "=6.4.0"
+# Named only so that the feature above can reach it: the encode lives one level
+# below the basefold prover, which is where this host's traces are committed.
+slop-dft = "=6.4.0"
 
 anyhow = "1"
 bincode = "1.3.3"
@@ -26,3 +29,4 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 [patch.crates-io]
 sp1-hypercube = { path = "../vendor/sp1-hypercube" }
 slop-jagged = { path = "../vendor/slop-jagged" }
+slop-dft = { path = "../vendor/slop-dft" }

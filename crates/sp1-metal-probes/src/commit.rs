@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 
-use crate::gpu::SHADER_SRC;
+use crate::gpu::shader_src;
 use crate::probes::poseidon2::rc_monty;
 
 const THREADS: u64 = 256;
@@ -51,7 +51,7 @@ fn context() -> &'static Context {
     CTX.get_or_init(|| {
         let device = Device::system_default().expect("no Metal device found");
         let library = device
-            .new_library_with_source(SHADER_SRC, &metal::CompileOptions::new())
+            .new_library_with_source(&shader_src(), &metal::CompileOptions::new())
             .expect("shader compilation failed");
         let pso = |name: &str| {
             let f = library.get_function(name, None).expect("kernel not found");

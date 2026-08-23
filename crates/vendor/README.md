@@ -15,3 +15,14 @@ The naming throughout — `LogupGkrCpuCircuit`, `LogUpGkrCpuLayer`, `logup_gkr/c
 
 **Changes from 6.4.0** are listed in [CHANGES.md](sp1-hypercube/CHANGES.md).
 Consumers pick up the fork through `[patch.crates-io]`, so every crate in the dependency graph that mentions `sp1-hypercube` — `sp1-core-machine` included — resolves to this copy and the types unify.
+
+## `slop-dft`
+
+Vendored from `slop-dft` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.
+Upstream: https://github.com/succinctlabs/sp1
+
+**Why.** The Reed-Solomon encode is about half of `commit traces`, and the encoder is not a seam: `CpuDftEncoder` holds a concrete `Arc<Radix2DitParallel>` rather than a type parameter, so unlike the Merkle committer beside it there is nothing above it to substitute.
+There is something below it. `Radix2DitParallel`'s only relevant property is that it implements `Dft`, and that impl is forty lines of a crate with four dependencies and one consumer in the whole prover.
+Replacing one trait method here reaches every encode a proof performs, which is why this crate is vendored and `slop-basefold-prover` — six times the size, and a fork of the proving logic rather than of a transform — is not.
+
+**Changes from 6.4.0** are listed in [CHANGES.md](slop-dft/CHANGES.md).

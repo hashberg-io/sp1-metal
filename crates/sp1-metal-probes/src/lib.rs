@@ -8,7 +8,9 @@ pub mod backend;
 pub mod commit;
 pub mod gpu;
 pub mod kb;
-pub mod nocopy;
 pub mod packed;
 pub mod probes;
-pub mod stats;
+
+/// Re-exported from [`sp1_metal_core`], which sits below the vendored slop
+/// crates so that they and this crate reach the same counters.
+pub use sp1_metal_core::{nocopy, stats};

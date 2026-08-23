@@ -11,8 +11,8 @@
 //! is what has to happen before a kernel can read one. Three things can:
 //!
 //! - nothing, because a buffer for those bytes already exists — either the
-//!   producer allocated them in [`MetalBackend`](crate::backend::MetalBackend)
-//!   or an earlier dispatch this round already wrapped them;
+//!   producer allocated them on the device or an earlier dispatch this round
+//!   already wrapped them;
 //! - a buffer is created over the pages where they lie, which is cheap but not
 //!   free and pins the pages for the dispatch;
 //! - the bytes are copied into a staging buffer, because the pointer or the

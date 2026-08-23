@@ -1,0 +1,14 @@
+[package]
+name = "sp1-metal-core"
+version.workspace = true
+edition.workspace = true
+description = "The parts of the Metal backend that every crate above it needs: when Metal will take memory where it lies, and where the bytes went."
+publish = false
+
+# Deliberately a leaf. The counters have to be process-wide to mean anything,
+# so every crate that dispatches must reach the same statics; that is only
+# possible if this crate sits below all of them, which in turn means it may not
+# depend on anything from slop.
+
+[dependencies]
+metal.workspace = true

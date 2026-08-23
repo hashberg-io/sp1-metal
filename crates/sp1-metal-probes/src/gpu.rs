@@ -8,7 +8,19 @@ use metal::{
     Library, MTLResourceOptions, MTLSize,
 };
 
-pub const SHADER_SRC: &str = include_str!("shaders.metal");
+/// The probe suite's own kernels.
+const PROBE_SRC: &str = include_str!("shaders.metal");
+
+/// The encode kernels, included from the vendored crate that ships them by path
+/// rather than by depending on it: that crate sits below this one, and the
+/// point of reading its file is that the parity check tests the source a proof
+/// runs, not a copy.
+const DFT_SRC: &str = include_str!("../../vendor/slop-dft/src/shaders.metal");
+
+/// The whole library: everything the probes compile against.
+pub fn shader_src() -> String {
+    format!("{PROBE_SRC}\n{DFT_SRC}")
+}
 pub const THREADGROUP_SIZE: u64 = 256;
 
 pub struct Gpu {
@@ -29,7 +41,7 @@ impl Gpu {
         let device = Device::system_default().ok_or("no Metal device found")?;
         let queue = device.new_command_queue();
         let library = device
-            .new_library_with_source(SHADER_SRC, &CompileOptions::new())
+            .new_library_with_source(&shader_src(), &CompileOptions::new())
             .map_err(|e| format!("shader compilation failed: {e}"))?;
         Ok(Self { device, queue, library, pipelines: RefCell::new(HashMap::new()) })
     }

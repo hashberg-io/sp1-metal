@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sp1-metal-probes", "crates/sp1-metal-kernelbench"]
+members = ["crates/sp1-metal-core", "crates/sp1-metal-probes", "crates/sp1-metal-kernelbench"]
 exclude = ["crates/sp1-profile-host", "crates/sp1-metal-transpile", "crates/vendor/sp1-hypercube", "crates/sp1-metal-prover"]
 
 [workspace.package]
@@ -13,6 +13,7 @@ slop-alloc = "=6.4.0"
 slop-challenger = "=6.4.0"
 slop-commit = "=6.4.0"
 slop-dft = "=6.4.0"
+sp1-metal-core = { path = "crates/sp1-metal-core" }
 slop-merkle-tree = "=6.4.0"
 slop-koala-bear = "=6.4.0"
 slop-multilinear = "=6.4.0"
