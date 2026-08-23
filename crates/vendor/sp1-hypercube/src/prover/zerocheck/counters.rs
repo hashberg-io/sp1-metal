@@ -176,3 +176,80 @@ pub fn no_pipeline_report() -> String {
     }
     out
 }
+
+/// What each chip's kernel is allowed to run at.
+static OCCUPANCY: Mutex<Vec<(String, u64, u64, usize)>> = Mutex::new(Vec::new());
+
+/// Records a pipeline's limits, once per chip.
+pub fn note_occupancy(key: &str, max_threads: u64, exec_width: u64, nodes: usize) {
+    OCCUPANCY.lock().expect("poisoned").push((key.to_string(), max_threads, exec_width, nodes));
+}
+
+/// The kernels that cannot run a full threadgroup.
+#[must_use]
+pub fn occupancy_report() -> String {
+    let rows = OCCUPANCY.lock().expect("poisoned");
+    if rows.is_empty() {
+        return String::new();
+    }
+    let limited = rows.iter().filter(|(_, m, _, _)| *m < 256).count();
+    let mut out = format!(
+        "\nzerocheck kernels: {} of {} run fewer than 256 threads a group\n",
+        limited,
+        rows.len()
+    );
+    let mut sorted: Vec<_> = rows.iter().collect();
+    sorted.sort_by_key(|(_, m, _, _)| *m);
+    for (key, max_threads, width, nodes) in sorted.iter().take(8) {
+        out.push_str(&format!(
+            "  {key:<44} {max_threads:>4} threads, simd {width}, {nodes} nodes\n"
+        ));
+    }
+    out
+}
+
+/// Per-chip arithmetic and the GPU time that issued it.
+///
+/// The kernel is at a few percent of both the machine's memory bandwidth and
+/// its multiply throughput, so it is bound by neither. What is left is the size
+/// of the program: these bodies are enormous unrolled straight-line code, and a
+/// GPU's instruction cache is small. If that is the constraint then the rate
+/// should fall as the body grows, and the way to find out is to plot it.
+static PER_CHIP: Mutex<Vec<(String, u64, f64, usize)>> = Mutex::new(Vec::new());
+
+/// Records one dispatch's multiplies and GPU seconds against its chip.
+pub fn note_chip(key: &str, base_muls: u64, gpu: f64, body_nodes: usize) {
+    let mut rows = PER_CHIP.lock().expect("poisoned");
+    if let Some(row) = rows.iter_mut().find(|(k, _, _, _)| k == key) {
+        row.1 += base_muls;
+        row.2 += gpu;
+    } else {
+        rows.push((key.to_string(), base_muls, gpu, body_nodes));
+    }
+}
+
+/// Multiply rate against body size, largest bodies first.
+#[must_use]
+pub fn per_chip_report() -> String {
+    let rows = PER_CHIP.lock().expect("poisoned");
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<_> = rows.iter().filter(|(_, _, g, _)| *g > 0.001).collect();
+    sorted.sort_by_key(|(_, _, _, n)| std::cmp::Reverse(*n));
+    let mut out =
+        String::from("\nzerocheck by chip            nodes      gpu_s   G muls/s\n");
+    for (key, muls, gpu, nodes) in sorted.iter().take(10) {
+        out.push_str(&format!(
+            "  {key:<28} {nodes:>6} {gpu:>10.3} {:>9.2}\n",
+            *muls as f64 / gpu / 1e9
+        ));
+    }
+    for (key, muls, gpu, nodes) in sorted.iter().rev().take(5) {
+        out.push_str(&format!(
+            "  {key:<28} {nodes:>6} {gpu:>10.3} {:>9.2}\n",
+            *muls as f64 / gpu / 1e9
+        ));
+    }
+    out
+}

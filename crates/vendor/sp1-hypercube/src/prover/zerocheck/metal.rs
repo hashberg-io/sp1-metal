@@ -76,6 +76,10 @@ struct Codegen {
     next: usize,
     adds: usize,
     muls: usize,
+    /// Multiplies counted in base-field multiplies, which is what the machine
+    /// actually issues: one for base by base, four for an extension by a base,
+    /// nine for Karatsuba on two extensions.
+    base_muls: usize,
     consts: usize,
     loads: usize,
     /// Whether the trace columns hold extension elements, as they do in every
@@ -103,6 +107,7 @@ impl Codegen {
             next: 0,
             adds: 0,
             muls: 0,
+            base_muls: 0,
             consts: 0,
             loads: 0,
             ext_columns,
@@ -215,6 +220,11 @@ impl Codegen {
 
     fn mul(&mut self, a: (String, Ty), b: (String, Ty)) -> (String, Ty) {
         self.muls += 1;
+        self.base_muls += match (a.1, b.1) {
+            (Ty::Base, Ty::Base) => 1,
+            (Ty::Ext, Ty::Ext) => 9,
+            _ => 4,
+        };
         match (a.1, b.1) {
             (Ty::Base, Ty::Base) => {
                 let e = format!("kb_mul({}, {})", a.0, b.0);
@@ -290,13 +300,87 @@ impl Codegen {
 ///
 /// Columns are read interpolated rather than staged into a per-thread array: a
 /// wide chip's row would be tens of kilobytes, which no thread has.
+/// A chip's constraint DAG, counted by how each node varies with the
+/// interpolation point.
+///
+/// The body below is emitted once per point, and what makes the three copies
+/// differ is only how a column is read. A column's value is affine in the
+/// point, so every node is a polynomial in it whose degree is that node's
+/// multiplicative depth in columns — and the degree says how much of the three
+/// copies is redundant:
+///
+/// - degree 0 touches no column, so one evaluation serves all three points;
+/// - degree 1 is a straight line, so the third point is `2*v(2) - v(0)` — worth
+///   taking only where the node is a multiply, since replacing an add with an
+///   add and a double is no saving;
+/// - degree 2 and above need all three.
+///
+/// Counted before anything is changed, because "the DAG is emitted three times"
+/// does not say how much of it could be emitted once.
+fn dag_shape<Fx: PrimeField32>(constraints: &[SymbolicExpression<Fx>]) -> [usize; 4] {
+    // total, degree 0, degree-1 multiplies, everything else
+    fn walk<Fx: PrimeField32>(
+        e: &SymbolicExpression<Fx>,
+        seen: &mut HashMap<usize, u8>,
+        out: &mut [usize; 4],
+    ) -> u8 {
+        fn go<Fx: PrimeField32>(
+            r: &Rc<SymbolicExpression<Fx>>,
+            seen: &mut HashMap<usize, u8>,
+            out: &mut [usize; 4],
+        ) -> u8 {
+            let key = Rc::as_ptr(r) as usize;
+            if let Some(hit) = seen.get(&key) {
+                return *hit;
+            }
+            let d = walk(r, seen, out);
+            seen.insert(key, d);
+            d
+        }
+        out[0] += 1;
+        let (degree, is_mul) = match e {
+            SymbolicExpression::Variable(v) => {
+                (u8::from(!matches!(v.entry, Entry::Public | Entry::Challenge)), false)
+            }
+            SymbolicExpression::Constant(_)
+            | SymbolicExpression::IsFirstRow
+            | SymbolicExpression::IsLastRow
+            | SymbolicExpression::IsTransition => (0, false),
+            SymbolicExpression::Neg { x, .. } => (go(x, seen, out), false),
+            SymbolicExpression::Add { x, y, .. } | SymbolicExpression::Sub { x, y, .. } => {
+                (go(x, seen, out).max(go(y, seen, out)), false)
+            }
+            SymbolicExpression::Mul { x, y, .. } => {
+                (go(x, seen, out).saturating_add(go(y, seen, out)), true)
+            }
+        };
+        match (degree, is_mul) {
+            (0, _) => out[1] += 1,
+            (1, true) => out[2] += 1,
+            _ => out[3] += 1,
+        }
+        degree
+    }
+    let (mut out, mut seen) = ([0usize; 4], HashMap::new());
+    for c in constraints {
+        walk(c, &mut seen, &mut out);
+    }
+    out
+}
+
 fn transpile_round<Fx: PrimeField32>(
     constraints: &[SymbolicExpression<Fx>],
     is_first_round: bool,
     ext_columns: bool,
-) -> (String, usize) {
+) -> (String, usize, usize) {
+    let shape = dag_shape(constraints);
+    sp1_metal_probes::tally::record("zerocheck: dag nodes", shape[0], 0);
+    sp1_metal_probes::tally::record("zerocheck: dag degree0", shape[1], 0);
+    sp1_metal_probes::tally::record("zerocheck: dag degree1 mul", shape[2], 0);
+    sp1_metal_probes::tally::record("zerocheck: dag rest", shape[3], 0);
     let mut bodies = String::new();
     let mut nodes = 0usize;
+    let mut base_muls = 0usize;
     for (prefix, point, acc) in [("a", 0u8, "acc0"), ("b", 2, "acc2"), ("c", 4, "acc4")] {
         // The first round knows the polynomial vanishes at 0, so that copy of
         // the body would be dead weight.
@@ -307,6 +391,7 @@ fn transpile_round<Fx: PrimeField32>(
         let mut cg = Codegen::at_point(ext_columns, prefix, point);
         let names: Vec<(String, Ty)> = constraints.iter().map(|c| cg.emit(c)).collect();
         nodes += cg.next;
+        base_muls += cg.base_muls;
         write!(bodies, "{}", cg.body).unwrap();
         writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
         for (k, (n, ty)) in names.iter().enumerate() {
@@ -396,7 +481,7 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
         at2 = at2,
     );
     let source = format!("{}\nconstant uint KB_ONE = {}u;\n{}", header(), to_monty(1), kernel);
-    (source, nodes)
+    (source, nodes, base_muls)
 }
 
 
@@ -405,7 +490,9 @@ struct Context {
     /// One pipeline per chip and round kind, built the first time it is asked
     /// for. `None` records a chip whose kernel would not build, so it is not
     /// attempted again.
-    pipelines: Mutex<HashMap<String, Option<ComputePipelineState>>>,
+    /// The pipeline for a chip and how many DAG nodes its body evaluates,
+    /// which is what the reduction's cost is proportional to.
+    pipelines: Mutex<HashMap<String, Option<(ComputePipelineState, usize, usize)>>>,
 }
 
 impl Context {
@@ -486,7 +573,7 @@ fn pipeline_for<Fx: PrimeField32>(
     is_first_round: bool,
     ext_columns: bool,
     constraints: impl FnOnce() -> Vec<SymbolicExpression<Fx>>,
-) -> Option<ComputePipelineState> {
+) -> Option<(ComputePipelineState, usize, usize)> {
     let ctx = context();
     if let Some(hit) = ctx.pipelines.lock().expect("pipelines poisoned").get(key) {
         return hit.clone();
@@ -499,7 +586,7 @@ fn pipeline_for<Fx: PrimeField32>(
         crate::prover::zerocheck::counters::note_no_pipeline(key, "no constraints", 0);
         None
     } else {
-        let (source, nodes) = transpile_round(&cs, is_first_round, ext_columns);
+        let (source, nodes, base_muls) = transpile_round(&cs, is_first_round, ext_columns);
         if nodes > max_nodes() {
             crate::prover::zerocheck::counters::note_no_pipeline(key, "over the node bound", nodes);
             None
@@ -513,7 +600,20 @@ fn pipeline_for<Fx: PrimeField32>(
             if pso.is_none() {
                 crate::prover::zerocheck::counters::note_no_pipeline(key, "did not compile", nodes);
             }
-            pso
+            // What the compiler will actually let this kernel run. A generated
+            // body of hundreds of live extension values can need more registers
+            // than a threadgroup of 256 has, and the driver says so here rather
+            // than anywhere else: a pipeline that reports fewer than the 256
+            // this dispatches is register-limited, and its occupancy with it.
+            if let Some(p) = pso.as_ref() {
+                crate::prover::zerocheck::counters::note_occupancy(
+                    key,
+                    p.max_total_threads_per_threadgroup(),
+                    p.thread_execution_width(),
+                    nodes,
+                );
+            }
+            pso.map(|p| (p, base_muls, nodes))
         }
     };
     stats::record_compile(compile_start.elapsed().as_secs_f64());
@@ -591,9 +691,17 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     if eq.len() < pairs {
         return reject(5);
     }
-    let Some(pso) = pipeline_for(key, is_first_round, ext_columns, constraints) else {
+    let Some((pso, base_muls, body_nodes)) =
+        pipeline_for(key, is_first_round, ext_columns, constraints)
+    else {
         return reject(6);
     };
+    // The base-field multiplies this dispatch will issue: every interpolation
+    // point's body, for every row pair. Divided by the GPU seconds it takes,
+    // this says whether the kernel is at the machine's arithmetic rate or a
+    // long way under it -- which decides whether there is anything to win by
+    // emitting fewer of them.
+    sp1_metal_probes::tally::record("zerocheck: base muls", pairs * base_muls, 0);
     crate::prover::zerocheck::counters::ACCEPTED
         .record(cells, started.elapsed().as_nanos() as u64);
 
@@ -642,7 +750,13 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
-        sp1_metal_probes::queue::submit(cb);
+        let (_, gpu) = sp1_metal_probes::queue::submit(cb);
+        crate::prover::zerocheck::counters::note_chip(
+            key,
+            (pairs * base_muls) as u64,
+            gpu,
+            body_nodes,
+        );
     });
 
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);

@@ -509,6 +509,48 @@ struct ZcParams {
     uint num_terms;
 };
 
+// The same round with the trace laid out the way a real one is.
+//
+// `zc_round` reads `trace[col * n + row]`, so consecutive threads read
+// consecutive addresses. A shard's trace is row-major -- `main[row * width +
+// col]` -- and a thread reads a whole row, so consecutive threads start
+// `width` elements apart. Nothing else differs between the two, which is what
+// makes the pair a measurement of the layout rather than of anything else.
+kernel void zc_round_rowmajor(device const uint* trace [[buffer(0)]],
+                              device const uint4* eq [[buffer(1)]],
+                              device const uint4* alpha_pows [[buffer(2)]],
+                              device const uint4* term_cols [[buffer(3)]],
+                              constant ZcParams& p [[buffer(4)]],
+                              device uint4* partials [[buffer(5)]],
+                              uint gid [[thread_position_in_grid]],
+                              uint tid [[thread_index_in_threadgroup]],
+                              uint tgid [[threadgroup_position_in_grid]]) {
+    threadgroup uint4 shared[256];
+    uint4 acc = uint4(0u);
+    if (gid < p.n) {
+        uint base = gid * p.num_cols;
+        for (uint t = 0; t < p.num_terms; t++) {
+            uint4 cols = term_cols[t];
+            uint m = kb_mul(
+                kb_mul(trace[base + cols.x], trace[base + cols.y]),
+                trace[base + cols.z]);
+            acc = ext_add(acc, ext_mul_base(alpha_pows[t], m));
+        }
+        acc = ext_mul(acc, eq[gid]);
+    }
+    shared[tid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            shared[tid] = ext_add(shared[tid], shared[tid + stride]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        partials[tgid] = shared[0];
+    }
+}
+
 kernel void zc_round(device const uint* trace [[buffer(0)]],
                      device const uint4* eq [[buffer(1)]],
                      device const uint4* alpha_pows [[buffer(2)]],

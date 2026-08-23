@@ -166,6 +166,10 @@ fn report_metal(elapsed: std::time::Duration) {
     eprint!("{}", sp1_hypercube::prover::zerocheck::counters::reject_report());
     #[cfg(feature = "metal")]
     eprint!("{}", sp1_hypercube::prover::zerocheck::counters::no_pipeline_report());
+    #[cfg(feature = "metal")]
+    eprint!("{}", sp1_hypercube::prover::zerocheck::counters::occupancy_report());
+    #[cfg(feature = "metal")]
+    eprint!("{}", sp1_hypercube::prover::zerocheck::counters::per_chip_report());
     eprint!("{}", sp1_hypercube::metal::site_report());
     eprint!("{}", sp1_hypercube::metal::gen_report());
     #[cfg(feature = "metal")]
