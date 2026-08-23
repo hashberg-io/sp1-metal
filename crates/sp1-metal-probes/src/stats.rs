@@ -212,6 +212,28 @@ static INTERVALS: Mutex<Vec<(f64, f64)>> = Mutex::new(Vec::new());
 
 const MAX_INTERVALS: usize = 1 << 20;
 
+/// Kernels compiled at run time, and what it cost.
+///
+/// The zerocheck generates a kernel per chip, so this is paid once per distinct
+/// chip and then cached. It is counted separately from everything else because
+/// Metal compiles in another process: the wait shows up as this process using
+/// no CPU at all, which is invisible to a sampling profiler and looks like the
+/// prover having nothing to do.
+static COMPILES: AtomicU64 = AtomicU64::new(0);
+static COMPILE_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Records one run-time kernel compilation.
+pub fn record_compile(secs: f64) {
+    COMPILES.fetch_add(1, Ordering::Relaxed);
+    COMPILE_NS.fetch_add((secs.max(0.0) * 1e9) as u64, Ordering::Relaxed);
+}
+
+/// `(kernels compiled, thread-seconds spent waiting for the compiler)`.
+#[must_use]
+pub fn compiles() -> (u64, f64) {
+    (COMPILES.load(Ordering::Relaxed), COMPILE_NS.load(Ordering::Relaxed) as f64 / 1e9)
+}
+
 /// Records one command buffer: how long the caller waited, and the interval
 /// during which the hardware actually ran it.
 pub fn record_dispatch(wall_s: f64, gpu_s: f64) {
@@ -354,10 +376,55 @@ pub fn reset() {
         c.reset();
     }
     INTERVALS.lock().expect("intervals poisoned").clear();
+    COMPILES.store(0, Ordering::Relaxed);
+    COMPILE_NS.store(0, Ordering::Relaxed);
 }
 
 fn gb(bytes: u64) -> f64 {
     bytes as f64 / 1e9
+}
+
+/// Device busy, second by second, as a fraction of each second.
+///
+/// The total alone cannot distinguish a device that is a quarter busy
+/// throughout from one that is saturated for a quarter of the proof and idle
+/// for the rest, and those call for opposite work.
+#[must_use]
+pub fn busy_histogram(buckets: usize) -> Vec<f64> {
+    let iv = INTERVALS.lock().expect("intervals poisoned").clone();
+    if iv.is_empty() || buckets == 0 {
+        return Vec::new();
+    }
+    let start = iv.iter().map(|x| x.0).fold(f64::MAX, f64::min);
+    let end = iv.iter().map(|x| x.1).fold(f64::MIN, f64::max);
+    let width = (end - start) / buckets as f64;
+    if width <= 0.0 {
+        return Vec::new();
+    }
+    // Overlapping command buffers are merged first, so a bucket cannot exceed
+    // one: the question is whether the device was doing anything, not how many
+    // threads were asking.
+    let mut sorted = iv;
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite"));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (s, e) in sorted {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+    let mut out = vec![0.0; buckets];
+    for (s, e) in merged {
+        let (mut lo, hi) = (s, e);
+        while lo < hi {
+            let b = (((lo - start) / width) as usize).min(buckets - 1);
+            let edge = start + (b + 1) as f64 * width;
+            let take = hi.min(edge) - lo;
+            out[b] += take / width;
+            lo += take.max(width * 1e-9);
+        }
+    }
+    out
 }
 
 /// A table of what each phase read, wrote and ran, for a profiling host to

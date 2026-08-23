@@ -146,6 +146,13 @@ fn report_metal(elapsed: std::time::Duration) {
         if all.out_bytes() == 0 { 0.0 } else { all.out_staged as f64 / all.out_bytes() as f64 * 100.0 },
         all.in_copy_s + all.out_copy_s,
     );
+    let (kernels, compile_s) = sp1_hypercube::metal_stats::compiles();
+    if kernels > 0 {
+        eprintln!(
+            "compiled {kernels} kernels at run time in {compile_s:.3} thread-seconds; \
+             Metal compiles in another process, so that wait is not CPU time here",
+        );
+    }
     // The union of the command buffers' own execution intervals: what fraction
     // of the proof the device was doing anything at all.
     let (busy, span) = sp1_hypercube::metal_stats::device_busy_s();
@@ -154,6 +161,14 @@ fn report_metal(elapsed: std::time::Duration) {
         if span > 0.0 { busy / span * 100.0 } else { 0.0 },
         busy / elapsed.as_secs_f64() * 100.0,
     );
+    let hist = sp1_hypercube::metal_stats::busy_histogram(40);
+    if !hist.is_empty() {
+        let bar = |v: f64| "#".repeat((v * 20.0).round() as usize);
+        eprintln!("device busy over the proof, {:.2}s per column:", span / hist.len() as f64);
+        for (i, v) in hist.iter().enumerate() {
+            eprintln!("  {:5.1}s {:>5.0}% {}", i as f64 * span / hist.len() as f64, v * 100.0, bar(*v));
+        }
+    }
 }
 
 #[cfg(not(feature = "metal"))]

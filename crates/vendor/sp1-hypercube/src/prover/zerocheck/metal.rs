@@ -455,6 +455,7 @@ fn pipeline_for<Fx: PrimeField32>(
         return hit.clone();
     }
     let cs = constraints();
+    let compile_start = std::time::Instant::now();
     let built = (!cs.is_empty())
         .then(|| transpile_round(&cs, is_first_round, ext_columns))
         .filter(|(_, nodes)| *nodes <= MAX_NODES)
@@ -466,6 +467,7 @@ fn pipeline_for<Fx: PrimeField32>(
             let f = library.get_function("zc_round", None).ok()?;
             ctx.device.new_compute_pipeline_state_with_function(&f).ok()
         });
+    stats::record_compile(compile_start.elapsed().as_secs_f64());
     ctx.pipelines
         .lock()
         .expect("pipelines poisoned")
