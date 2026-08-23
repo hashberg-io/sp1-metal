@@ -343,6 +343,12 @@ pub fn coset_dft_into<F: TwoAdicField>(
             std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), out_bytes),
         )
     };
+    if direct {
+        // The Merkle kernels hash this codeword next, on this thread's queue,
+        // and nothing on the host touches it in between. It is the largest
+        // borrowed allocation in the proof, and mapping it twice is pure cost.
+        sp1_metal_core::handoff::keep(dst.as_mut_ptr().cast::<u8>(), out_bytes, &b_dst);
+    }
     let tw = twiddles::<F>(ctx, n);
 
     let queue = nocopy::thread_queue(&ctx.device);

@@ -9,6 +9,7 @@
 //! dispatches reach is worse than no counter, because it reads as a measurement
 //! — and [`nocopy`] states the one rule the whole design rests on.
 
+pub mod handoff;
 pub mod nocopy;
 pub mod queue;
 pub mod stats;

@@ -93,6 +93,13 @@ fn dispatch(enc: &metal::ComputeCommandEncoderRef, n: u64) {
 fn upload(device: &Device, words: &[u32]) -> Buffer {
     let bytes = std::mem::size_of_val(words);
     let start = std::time::Instant::now();
+    // The encode wrote this codeword through a buffer a moment ago; taking it
+    // rather than making another saves mapping the largest allocation in the
+    // proof a second time. See `sp1_metal_core::handoff`.
+    if let Some(buffer) = crate::handoff::take(words.as_ptr().cast(), bytes) {
+        crate::stats::record_input(crate::stats::Input::Resident, bytes, 0);
+        return buffer;
+    }
     if bytes > 0 && crate::nocopy::takeable(words.as_ptr().cast()) {
         crate::stats::record_input(crate::stats::Input::Wrapped, bytes, 0);
         // SAFETY: the buffer borrows `words` for the dispatch, which is awaited
