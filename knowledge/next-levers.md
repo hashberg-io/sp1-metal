@@ -399,3 +399,70 @@ The GKR first layer solved exactly this shape: the constraints go up as **a tabl
 ## The arithmetic
 
 Items 1 to 5 are worth perhaps 1.5-2.5 s between them, landing at **6.4x-7.0x**. Past that the device union is the wall: nothing gets below about six seconds until the kernels get cheaper, which makes item 4 the one that decides whether there is a fourth list.
+
+---
+
+# What happened, the third time
+
+Written 2026-08-23, after working the third list end to end.
+**11.16 s to 11.04 s against a 59.51 s CPU arm — 5.38x to 5.39x, which is no change.**
+
+Five items, and none of them moved the number. That is the result, and the reasons are worth more than the ratio would have been.
+
+| | what it was worth | what it turned out to be |
+|---|---|---|
+| 1. The unexamined PCS spans | nothing | not CPU work at all: the same waiting as everywhere else |
+| 2. Not waiting for the GPU | **wrong proofs** | the wait is tied to the thread; the data is not |
+| 3. `Global`'s zerocheck | nothing | the CPU fallback is 0.04 s a proof, not the 15% of cells it looked like |
+| 4. Tuning the zerocheck kernel | nothing | it is not bound by its reduction — and the compile figures were warm-cache |
+| 5. Fewer, larger dispatches | nothing | 167 round trips removed, wall unchanged |
+
+## The one thing all five agree on
+
+The proof uses 4.9 of sixteen cores and keeps the device busy 54% of the time. Eight and a half thread-seconds go on waiting. Every item on this list was a different guess at what to do about that, and each one found the same wall from a different side:
+
+**the waiting is queueing for device time, and nothing that leaves the device's total work unchanged can remove it.**
+
+Item 1 found the two unexamined spans were waiting rather than computing. Item 3 found a CPU fallback so cheap that moving it to the device would add queue pressure for nothing. Item 5 removed 167 round trips and changed nothing measurable. Item 2 tried to stop waiting altogether and produced wrong proofs. What is left is item 4 — make the device's work smaller — and the one attempt at it says the obvious inefficiency was not one.
+
+## 1. The evaluation proof — waiting, not computing
+
+`prove evaluation claims` is 2.42 thread-seconds and the jagged sumcheck driver is 2.42 of it, to two decimal places. That driver is already on the GPU. `Dense PCS evaluation proof` splits as 1.30 thread-seconds of FRI commit rounds over 84 of them, 0.32 batching, 0.15 restricting to even indices, 0.09 in the query phase — and the commit rounds are Merkle commitments, also on the GPU.
+
+The counters that found this are now a named-tally table in the crate below everything, rather than a fifth bespoke set.
+
+## 2. Not waiting — and why it cannot work
+
+A `MTLCommandQueue` runs its buffers in commit order, so a later dispatch already sees an earlier one's writes and the host has no reason to wait for a fold whose output only the next dispatch reads. Deferring just the Reed-Solomon encode, on a guest that runs a thousand steps, produces `Query value mismatch` in the dense PCS: the Merkle tree was built over a codeword that had not finished being written.
+
+**Both halves of the argument are per-thread and the data is not.** Each thread has its own queue, so commit order orders only that thread's dispatches, and the list of un-awaited buffers is thread-local, so only that thread can wait for them — while SP1 proves a shard as a tokio task, and a task moves between worker threads.
+
+What that looks like from outside is neither a crash nor a failed proof. The prover retries the shard, exhausts its retry budget, and the process then sits with every thread parked and **nothing in Metal at all**. Two attempts at diagnosis went the wrong way on that evidence — first blaming command-queue slot exhaustion, then buffer lifetimes — before turning the log up far enough to find the mismatch underneath. **A sample showing no threads in the thing you changed is not evidence that the thing you changed is innocent.**
+
+The switch stays, off. Making this work needs the wait attached to the data — a pending buffer carried by the tensor it writes — not to the thread that submitted it.
+
+## 3. `Global` — the share of cells was the wrong number
+
+`Global` is over the transpiler's node bound and reduces on the CPU, carrying 15% of zerocheck's cells. Timing the fallback rather than counting its cells: all 348 CPU reductions, seven chips, 4.31 billion cells, cost **0.159 thread-seconds** across four shards — four hundredths of a second of the proof. Three of those chips have no constraints at all, and rayon handles the rest across sixteen cores faster than a dispatch would.
+
+It also inverts the usual assumption: a CPU reduction of one of these chips takes 0.46 ms, and a zerocheck dispatch blocks for 1.8.
+
+## 4. The zerocheck kernel — and what compiling actually costs
+
+The kernel spends 12 KB of threadgroup memory and eight barrier rounds reducing 256 partial sums. Folding within each SIMD group by shuffling registers needs 384 bytes and one barrier, and the first run said it was 29% faster.
+
+It is not. **That run was also compiling every kernel from scratch**, and a device mostly idle while it waits makes anything measured on it look quick. Warm, the shuffle version is the same or slightly worse.
+
+The experiment found something better than what it was looking for. Compiled shaders are cached by macOS against their source, so the sixty-one kernels this project has always reported at **0.04 thread-seconds are a warm number**. Change one character of the generated source and the next run pays **271 thread-seconds** — the acceptance proof takes 108 seconds instead of 11 — and the run after that pays nothing again.
+
+So a first run on a machine that has not seen this source is four minutes slower than every run after it, which no measurement here had ever reported. It also reframes the 1,814 seconds that letting `Global` past the node bound cost: a cold compile, paid once per machine rather than per proof. It stays not worth doing, but for item 3's reason rather than that one.
+
+## 5. Fewer, larger dispatches — the direct test
+
+A layer's transitions now stage into one command buffer and are waited for once, which is what the layer fold beside them already does. Dispatches fall from 201 to 34 and the wall does not move.
+
+That is the cleanest available test of the "fewer round trips" hypothesis, and it refutes it. The device does the same work either way; collapsing the round trips only changes how many times one thread re-enters a queue that is busy regardless.
+
+## What this leaves
+
+The device union is 5.96 seconds of an 11 second proof. Everything above says the same thing: **the only lever left is making that 5.96 seconds smaller**, and the one attempt at it found the obvious inefficiency was not one. That is where a fourth list would have to start, and it would want a kernel-level profile — Metal's own counters, not span timings — because this project has now twice guessed wrong about which part of a kernel is expensive.
