@@ -122,16 +122,26 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
         let evaluation_claims = evaluation_claims.into_iter().flatten().collect::<Vec<_>>();
 
         // Grind for batch randomness.
+        #[cfg(feature = "metal")]
+        let grind = sp1_metal_core::tally::Span::start("basefold: grind");
         let batch_grinding_witness = challenger.grind(BATCH_GRINDING_BITS);
+        #[cfg(feature = "metal")]
+        grind.stop(0);
 
         // Sample batching coefficients via partial Lagrange basis.
         let total_len = mles.iter().map(|mle| mle.num_polynomials()).sum::<usize>();
         let num_batching_variables = total_len.next_power_of_two().ilog2();
         let batching_point = challenger.sample_point::<GC::EF>(num_batching_variables);
 
+        #[cfg(feature = "metal")]
+        let lagrange = sp1_metal_core::tally::Span::start("basefold: batch lagrange");
         let batching_coefficients = partial_lagrange_blocking(&batching_point);
+        #[cfg(feature = "metal")]
+        lagrange.stop(1usize << num_batching_variables);
 
         // Batch the mles and codewords.
+        #[cfg(feature = "metal")]
+        let batching = sp1_metal_core::tally::Span::start("basefold: batch");
         let (mle_batch, codeword_batch, batched_eval_claim) = fri_prover.batch(
             &batching_coefficients,
             mles,
@@ -139,6 +149,8 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
             evaluation_claims,
             &self.encoder,
         );
+        #[cfg(feature = "metal")]
+        batching.stop(mle_batch.guts().total_len());
         // From this point on, run the BaseFold protocol on the random linear combination codeword,
         // the random linear combination multilinear, and the random linear combination of the
         // evaluation claims.
@@ -163,8 +175,12 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
         challenger.observe(GC::F::from_canonical_usize(eval_point.dimension()));
         for _ in 0..eval_point.dimension() {
             // Compute claims for `g(X_0, X_1, ..., X_{d-1}, 0)` and `g(X_0, X_1, ..., X_{d-1}, 1)`.
+            #[cfg(feature = "metal")]
+            let at_zero = sp1_metal_core::tally::Span::start("basefold: fixed_at_zero");
             let last_coord = eval_point.remove_last_coordinate();
             let zero_values = current_mle.fixed_at_zero(&eval_point);
+            #[cfg(feature = "metal")]
+            at_zero.stop(current_mle.guts().total_len());
             let zero_val = zero_values[0];
             let one_val = (current_batched_eval_claim - zero_val) / last_coord + zero_val;
             let uni_poly = [zero_val, one_val];
@@ -174,9 +190,15 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
 
             // Perform a single round of the FRI commit phase, returning the commitment, folded
             // codeword, and folding parameter.
+            #[cfg(feature = "metal")]
+            let round_cells = current_codeword.data.total_len();
+            #[cfg(feature = "metal")]
+            let round = sp1_metal_core::tally::Span::start("basefold: commit round");
             let (beta, folded_mle, folded_codeword, commitment, leaves, prover_data) = fri_prover
                 .commit_phase_round(current_mle, current_codeword, &self.tcs_prover, challenger)
                 .map_err(BasefoldProverError::CommitPhaseError)?;
+            #[cfg(feature = "metal")]
+            round.stop(round_cells);
 
             fri_commitments.push(commitment);
             commit_phase_data.push(prover_data);
@@ -189,6 +211,8 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
 
         let final_poly = fri_prover.final_poly(current_codeword);
         challenger.observe_ext_element(final_poly);
+        #[cfg(feature = "metal")]
+        let query = sp1_metal_core::tally::Span::start("basefold: query phase");
 
         let fri_config = self.encoder.config();
         let pow_bits = fri_config.proof_of_work_bits;
@@ -230,6 +254,9 @@ impl<GC: IopCtx<F: TwoAdicField, EF: TwoAdicField>, P: ComputeTcsOpenings<GC, Cp
             let opening = MerkleTreeOpeningAndProof { values, proof };
             query_phase_openings_and_proofs.push(opening);
         }
+
+        #[cfg(feature = "metal")]
+        query.stop(query_phase_openings_and_proofs.len());
 
         Ok(BasefoldProof {
             univariate_messages,

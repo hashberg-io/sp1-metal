@@ -170,6 +170,8 @@ fn report_metal(elapsed: std::time::Duration) {
     eprint!("{}", sp1_hypercube::metal::gen_report());
     #[cfg(feature = "metal")]
     eprint!("{}", slop_jagged::metal::poly_report());
+    #[cfg(feature = "metal")]
+    eprint!("{}", sp1_metal_core::tally::report());
     let [rejected, interaction] = sp1_hypercube::metal::cpu_round_counts();
     eprintln!(
         "gkr rounds left on the CPU: {} rejected layers in {:.3}s, {} interaction layers in {:.3}s",

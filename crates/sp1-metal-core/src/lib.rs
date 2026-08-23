@@ -11,3 +11,4 @@
 
 pub mod nocopy;
 pub mod stats;
+pub mod tally;

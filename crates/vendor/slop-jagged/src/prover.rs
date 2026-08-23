@@ -217,6 +217,8 @@ impl<GC: IopCtx, Proof, C: MultilinearPcsProver<GC, Proof>> JaggedProver<GC, Pro
             prover_data.iter().map(|data| data.column_counts.clone()).collect::<Rounds<_>>();
 
         // Collect the jagged polynomial parameters.
+        #[cfg(feature = "metal")]
+        let setup = sp1_metal_core::tally::Span::start("jagged: params");
         let params = JaggedLittlePolynomialProverParams::new(
             prover_data
                 .iter()
@@ -241,6 +243,8 @@ impl<GC: IopCtx, Proof, C: MultilinearPcsProver<GC, Proof>> JaggedProver<GC, Pro
             .iter()
             .map(|data| data.pcs_prover_data.interleaved_mles().clone())
             .collect::<Rounds<_>>();
+        #[cfg(feature = "metal")]
+        setup.stop(params.col_prefix_sums_usize.len());
 
         let sumcheck_poly = {
             let _span = tracing::debug_span!("create jagged sumcheck poly").entered();
@@ -263,6 +267,8 @@ impl<GC: IopCtx, Proof, C: MultilinearPcsProver<GC, Proof>> JaggedProver<GC, Pro
         let sumcheck_claims = column_claims.eval_at(&z_col_backend);
         let sumcheck_claim = sumcheck_claims[0];
 
+        #[cfg(feature = "metal")]
+        let driver = sp1_metal_core::tally::Span::start("jagged: sumcheck");
         let (sumcheck_proof, component_poly_evals) = reduce_sumcheck_to_evaluation(
             vec![sumcheck_poly],
             challenger,
@@ -270,6 +276,8 @@ impl<GC: IopCtx, Proof, C: MultilinearPcsProver<GC, Proof>> JaggedProver<GC, Pro
             1,
             GC::EF::one(),
         );
+        #[cfg(feature = "metal")]
+        driver.stop(0);
 
         let final_eval_point = sumcheck_proof.point_and_eval.0.clone();
 

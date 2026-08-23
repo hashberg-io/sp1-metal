@@ -36,10 +36,14 @@ name = "slop_jagged"
 path = "src/lib.rs"
 
 [features]
-metal = ["dep:metal", "dep:sp1-metal-probes"]
+metal = ["dep:metal", "dep:sp1-metal-probes", "dep:sp1-metal-core"]
 
 [dependencies.sp1-metal-probes]
 path = "../../sp1-metal-probes"
+optional = true
+
+[dependencies.sp1-metal-core]
+path = "../../sp1-metal-core"
 optional = true
 
 [dependencies.metal]

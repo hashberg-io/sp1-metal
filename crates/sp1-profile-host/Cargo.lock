@@ -3509,6 +3509,7 @@ dependencies = [
  "slop-merkle-tree",
  "slop-multilinear",
  "slop-tensor",
+ "sp1-metal-core",
  "thiserror 1.0.69",
 ]
 
@@ -3619,6 +3620,7 @@ dependencies = [
  "slop-symmetric",
  "slop-tensor",
  "slop-utils",
+ "sp1-metal-core",
  "sp1-metal-probes",
  "thiserror 1.0.69",
  "tracing",
@@ -4192,10 +4194,12 @@ dependencies = [
  "anyhow",
  "bincode",
  "mimalloc",
+ "slop-basefold-prover",
  "slop-dft",
  "slop-jagged",
  "slop-multilinear",
  "sp1-hypercube",
+ "sp1-metal-core",
  "sp1-sdk",
  "tokio",
 ]

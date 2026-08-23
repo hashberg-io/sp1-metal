@@ -35,6 +35,14 @@ repository = "https://github.com/succinctlabs/sp1"
 name = "slop_basefold_prover"
 path = "src/lib.rs"
 
+[features]
+# Counts where the evaluation proof's time goes. Off by default.
+metal = ["dep:sp1-metal-core"]
+
+[dependencies.sp1-metal-core]
+path = "../../sp1-metal-core"
+optional = true
+
 [dependencies.derive-where]
 version = "1.5.0"
 features = ["serde"]

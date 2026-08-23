@@ -9,6 +9,9 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+metal = ["dep:sp1-metal-core"]
+
 [dependencies]
 slop-algebra = { workspace = true }
 slop-multilinear = { workspace = true }
@@ -34,3 +37,4 @@ derive-where = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }
+sp1-metal-core = { path = "../../sp1-metal-core", optional = true }
