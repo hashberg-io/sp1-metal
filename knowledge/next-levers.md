@@ -239,3 +239,71 @@ Unchanged and still unreachable, but grown from a footnote to nearly a quarter o
 ## The arithmetic
 
 Items 1, 3 and 5 are worth roughly 1.5-2 s between them, landing at **4.9x-5.5x**. Item 2 is the only one that could beat that, and the only honest thing to say about it is that nobody has measured it yet. Item 6 says none of it goes past about 7x.
+
+---
+
+# What happened, the second time
+
+Written 2026-08-23, after working the second list end to end.
+**13.56 s to 11.16 s against a 60.03 s CPU arm, 4.49x to 5.38x.**
+
+| | what it was worth | what it turned out to be |
+|---|---|---|
+| 1. The encode kernel | **13.56 → 13.13 s** | as predicted: eighteen passes became ten |
+| 2. Zerocheck | **13.13 → 12.18 s** | not "unattributed": one table built a hundred times a round |
+| 3. Dispatch latency | nothing directly | measured to be contention, and the sites are now visible |
+| 4. `generate GKR circuit` | **12.18 → 12.00 s** | not the CPU fallbacks, which are 0.16% of the cells |
+| 5. The jagged construction | **12.00 → 11.16 s** | three passes where one would do |
+| 6. The floor | **3.09 → 1.86 s** | it was never structural |
+
+## 1. The encode kernel — as predicted, which is worth noting
+
+The estimate was 12.6-13.0 s and the stop condition was `commit` GPU seconds below about 3.5. They landed at 3.52 and the wall at 13.13.
+
+A radix-4 butterfly does two decimation-in-frequency stages for one pass at the same multiply count, because the second stage's twiddle on the odd half collapses to a fourth root of unity — the stride times the half-block is exactly a quarter of the codeword, whatever the stage. That root is already in the twiddle table, so it costs nothing to find. Eighteen passes became ten, the encode's GPU time 3.05 seconds became 1.66, and the device went from 44.3% busy to 40.8%.
+
+The parity check gained three shapes, because the two it had only reached one of the paths: an odd number of stages leaves a radix-2 pass at the top, and a column count that is not a whole number of tiles skips the tiled tail altogether.
+
+## 2. Zerocheck — the item was wrong about its own premise, and the counters said so in one run
+
+The item said "nearly five thread-seconds are somewhere else under that span". They were not somewhere else. Four buckets that partition the span put the setup loop, the sumcheck driver and the opening assembly at **a millisecond between them**, and 92% of zerocheck in the round reduction — which is supposed to be on the GPU.
+
+A tally of every reason the round reduction refuses the device found the rest: **one third of it was building the eq weights**, 1,606 tables against 1,258 dispatches. Upstream leaves a TODO on the line saying it could be computed once per sumcheck, and it is right for a reason worth stating — every chip of a shard folds the same point, so the hundred-odd chips of a round each build the same table, use it once and drop it. The driver walks them in order on one thread, so remembering the last one is enough. Tables built fell from 1,606 to 88, which is twenty-two rounds times four shards.
+
+The same counters showed 348 round reductions with no kernel at all. Seven chips: Byte, Program and Range have no constraints in either round shape, and `Global` is over the node bound at 22,794 against 16,384. **Raising the bound to let it through costs 1,814 seconds of kernel compilation** and takes the proof from 12.0 seconds to 463.6, while the other sixty-one kernels compile in 0.04 seconds between them. The bound is not conservative; it is the edge of a cliff. What `Global` needs is the treatment the GKR first layer got — its constraints as a table one kernel walks — not a larger number.
+
+## 3. Dispatch latency — measured rather than guessed at, and it is contention
+
+With one shard proving, a GKR dispatch blocks **0.34 ms**; with four, **1.60**. The fixed part of a round trip is a third of a millisecond and the rest is three other threads asking for the same device. So the item is real but not separately actionable: it shrinks when GPU seconds shrink, which is items 1 and 2.
+
+Each of the five GKR dispatch sites now counts its own round trips, which is how the two worst ratios became visible — and they are not where the GPU time is. The zerocheck column fold is 348 buffers blocking 3.93 ms apiece for 1.58 ms of work; the layer transition is 201 blocking 4.37 ms for half a millisecond. Both are loops the driver walks one chip at a time.
+
+Sweeping the zerocheck fold's gate says the fold does belong on the device — turning it off costs 4% — and that moving the threshold within a sixteen-fold range moves nothing outside the run-to-run spread.
+
+## 4. `generate GKR circuit` — the guess was wrong and cost nothing to disprove
+
+Both loops that build the circuit walk a layer one chip at a time and decline the chips too small for a round trip, so the obvious suspicion was the declines. Counting says they handle **0.16% of the cells** — 75 first-layer chips and 1,959 transitions, 0.14 thread-seconds between them. Batching them would have bought nothing.
+
+The time is around the dispatch, not in it, and two things were doing it.
+
+Splitting a layer into its even and odd halves is written as four folds at alpha zero and alpha one, and **a fold at either end of the interpolation is a choice rather than a combination**: `alpha * (y - x) + x` is `x` at zero and `y` at one. Taking them as written costs a multiply and a subtraction per cell to compute a copy. Folds of the widest kind fell from 1.69 to 0.76 nanoseconds a cell.
+
+And the first layer's two output arrays were filled before they were written, when every cell of both is written on both paths. The denominators are filled with ones rather than zeros, so it was a real pass over the largest arrays in the phase.
+
+The ratio moved the *wrong* way here, 5.09x to 5.04x, because both changes are CPU-side and the same binary runs both arms. That is the honest direction for it to move.
+
+## 5. The jagged construction — three passes where one would do
+
+`create jagged sumcheck poly` splits cleanly in two, and it is not the jagged multilinear (0.5 thread-seconds, already on the GPU). It is laying the base polynomials end to end, which was **2.19** and made three passes over the whole polynomial: a transpose of each component into a fresh allocation, an append into a running buffer, and a transpose of the result — that last one of a one-row matrix, so it permutes nothing and copies everything. On one thread.
+
+It now makes one pass. Each component transposes straight into its own range of the output, the ranges are carved out in advance so their disjointness is checked rather than asserted, and they run in parallel; what comes out is sliced rather than transposed. **2.19 to 0.42 thread-seconds.**
+
+## 6. The floor — it was never structural
+
+The previous list measured the floor at **3.09 seconds** and concluded it was one padded shard: a guest running a thousand steps still paid 2.2 thread-seconds of zerocheck, because SP1 pads every shard to a fixed shape.
+
+That conclusion was wrong, and the way it was wrong is worth keeping. **The floor is now 1.86 seconds**, and the trivial proof's zerocheck is 0.8 thread-seconds rather than 2.2 — because the eq table it was rebuilding a hundred times a round is rebuilt once, and that is as true of an empty shard as of a full one. What looked like an irreducible per-shard cost was the same inefficiency, measured where nothing else was happening.
+
+The lesson is not about zerocheck. **A floor measured on a small workload is only a floor if the work inside it has been looked at**, and this one had not been. The cap that is actually structural — `ProverSemaphore::new(4)` at `sp1-prover/src/worker/builder.rs:332`, a literal in an un-vendored crate — is untouched, and was never the binding constraint for four shards anyway.
+
+Of the 11.16 seconds at n = 2,000,000, about 1.9 are floor and 9.3 scale, against roughly 58 on the CPU: **about 6.2x on the part a backend can touch**, and an absolute ceiling of 32x rather than 20.

@@ -534,3 +534,37 @@ Still flat in shard size across a sixteen-fold range, still climbing with total 
 Proving a guest that runs a thousand steps takes **3.09 seconds**, of which `setup` is 1.0 thread-seconds and **zerocheck is 2.2 on a shard with nothing in it** — SP1 pads every shard to a fixed shape, so the smallest possible proof still runs a full-shape one. The floor is not startup plus tail; it is one padded shard.
 
 Of the 13.68 seconds at n = 2,000,000, about 3.1 are that floor. The part that scales with work is 10.6 against roughly 58 on the CPU, so the backend is worth **about 5.5x on what it can touch**, and the number the project reports is that diluted by a constant it does not control.
+
+## 19. Six more levers, and a floor that was not one
+
+`next-levers.md`'s second list ranked six things to try after 4.49x, written from a proof where the GPU had become the thing being waited on: four proving threads asking for 10.09 GPU-seconds inside a 13.6 second proof, getting a 6.78 second union, and spending 8.4 thread-seconds waiting.
+
+**4.49x to 5.38x**, and the floor from 3.09 seconds to 1.86.
+
+### The one that went as predicted
+
+The encode was the largest consumer of GPU time in the proof as soon as it was ported — committing costs 4.91 GPU-seconds with it on and 1.86 with it off. A radix-4 butterfly does two decimation-in-frequency stages for one pass at the same multiply count: the second stage's twiddle on the odd half collapses to a fourth root of unity, because the stride times the half-block is exactly a quarter of the codeword whatever the stage, and that root is already in the twiddle table. Eighteen passes became ten and the estimate held to the tenth of a second.
+
+### The two where counting beat guessing again
+
+Zerocheck was described as having "nearly five thread-seconds somewhere else". Four buckets partitioning the span put the setup loop, the sumcheck driver and the opening assembly at **a millisecond between them** — 92% of it is the round reduction, and a third of *that* was building the eq weights: **1,606 tables against 1,258 dispatches**. Every chip of a shard folds the same point, so the hundred-odd chips of a round each built the same table, used it once and dropped it. Upstream's own TODO says as much. Remembering the last one is enough, because the driver walks a round in order on one thread.
+
+`generate GKR circuit` was suspected of losing time to the chips its two loops decline as too small for a round trip. Those chips are **0.16% of the cells**. The time was around the dispatch: four folds per chip at alpha zero and alpha one, computed as `alpha * (y - x) + x` when at either end of the interpolation the fold is a *choice* — `x` at zero, `y` at one — and two output arrays filled before being entirely overwritten.
+
+### The one that was three passes
+
+Laying the jagged sumcheck's base polynomials end to end transposed each component into a fresh allocation, appended those into a running buffer, and transposed the result — and that last transpose is of a one-row matrix, so it permutes nothing and copies everything. On one thread. Done in one parallel pass instead: **2.19 to 0.42 thread-seconds.**
+
+### Two negative results worth as much as the positive ones
+
+**The zerocheck node bound is a cliff, not a margin.** Exactly one core chip is caught by it — `Global`, at 22,794 nodes against 16,384 — and letting it through costs **1,814 seconds of kernel compilation**, taking the proof from 12.0 seconds to 463.6. The other sixty-one kernels compile in 0.04 seconds between them. What `Global` needs is the first layer's treatment, its constraints as a table one kernel walks, not a larger number.
+
+**The dispatch waiting is contention.** With one shard proving, a GKR dispatch blocks 0.34 ms; with four, 1.60. A round trip costs a third of a millisecond and the rest is three other threads asking for the same device — so it is not separately actionable, it shrinks when GPU seconds shrink.
+
+### The floor was not a floor
+
+The previous section measured a trivial proof at 3.09 seconds and concluded the floor was one padded shard, since a guest running a thousand steps still paid 2.2 thread-seconds of zerocheck.
+
+**It is now 1.86 seconds, and that zerocheck is 0.8** — because the eq table it was rebuilding a hundred times a round is now built once, which is as true of an empty shard as of a full one. What looked like an irreducible per-shard cost was the same inefficiency, measured where nothing else was happening to hide it.
+
+The lesson is not about zerocheck: **a floor measured on a small workload is only a floor if the work inside it has been looked at.** Of the 11.16 seconds at n = 2,000,000, about 1.9 are floor and 9.3 scale against roughly 58 on the CPU — about **6.2x on the part a backend can touch**, and an absolute ceiling of 32x rather than 20.
