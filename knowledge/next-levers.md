@@ -307,3 +307,21 @@ That conclusion was wrong, and the way it was wrong is worth keeping. **The floo
 The lesson is not about zerocheck. **A floor measured on a small workload is only a floor if the work inside it has been looked at**, and this one had not been. The cap that is actually structural — `ProverSemaphore::new(4)` at `sp1-prover/src/worker/builder.rs:332`, a literal in an un-vendored crate — is untouched, and was never the binding constraint for four shards anyway.
 
 Of the 11.16 seconds at n = 2,000,000, about 1.9 are floor and 9.3 scale, against roughly 58 on the CPU: **about 6.2x on the part a backend can touch**, and an absolute ceiling of 32x rather than 20.
+
+### Acceptance
+
+| axis | point | CPU | Metal | | was |
+|---|---|---:|---:|---:|---:|
+| shard size | 1 MiB | 59.64 s | 10.95 s | **5.449x** | 4.507x |
+| | 2 MiB | 61.12 s | 11.46 s | 5.333x | 4.489x |
+| | 4 MiB | 60.34 s | 11.11 s | 5.431x | 4.637x |
+| | 8 MiB | 60.22 s | 11.28 s | 5.339x | 4.558x |
+| | 16 MiB | 60.06 s | 11.20 s | 5.363x | 4.621x |
+| work | fib n=250k | 14.02 s | 3.72 s | 3.766x | 2.933x |
+| | fib n=500k | 20.77 s | 5.54 s | 3.747x | 3.106x |
+| | fib n=1M | 35.45 s | 8.41 s | 4.216x | 3.382x |
+| | fib n=2M | 60.27 s | 11.14 s | 5.411x | 4.535x |
+| guest | mem n=400k | 31.67 s | 8.19 s | 3.868x | 3.231x |
+| | bits n=1M | 49.94 s | 9.75 s | 5.122x | 4.175x |
+
+Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.93 - 4.64x to **3.75 - 5.45x**. The floor rose most again, 2.93x to 3.77x, which is the same thing the floor measurement says: what looked like an irreducible per-shard cost was work nobody had looked at.

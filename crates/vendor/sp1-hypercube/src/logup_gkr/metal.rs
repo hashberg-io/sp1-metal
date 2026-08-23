@@ -602,12 +602,15 @@ pub fn site_report() -> String {
     out
 }
 
-/// Commits a command buffer, waits for it, and records what the GPU spent.
+/// Commits a command buffer, waits for it, and records what the GPU spent
+/// against the site that submitted it.
 fn run_and_record_at(cb: &metal::CommandBufferRef, site: usize) {
     let start = std::time::Instant::now();
     cb.commit();
     cb.wait_until_completed();
     let wall = start.elapsed().as_secs_f64();
+    // GPUStartTime and GPUEndTime are not bound by the metal crate, but they
+    // are ordinary Objective-C properties on MTLCommandBuffer.
     let (t0, t1): (f64, f64) =
         unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
     let mut m = SITES[site].lock().expect("poisoned");
@@ -620,21 +623,6 @@ fn run_and_record_at(cb: &metal::CommandBufferRef, site: usize) {
     stats::record_interval(t0, t1);
 }
 
-/// Commits a command buffer, waits for it, and records what the GPU spent.
-#[allow(dead_code)]
-fn run_and_record(cb: &metal::CommandBufferRef) {
-    let start = std::time::Instant::now();
-    cb.commit();
-    cb.wait_until_completed();
-    let wall = start.elapsed().as_secs_f64();
-    // GPUStartTime and GPUEndTime are not bound by the metal crate, but they
-    // are ordinary Objective-C properties on MTLCommandBuffer.
-    let (t0, t1): (f64, f64) =
-        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-    STATS.record(wall, t1 - t0);
-    stats::record_dispatch(wall, t1 - t0);
-    stats::record_interval(t0, t1);
-}
 
 fn as_words<T>(xs: &[T]) -> &[u8] {
     // SAFETY: KoalaBear is repr(transparent) over u32 and BinomialExtensionField
