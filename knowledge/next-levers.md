@@ -466,3 +466,63 @@ That is the cleanest available test of the "fewer round trips" hypothesis, and i
 ## What this leaves
 
 The device union is 5.96 seconds of an 11 second proof. Everything above says the same thing: **the only lever left is making that 5.96 seconds smaller**, and the one attempt at it found the obvious inefficiency was not one. That is where a fourth list would have to start, and it would want a kernel-level profile — Metal's own counters, not span timings — because this project has now twice guessed wrong about which part of a kernel is expensive.
+
+---
+
+# The fourth list, from 5.39x
+
+Written 2026-08-23 against **11.04 s paired with 59.51 s at n = 2,000,000**, and **20.15 s paired with 112.73 s at n = 4,000,000**.
+
+## A correction the list starts from
+
+A single paired run at n = 4,000,000 put the GPU arm at 23.44 s and the speedup at 4.80x, which read as the backend losing its advantage at larger workloads. It does not: three standalone runs give 20.51, 20.27 and 20.77, a second pair gives 20.15, and the speedup at six shards is **5.60x** against 5.39x at four.
+
+The 23.44 was a 16% outlier. **Anything quoted at n >= 4,000,000 should be the median of three runs**, because a single pair there has a spread wide enough to invent a finding.
+
+## 1. The jagged sumcheck's waiting grows with shard count
+
+The only thing measured that gets *worse* as the workload gets bigger, which is the direction that matters.
+
+| | 4 shards (n=2M) | 6 shards (n=4M) |
+|---|---:|---:|
+| `jagged: sumcheck`, per shard | 0.61 s | **3.24 s** |
+| `pcs` blocked, per dispatch | 5.8 ms | **13.5 ms** |
+| device busy | 54% | **46%** |
+
+The device gets *less* busy while everything waits *longer*, so it is not saturation; the polynomial grows 1.33x per shard, so it is not work. Consistent across four runs.
+
+**The first action is attribution, not a port.** That instruction has paid five times now. Candidates: CPU oversubscription (six shards times rayon pools on sixteen cores), queue scheduling, or something in the driver.
+
+**Estimated: unknown, and about 40% of the `pcs` phase at six shards.**
+
+## 2. Make the device's own work smaller
+
+The union is 5.96 s of an 11 s proof, and `zerocheck` at 3.45 GPU-seconds plus `commit` at 3.07 is 73% of it. The only lever that moves the ~10x ceiling.
+
+**It needs a kernel-level profile — Metal's own counters, not span timings.** Two guesses have been made: radix-4 on the encode was right, the SIMD-group reduction on zerocheck was wrong. A third guess is not worth making. The unexamined question is the zerocheck kernel's access pattern: consecutive threads read rows `2q` apart, which nobody has priced.
+
+**Estimated: 0.3-0.8 s.**
+
+## 3. Deferral, built the only way it can work
+
+The 8.4 thread-seconds of waiting are still the largest single block, and the failed attempt established the shape a working one would need: **the pending buffer attached to the tensor it writes, waited for by whoever reads it**, rather than to the thread that submitted it.
+
+Substantially larger than removing a `wait_until_completed`, and the failure mode is a wrong proof rather than a crash, so the `=check` parity modes have to gate it throughout.
+
+**Estimated: 0.5-1.0 s.**
+
+## 4. The floor — 1.86 s
+
+17% of the proof at n = 2,000,000 and 9% at n = 4,000,000. `setup` is a thread-second of it, including `build compress program`, which is recursion setup running during a core proof. Needs `sp1-prover` vendored.
+
+## 5. Extend the acceptance ladder past four shards
+
+The ladder stops at n = 2,000,000, which is exactly four shards against four permits — the one point where the concurrency cap has nothing to bind on. n = 4,000,000 now has a number and n = 8,000,000 does not.
+
+## Not on the list, all measured rather than assumed
+
+- **Fewer, larger dispatches.** 201 to 34 round trips, wall unchanged.
+- **`Global`'s zerocheck.** The whole CPU fallback is four hundredths of a second a proof.
+- **Allocation churn.** mimalloc is 45% slower.
+- **Raising the layer gate or the zerocheck node bound.** Both worse, one catastrophically.
+- **Tracegen and execution.** 1.9 thread-seconds, and not GPU-shaped.
