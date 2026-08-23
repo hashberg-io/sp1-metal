@@ -496,6 +496,8 @@ impl<GC: IopCtx, SC: ShardContext<GC>, C: DefaultJaggedProver<GC, SC::Config>>
 
         let LogUpEvaluations { point: gkr_point, chip_openings } = logup_evaluations;
 
+        #[cfg(feature = "metal")]
+        let setup_started = std::time::Instant::now();
         let mut chip_heights = BTreeMap::new();
         for ((air, num_constraints), chip) in airs.iter().cloned().zip_eq(chips.iter()) {
             let ChipEvaluation {
@@ -595,9 +597,16 @@ impl<GC: IopCtx, SC: ShardContext<GC>, C: DefaultJaggedProver<GC, SC::Config>>
             chip_sumcheck_claims.push(chip_sumcheck_claim);
         }
 
+        #[cfg(feature = "metal")]
+        crate::prover::zerocheck::counters::SETUP
+            .record(zerocheck_polys.len(), setup_started.elapsed().as_nanos() as u64);
+
         // Same lambda for the RLC of the zerocheck polynomials.
         let lambda = challenger.sample_ext_element::<GC::EF>();
 
+        #[cfg(feature = "metal")]
+        let (sumcheck_started, num_polys) =
+            (std::time::Instant::now(), zerocheck_polys.len());
         // Compute the sumcheck proof for the zerocheck polynomials.
         let (partial_sumcheck_proof, component_poly_evals) = reduce_sumcheck_to_evaluation(
             zerocheck_polys,
@@ -606,7 +615,12 @@ impl<GC: IopCtx, SC: ShardContext<GC>, C: DefaultJaggedProver<GC, SC::Config>>
             1,
             lambda,
         );
+        #[cfg(feature = "metal")]
+        crate::prover::zerocheck::counters::SUMCHECK
+            .record(num_polys, sumcheck_started.elapsed().as_nanos() as u64);
 
+        #[cfg(feature = "metal")]
+        let openings_started = std::time::Instant::now();
         let mut point_extended = partial_sumcheck_proof.point_and_eval.0.clone();
         point_extended.add_dimension(GC::EF::zero());
 
@@ -641,6 +655,10 @@ impl<GC: IopCtx, SC: ShardContext<GC>, C: DefaultJaggedProver<GC, SC::Config>>
             .collect::<BTreeMap<_, _>>();
 
         let shard_open_values = ShardOpenedValues { chips: shard_open_values };
+
+        #[cfg(feature = "metal")]
+        crate::prover::zerocheck::counters::OPENINGS
+            .record(len, openings_started.elapsed().as_nanos() as u64);
 
         (shard_open_values, partial_sumcheck_proof)
     }

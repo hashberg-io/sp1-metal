@@ -1,5 +1,7 @@
 //! Zerocheck Sumcheck polynomial.
 
+#[cfg(feature = "metal")]
+pub mod counters;
 mod fix_last_variable;
 #[cfg(feature = "metal")]
 pub(crate) mod metal;
@@ -133,7 +135,13 @@ where
         t: usize,
     ) -> Self::NextRoundPoly {
         debug_assert_eq!(t, 1);
-        zerocheck_fix_last_variable(poly, alpha)
+        #[cfg(feature = "metal")]
+        let (started, cells) = (std::time::Instant::now(), poly.main_columns.num_polynomials()
+            << poly.num_variables());
+        let out = zerocheck_fix_last_variable(poly, alpha);
+        #[cfg(feature = "metal")]
+        counters::FIX_FIRST.record(cells, started.elapsed().as_nanos() as u64);
+        out
     }
 
     #[inline]
@@ -144,7 +152,13 @@ where
     ) -> UnivariatePolynomial<EF> {
         debug_assert_eq!(t, 1);
         debug_assert!(poly.num_variables() > 0);
-        zerocheck_sum_as_poly_in_last_variable::<F, F, EF, A, true>(poly, claim)
+        #[cfg(feature = "metal")]
+        let (started, cells) = (std::time::Instant::now(), poly.main_columns.num_polynomials()
+            << poly.num_variables());
+        let out = zerocheck_sum_as_poly_in_last_variable::<F, F, EF, A, true>(poly, claim);
+        #[cfg(feature = "metal")]
+        counters::SUM_AS_POLY_FIRST.record(cells, started.elapsed().as_nanos() as u64);
+        out
     }
 }
 
@@ -159,7 +173,13 @@ where
         poly: ZeroCheckPoly<EF, F, EF, A>,
         alpha: EF,
     ) -> ZeroCheckPoly<EF, F, EF, A> {
-        zerocheck_fix_last_variable(poly, alpha)
+        #[cfg(feature = "metal")]
+        let (started, cells) = (std::time::Instant::now(), poly.main_columns.num_polynomials()
+            << poly.num_variables());
+        let out = zerocheck_fix_last_variable(poly, alpha);
+        #[cfg(feature = "metal")]
+        counters::FIX.record(cells, started.elapsed().as_nanos() as u64);
+        out
     }
 
     #[inline]
@@ -168,7 +188,13 @@ where
         claim: Option<EF>,
     ) -> UnivariatePolynomial<EF> {
         debug_assert!(poly.num_variables() > 0);
-        zerocheck_sum_as_poly_in_last_variable::<EF, F, EF, A, false>(poly, claim)
+        #[cfg(feature = "metal")]
+        let (started, cells) = (std::time::Instant::now(), poly.main_columns.num_polynomials()
+            << poly.num_variables());
+        let out = zerocheck_sum_as_poly_in_last_variable::<EF, F, EF, A, false>(poly, claim);
+        #[cfg(feature = "metal")]
+        counters::SUM_AS_POLY.record(cells, started.elapsed().as_nanos() as u64);
+        out
     }
 }
 

@@ -8,7 +8,7 @@ mod permits;
 mod shard;
 mod simple;
 mod trace;
-mod zerocheck;
+pub mod zerocheck;
 
 pub use cpu::*;
 pub use memory_permit::*;

@@ -302,9 +302,14 @@ where
     let (rest_point_host, last) = poly.zeta.split_at(poly.zeta.dimension() - 1);
     let last = *last[0];
 
-    // TODO:  Optimization of computing this once per zerocheck sumcheck.
-    let partial_lagrange: Mle<EF> = Mle::partial_lagrange(&rest_point_host);
-    let partial_lagrange = Arc::new(partial_lagrange);
+    // Upstream's TODO here says this could be computed once per sumcheck rather
+    // than once per chip per round, and it is right: every chip in a shard folds
+    // the same point, so the table is identical across the hundred-odd chips of
+    // a round. Measured, it was 3.33 thread-seconds of a 12.9 second proof.
+    #[cfg(feature = "metal")]
+    let partial_lagrange = eq_cache::partial_lagrange(&rest_point_host);
+    #[cfg(not(feature = "metal"))]
+    let partial_lagrange = Arc::new(Mle::<EF>::partial_lagrange(&rest_point_host));
 
     // For the first round, we know that at point 0 and 1, the zerocheck polynomial will evaluate to
     // 0. For all rounds, we can find a root of the zerocheck polynomial by finding a root of
@@ -530,4 +535,72 @@ pub fn increment_y_values<
     let gkr_adjustment_4 = gkr_adjustment_2 + gkr_adjustment_2 - gkr_adjustment_0;
     air.eval(&mut folder);
     *y_4 += (folder.accumulator + gkr_adjustment_4) * eq;
+}
+
+/// The eq table of the round being proved, kept between chips.
+///
+/// The sumcheck driver walks a round's polynomials in order on one thread, and
+/// each of them asks for the eq weights of the same point -- so the table is
+/// built, used, dropped and built again about a hundred times a round. Keeping
+/// the last one turns that into once.
+///
+/// One entry, and thread-local rather than shared: shards prove on their own
+/// threads and each is inside exactly one round at a time, so the previous
+/// point is the only one that can be asked for again. It is also why this needs
+/// no eviction policy for what is a 32 MB table at the top of a sumcheck.
+#[cfg(feature = "metal")]
+mod eq_cache {
+    use std::any::TypeId;
+    use std::cell::RefCell;
+    use std::mem::{transmute_copy, ManuallyDrop};
+    use std::sync::Arc;
+
+    use slop_algebra::Field;
+    use slop_multilinear::{Mle, Point};
+
+    use crate::prover::zerocheck::counters::{LAGRANGE, LAGRANGE_HIT};
+
+    type MetalEF = crate::logup_gkr::metal::EF;
+
+    thread_local! {
+        static LAST: RefCell<Option<(Vec<MetalEF>, Arc<Mle<MetalEF>>)>> =
+            const { RefCell::new(None) };
+    }
+
+    /// The eq weights of `point`, from the cache when it is the same point the
+    /// previous chip asked for.
+    pub fn partial_lagrange<EF: Field>(point: &Point<EF>) -> Arc<Mle<EF>> {
+        if TypeId::of::<EF>() != TypeId::of::<MetalEF>() {
+            let started = std::time::Instant::now();
+            let built = Arc::new(Mle::partial_lagrange(point));
+            LAGRANGE.record(built.guts().as_slice().len(), started.elapsed().as_nanos() as u64);
+            return built;
+        }
+        // SAFETY: `EF` is `MetalEF`, checked immediately above, so these casts
+        // are between a type and itself.
+        let concrete: &Point<MetalEF> = unsafe { &*std::ptr::from_ref(point).cast() };
+        let coords: Vec<MetalEF> = concrete.iter().copied().collect();
+        let built = LAST.with(|last| {
+            let started = std::time::Instant::now();
+            if let Some((key, table)) = last.borrow().as_ref() {
+                if *key == coords {
+                    let table = table.clone();
+                    LAGRANGE_HIT.record(
+                        table.guts().as_slice().len(),
+                        started.elapsed().as_nanos() as u64,
+                    );
+                    return table;
+                }
+            }
+            let table = Arc::new(Mle::partial_lagrange(concrete));
+            LAGRANGE.record(
+                table.guts().as_slice().len(),
+                started.elapsed().as_nanos() as u64,
+            );
+            *last.borrow_mut() = Some((coords, table.clone()));
+            table
+        });
+        // SAFETY: as above.
+        unsafe { transmute_copy(&ManuallyDrop::new(built)) }
+    }
 }

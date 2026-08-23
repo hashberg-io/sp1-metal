@@ -508,29 +508,45 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     preprocessed: Option<&PaddedMle<C>>,
     main: &PaddedMle<C>,
 ) -> Option<(EF, EF, EF)> {
+    // Every refusal below is tallied by reason and by the cells it turns away,
+    // because the round reduction is most of zerocheck and an aggregate count
+    // cannot say which refusal is carrying the work back to the CPU.
+    let started = std::time::Instant::now();
+    let cells = main.num_polynomials() << main.num_variables();
+    let reject = |i: usize| -> Option<(EF, EF, EF)> {
+        crate::prover::zerocheck::counters::REJECT[i]
+            .record(cells, started.elapsed().as_nanos() as u64);
+        None
+    };
     if !zerocheck_on_gpu() {
-        return None;
+        return reject(0);
     }
-    let main_inner = main.inner().as_ref()?;
+    let Some(main_inner) = main.inner().as_ref() else {
+        return reject(1);
+    };
     let main_w = main_inner.num_polynomials();
     let rows = main_inner.guts().sizes()[0];
     let pairs = main.num_real_entries().div_ceil(2);
     if main_w == 0 || rows == 0 || pairs == 0 {
-        return None;
+        return reject(2);
     }
     let prep_inner = preprocessed.and_then(|p| p.inner().as_ref());
     let prep_w = preprocessed.map_or(0, PaddedMle::num_polynomials);
     if prep_w > 0 && prep_inner.is_none() {
-        return None;
+        return reject(3);
     }
     if gkr_powers.len() < main_w + prep_w {
-        return None;
+        return reject(4);
     }
     let eq = partial_lagrange.guts().as_slice();
     if eq.len() < pairs {
-        return None;
+        return reject(5);
     }
-    let pso = pipeline_for(key, is_first_round, ext_columns, constraints)?;
+    let Some(pso) = pipeline_for(key, is_first_round, ext_columns, constraints) else {
+        return reject(6);
+    };
+    crate::prover::zerocheck::counters::ACCEPTED
+        .record(cells, started.elapsed().as_nanos() as u64);
 
     let _phase = stats::enter(stats::Phase::Zerocheck);
     let ctx = context();
