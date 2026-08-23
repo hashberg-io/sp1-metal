@@ -586,3 +586,41 @@ The lesson is not about zerocheck: **a floor measured on a small workload is onl
 | | bits n=1M | 49.94 s | 9.75 s | 5.122x | 4.175x |
 
 Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.93 - 4.64x to **3.75 - 5.45x**. The floor rose most again, 2.93x to 3.77x, which is the same thing the floor measurement says: what looked like an irreducible per-shard cost was work nobody had looked at.
+
+## 20. What it costs to lend the device memory
+
+This backend's whole design is that unified memory means an aligned allocation can be handed to a kernel exactly as it lies — `newBufferWithBytesNoCopy`, no copy, no staging. Removing a false page-alignment rule on that basis was worth 155 GB of memcpy a proof, and every port since has been written to borrow rather than copy.
+
+Nobody had ever measured what borrowing costs.
+
+### The measurement
+
+The jagged sumcheck waits four to six times its own GPU time, and the first guess was queueing — it is the phase whose dispatches interleave with everything else, and the waiting grows with shard count. It is not. **With a single shard and nothing to contend with, a fold still blocks 2.2 ms for a 0.5 ms kernel**, while the assist dispatch beside it — same size, same queue, same round — blocks 0.21, which is the bare round trip.
+
+The difference is what the two hand the device: the fold borrows a large fresh allocation, the assist writes into a small buffer that already exists.
+
+Dispatching the same fold **twice over the same buffers** settles it. The fold reads its input and writes its output, so running it again writes the same answer, which makes the experiment free:
+
+| | GPU seconds | waiting |
+|---|---:|---:|
+| first dispatch | 0.027 | **0.134** |
+| the same one again | 0.027 | **0.011** |
+
+Identical kernel, identical GPU time, twelve times less waiting. **Nine tenths of what a fold blocks for is the first use of its buffers**, paid between commit and the kernel starting.
+
+### What it is not
+
+Touching every page from the host first — a byte per page, so the allocation is fully resident before Metal is given it — changes nothing. The pages were already the host's; what costs is establishing the *device's* access to them, which is its own page tables and nothing the CPU can pre-warm.
+
+Creating the buffer object is free: measured at 0.000 seconds over 52 calls. The cost is not in `newBufferWithBytesNoCopy`, it is in committing a command buffer that references the result.
+
+### What follows
+
+It is proportional to size, which is why it had stayed hidden. GKR's per-chip buffers are small and its dispatches block 0.6 ms — near the 0.34 ms round-trip floor, with little mapping in it. The jagged sumcheck's single huge array blocks 2.2 ms, the first layer's 21, a layer transition's 21.
+
+So the lever is **not to map the same allocation twice**, and there are two places that were:
+
+- A sumcheck round reduces its arrays and then folds the same ones. Keeping the first mapping until the fold has used it is sound for exactly the reason its life is short — both users borrow the same live slice, within one round. The jagged sumcheck fell from 2.44 to 2.19 thread-seconds and the proof from 11.04 to 10.70 seconds, **5.39x to 5.63x**.
+- The encode writes a codeword and the Merkle kernels hash it immediately, and each mapped it separately. A hand-off in the crate below both takes the commit phase's inputs from 0% resident to 65%.
+
+The rule the hand-off rests on is worth stating on its own, because it is the same rule the two hangs of §17 broke from the other side: **a buffer may be kept for a second use only while the allocation it borrows is still borrowed by the first.** The consumer removes the entry, so a pointer can never be matched after the memory behind it has gone.
