@@ -38,6 +38,11 @@ pub fn timed<T>(name: &'static str, cells: usize, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Times a closure that returns a value, recording no cell count.
+pub fn timed_ns<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
+    timed(name, 0, f)
+}
+
 /// A running measurement, recorded when it is stopped.
 ///
 /// For the case `timed` cannot serve: a stretch of a function that borrows

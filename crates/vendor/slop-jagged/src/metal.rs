@@ -357,10 +357,78 @@ pub(crate) fn on_gpu() -> bool {
     *ON.get_or_init(|| std::env::var("SP1_METAL_JAGGED").map(|v| v != "0").unwrap_or(true))
 }
 
+/// Splits a dispatch's cost into what the device did and what the host waited.
+///
+/// The `pcs` phase blocks 13.5 ms a dispatch at six shards against 5.8 at four,
+/// and an aggregate over four very different sites cannot say whether that is a
+/// kernel getting bigger or a queue getting longer.
+fn record_site(name: &'static str, (wall, gpu): (f64, f64)) {
+    sp1_metal_core::tally::record(name, 0, (gpu * 1e9) as u64);
+    sp1_metal_core::tally::record(
+        match name {
+            "jagged: round" => "jagged: round   wait",
+            "jagged: fold" => "jagged: fold    wait",
+            "jagged: values" => "jagged: values  wait",
+            _ => "jagged: assist  wait",
+        },
+        0,
+        ((wall - gpu).max(0.0) * 1e9) as u64,
+    );
+}
+
 fn as_words<T>(xs: &[T]) -> &[u8] {
     // SAFETY: KoalaBear is repr(transparent) over its Montgomery word and its
     // degree-4 extension is repr(C) over four of them.
     unsafe { std::slice::from_raw_parts(xs.as_ptr().cast::<u8>(), std::mem::size_of_val(xs)) }
+}
+
+/// A read-only buffer over a slice, kept for the rest of this sumcheck round.
+///
+/// Giving the device access to a borrowed allocation is not free, and until now
+/// nobody had measured what it costs. Dispatching the fold twice over the same
+/// buffers answers it: identical kernel, identical 0.027 seconds of GPU time,
+/// and 0.134 seconds of waiting the first time against 0.011 the second. Nine
+/// tenths of what a fold "blocks" for is the first use of its buffers, paid
+/// between commit and the kernel starting.
+///
+/// A round reduces its two arrays and then folds the same two, so each one is
+/// mapped twice for no reason. This keeps the first mapping until the fold has
+/// used it, which is the whole of the array's life in this round.
+///
+/// Keyed on the pointer, which is sound *only* because of that lifetime: the
+/// slice is borrowed by the reduction that inserted the entry and by the fold
+/// that takes it, so it cannot be freed and its address cannot be handed to
+/// something else in between. Entries do not outlive the round -- see
+/// [`clear_round_buffers`].
+fn round_buffer(device: &Device, words: &[u8]) -> Buffer {
+    let key = (words.as_ptr() as usize, words.len());
+    if let Some(hit) = ROUND_BUFFERS.with(|c| {
+        c.borrow().iter().find(|(k, _)| *k == key).map(|(_, b)| b.clone())
+    }) {
+        stats::record_input(Input::Wrapped, words.len(), 0);
+        return hit;
+    }
+    let buffer = read_only(device, words);
+    ROUND_BUFFERS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() < 4 {
+            c.push((key, buffer.clone()));
+        }
+    });
+    buffer
+}
+
+thread_local! {
+    /// The buffers of the round in flight on this thread. At most the two
+    /// arrays a round reduces, and they are dropped as soon as it folds them.
+    static ROUND_BUFFERS: std::cell::RefCell<Vec<((usize, usize), Buffer)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drops the round's buffers. Called by the fold, which is the last thing that
+/// reads the arrays the reduction mapped.
+fn clear_round_buffers() {
+    ROUND_BUFFERS.with(|c| c.borrow_mut().clear());
 }
 
 /// A read-only buffer over a slice.
@@ -404,8 +472,9 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
     let pairs = n / 2;
     let ctx = context()?;
     let pso = if base_is_ext { &ctx.round_ext } else { &ctx.round_base };
-    let b_base = read_only(&ctx.device, as_words(&base[..n]));
-    let b_ext = read_only(&ctx.device, as_words(&ext[..n]));
+    // Kept until this round's fold has used them; see `round_buffer`.
+    let b_base = round_buffer(&ctx.device, as_words(&base[..n]));
+    let b_ext = round_buffer(&ctx.device, as_words(&ext[..n]));
     let groups = (pairs as u64).div_ceil(THREADS);
     let partials = ctx.device.new_buffer(groups * 3 * 16, MTLResourceOptions::StorageModeShared);
     let n32 = pairs as u32;
@@ -420,7 +489,9 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
         enc.set_bytes(3, 4, (&n32 as *const u32).cast());
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        sp1_metal_core::queue::submit(cb);
+        // Timed per site: the `pcs` phase blocks 13.5 ms a dispatch at six
+        // shards against 5.8 at four, and the aggregate cannot say which.
+        record_site("jagged: round", sp1_metal_core::queue::submit(cb));
     });
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
     let raw = partials.contents().cast::<[u32; 4]>();
@@ -518,7 +589,10 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
     } else {
         ctx.device.new_buffer(out_bytes.max(1) as u64, MTLResourceOptions::StorageModeShared)
     };
-    let b_in = read_only(&ctx.device, as_words(values));
+    let b_in = round_buffer(&ctx.device, as_words(values));
+    // The round's reduction mapped this same array a moment ago and the fold is
+    // the last thing that reads it, so the entry goes now.
+    clear_round_buffers();
     let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
     let n32 = out_len as u32;
     metal::objc::rc::autoreleasepool(|| {
@@ -535,7 +609,9 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
-        sp1_metal_core::queue::submit(cb);
+        // Timed per site: the `pcs` phase blocks 13.5 ms a dispatch at six
+        // shards against 5.8 at four, and the aggregate cannot say which.
+        record_site("jagged: fold", sp1_metal_core::queue::submit(cb));
     });
     if direct {
         stats::record_output(Output::Direct, out_bytes, 0);
@@ -644,7 +720,9 @@ pub(crate) fn jagged_values_typed<K: 'static + Copy>(
         let groups = (total as u64).div_ceil(THREADS).min(4096).max(1);
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        sp1_metal_core::queue::submit(cb);
+        // Timed per site: the `pcs` phase blocks 13.5 ms a dispatch at six
+        // shards against 5.8 at four, and the aggregate cannot say which.
+        record_site("jagged: values", sp1_metal_core::queue::submit(cb));
         if direct {
             return;
         }
@@ -781,7 +859,9 @@ pub(crate) fn jagged_assist_typed<F: 'static + Copy, E: 'static + Copy>(
         let groups = (n as u64).div_ceil(THREADS).min(2048).max(1);
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        sp1_metal_core::queue::submit(cb);
+        // Timed per site: the `pcs` phase blocks 13.5 ms a dispatch at six
+        // shards against 5.8 at four, and the aggregate cannot say which.
+        record_site("jagged: assist", sp1_metal_core::queue::submit(cb));
         if direct {
             return;
         }
