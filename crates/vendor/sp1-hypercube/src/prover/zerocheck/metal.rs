@@ -465,6 +465,20 @@ fn max_nodes() -> usize {
 
 /// The pipeline for a chip, generated and compiled on first sight.
 ///
+/// **What that costs depends on a cache outside this process.** The figure this
+/// project has always quoted -- sixty-one kernels in 0.04 thread-seconds -- is a
+/// warm number: macOS keeps compiled shaders keyed by source, so a run that
+/// changes none of it pays nothing. Changing a single character of the generated
+/// source costs **271 thread-seconds** on the next run and nothing on the one
+/// after, which is enough to make a proof of the acceptance workload take 108
+/// seconds instead of 11.
+///
+/// Two things follow. A first run on a machine that has not seen this source is
+/// four minutes slower than every run after it, which no measurement here has
+/// ever reported. And a kernel timing taken on a run that is also compiling is
+/// not a timing: the device is idle enough during the storm to make the kernel
+/// look 29% faster than it is.
+///
 /// `constraints` is only called on a miss, because building the symbolic DAG is
 /// not free either.
 fn pipeline_for<Fx: PrimeField32>(
