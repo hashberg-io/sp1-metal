@@ -40,6 +40,96 @@ fn header() -> &'static str {
         .expect("shader header sentinel")
 }
 
+/// Turning a row-major trace into a column-major one.
+///
+/// The round kernel reads a whole row per thread, so consecutive threads start
+/// a row apart; the probe that measures the same arithmetic on a column-major
+/// trace runs **3.51 times faster** on identical data. A transpose is one
+/// coalesced pass at close to the machine's bandwidth, which is cheap against a
+/// reduction that is nowhere near it.
+///
+/// Tiled through threadgroup memory so that both the read and the write are
+/// coalesced -- the padding column is what keeps the tile's banks from
+/// colliding. Sixteen-wide tiles for extension elements, where a wider one
+/// would take more threadgroup memory than a group is worth.
+const TRANSPOSE_KERNELS: &str = r#"
+kernel void zc_transpose_base(device const uint* src [[buffer(0)]],
+                              device uint* dst [[buffer(1)]],
+                              constant uint2& dims [[buffer(2)]],
+                              uint2 tgid [[threadgroup_position_in_grid]],
+                              uint2 tid [[thread_position_in_threadgroup]]) {
+    threadgroup uint tile[32][33];
+    uint r0 = tgid.y * 32u, c0 = tgid.x * 32u;
+    uint r = r0 + tid.y, c = c0 + tid.x;
+    if (r < dims.x && c < dims.y) {
+        tile[tid.y][tid.x] = src[r * dims.y + c];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint rt = r0 + tid.x, ct = c0 + tid.y;
+    if (rt < dims.x && ct < dims.y) {
+        dst[ct * dims.x + rt] = tile[tid.x][tid.y];
+    }
+}
+
+kernel void zc_transpose_ext(device const uint4* src [[buffer(0)]],
+                             device uint4* dst [[buffer(1)]],
+                             constant uint2& dims [[buffer(2)]],
+                             uint2 tgid [[threadgroup_position_in_grid]],
+                             uint2 tid [[thread_position_in_threadgroup]]) {
+    threadgroup uint4 tile[16][17];
+    uint r0 = tgid.y * 16u, c0 = tgid.x * 16u;
+    uint r = r0 + tid.y, c = c0 + tid.x;
+    if (r < dims.x && c < dims.y) {
+        tile[tid.y][tid.x] = src[r * dims.y + c];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint rt = r0 + tid.x, ct = c0 + tid.y;
+    if (rt < dims.x && ct < dims.y) {
+        dst[ct * dims.x + rt] = tile[tid.x][tid.y];
+    }
+}
+"#;
+
+/// Whether the round reads a column-major copy of the trace. **Off, measured.**
+///
+/// The probe says a column-major trace runs the same arithmetic 3.51 times
+/// faster, and in the real kernel it is 21% *slower*: 3.24 GPU-seconds against
+/// 2.68. Two reasons, and the first is the interesting one.
+///
+/// The probe's row-major variant reads three random columns of sixty-four per
+/// term, so it touches a scattered handful of each row and wastes most of every
+/// cache line it fetches. A real constraint DAG reads most of the columns of
+/// the row it is given, so the line is used either way and there was never much
+/// coalescing to win. **The probe measured a worse access pattern than the one
+/// it was standing in for.**
+///
+/// And the transpose is not free: a read and a write of the whole trace, about
+/// 36 GB a proof, against a round that was not bandwidth-bound to begin with.
+///
+/// Kept behind the switch because the row-major reads look like an obvious
+/// problem and are not.
+fn column_major() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_ZC_LAYOUT").map(|v| v == "1").unwrap_or(false))
+}
+
+/// Whether the three interpolation points' bodies are emitted interleaved.
+///
+/// **On.** The three compute independent things and name only their own
+/// temporaries, so emitting them one after another leaves the machine one
+/// dependency chain to follow where there could be three -- and the compiler
+/// does not do this for itself. Interleaving them line by line takes the
+/// zerocheck kernel from 2.85 GPU-seconds to 2.50, measured three runs each
+/// with no overlap between the two sets, and costs no register pressure: every
+/// pipeline still reports the hardware maximum of 1024 threads a group.
+///
+/// It is a textual operation on the emitted lines and changes nothing about
+/// what is computed.
+fn interleave() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_ZC_ILP").map(|v| v != "0").unwrap_or(true))
+}
+
 fn to_monty(x: u32) -> u32 {
     (((x as u64) << 32) % P as u64) as u32
 }
@@ -93,6 +183,8 @@ struct Codegen {
     prefix: &'static str,
     /// Which interpolation point this copy reads its columns at.
     point: u8,
+    /// Whether the trace this body reads has been transposed to column-major.
+    column_major: bool,
     /// Whether this is a zerocheck round body, whose trace is row-major and
     /// read a row pair at a time, rather than the single-point kernel the
     /// spike measured, whose synthetic trace is column-major.
@@ -114,13 +206,14 @@ impl Codegen {
             reads_next_row: false,
             prefix: "t",
             point: 0,
+            column_major: false,
             round: false,
         }
     }
 
     /// A copy that reads its columns interpolated to `point`.
     fn at_point(ext_columns: bool, prefix: &'static str, point: u8) -> Self {
-        Self { prefix, point, round: true, ..Self::new(ext_columns) }
+        Self { prefix, point, round: true, column_major: column_major(), ..Self::new(ext_columns) }
     }
 
     fn fresh(&mut self) -> String {
@@ -140,12 +233,20 @@ impl Codegen {
             self.reads_next_row = true;
         }
         let ty = if self.ext_columns { Ty::Ext } else { Ty::Base };
+        // The interpolation helpers index `m[base + i]`, so a column-major
+        // trace needs nothing new from them: the base becomes the row and the
+        // "column index" becomes the column's offset into its own run.
+        let idx = if self.column_major {
+            format!("{index}u * p.rows")
+        } else {
+            format!("{index}u")
+        };
         let expr = if self.point == 0 {
-            format!("{table}[{table}_b0 + {index}u]")
+            format!("{table}[{table}_b0 + {idx}]")
         } else {
             let pt = self.point;
             let suffix = if self.ext_columns { "" } else { "_base" };
-            format!("zc_at_{pt}{suffix}({table}, {table}_b0, {table}_b1, {index}u, has1)")
+            format!("zc_at_{pt}{suffix}({table}, {table}_b0, {table}_b1, {idx}, has1)")
         };
         self.bind(ty, &expr)
     }
@@ -381,6 +482,7 @@ fn transpile_round<Fx: PrimeField32>(
     let mut bodies = String::new();
     let mut nodes = 0usize;
     let mut base_muls = 0usize;
+    let mut copies: Vec<String> = Vec::new();
     for (prefix, point, acc) in [("a", 0u8, "acc0"), ("b", 2, "acc2"), ("c", 4, "acc4")] {
         // The first round knows the polynomial vanishes at 0, so that copy of
         // the body would be dead weight.
@@ -388,23 +490,53 @@ fn transpile_round<Fx: PrimeField32>(
             writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
             continue;
         }
+        let mut copy = String::new();
         let mut cg = Codegen::at_point(ext_columns, prefix, point);
         let names: Vec<(String, Ty)> = constraints.iter().map(|c| cg.emit(c)).collect();
         nodes += cg.next;
         base_muls += cg.base_muls;
-        write!(bodies, "{}", cg.body).unwrap();
-        writeln!(bodies, "        uint4 {acc} = uint4(0u);").unwrap();
+        write!(copy, "{}", cg.body).unwrap();
+        writeln!(copy, "        uint4 {acc} = uint4(0u);").unwrap();
         for (k, (n, ty)) in names.iter().enumerate() {
             let term = match ty {
                 Ty::Base => format!("ext_mul_base(ap[{k}u], {n})"),
                 Ty::Ext => format!("ext_mul_kara(ap[{k}u], {n})"),
             };
-            writeln!(bodies, "        {acc} = ext_add({acc}, {term});").unwrap();
+            writeln!(copy, "        {acc} = ext_add({acc}, {term});").unwrap();
+        }
+        copies.push(copy);
+    }
+    // The three copies are independent -- each names only its own temporaries --
+    // so emitting them one after another leaves the machine one dependency
+    // chain to follow where there could be three. Interleaving them line by
+    // line is a textual operation and changes nothing about what is computed.
+    if interleave() {
+        let mut lines: Vec<std::str::Lines> = copies.iter().map(|c| c.lines()).collect();
+        let mut any = true;
+        while any {
+            any = false;
+            for l in &mut lines {
+                if let Some(line) = l.next() {
+                    writeln!(bodies, "{line}").unwrap();
+                    any = true;
+                }
+            }
+        }
+    } else {
+        for c in &copies {
+            write!(bodies, "{c}").unwrap();
         }
     }
     let col = if ext_columns { "uint4" } else { "uint" };
     let gkr_mul = if ext_columns { "ext_mul_kara" } else { "ext_mul_base" };
     let at2 = if ext_columns { "zc_at_2" } else { "zc_at_2_base" };
+    // Column-major puts a row pair's two entries next to each other, so the
+    // base is the row and the stride is folded into the column index.
+    let bases = if column_major() {
+        "        uint main_b0 = 2u * q;\n        uint main_b1 = 2u * q + 1u;\n        uint prep_b0 = main_b0;\n        uint prep_b1 = main_b1;"
+    } else {
+        "        uint main_b0 = (2u * q) * p.main_w;\n        uint main_b1 = (2u * q + 1u) * p.main_w;\n        uint prep_b0 = (2u * q) * p.prep_w;\n        uint prep_b1 = (2u * q + 1u) * p.prep_w;"
+    };
     let kernel = format!(
         r#"
 struct ZcParams {{
@@ -432,23 +564,22 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
     if (gid < p.pairs) {{
         uint q = gid;
         bool has1 = (2u * q + 1u) < p.rows;
-        uint main_b0 = (2u * q) * p.main_w;
-        uint main_b1 = (2u * q + 1u) * p.main_w;
-        uint prep_b0 = (2u * q) * p.prep_w;
-        uint prep_b1 = (2u * q + 1u) * p.prep_w;
+{bases}
 {bodies}
         // The interaction adjustment: every column, main then preprocessed,
         // against its batching power. The point-4 adjustment is inferred from
         // the other two rather than computed again, as the CPU does.
         uint4 g0 = uint4(0u), g2 = uint4(0u);
         for (uint i = 0u; i < p.main_w; i++) {{
-            g0 = ext_add(g0, {gkr_mul}(gp[i], main[main_b0 + i]));
-            g2 = ext_add(g2, {gkr_mul}(gp[i], {at2}(main, main_b0, main_b1, i, has1)));
+            uint mi = i * {stride};
+            g0 = ext_add(g0, {gkr_mul}(gp[i], main[main_b0 + mi]));
+            g2 = ext_add(g2, {gkr_mul}(gp[i], {at2}(main, main_b0, main_b1, mi, has1)));
         }}
         for (uint i = 0u; i < p.prep_w; i++) {{
+            uint pi = i * {stride};
             uint4 w = gp[p.main_w + i];
-            g0 = ext_add(g0, {gkr_mul}(w, prep[prep_b0 + i]));
-            g2 = ext_add(g2, {gkr_mul}(w, {at2}(prep, prep_b0, prep_b1, i, has1)));
+            g0 = ext_add(g0, {gkr_mul}(w, prep[prep_b0 + pi]));
+            g2 = ext_add(g2, {gkr_mul}(w, {at2}(prep, prep_b0, prep_b1, pi, has1)));
         }}
         uint4 g4 = ext_sub(ext_add(g2, g2), g0);
         uint4 e = eq[q];
@@ -476,7 +607,9 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
 }}
 "#,
         bodies = bodies,
+        bases = bases,
         col = col,
+        stride = if column_major() { "p.rows" } else { "1u" },
         gkr_mul = gkr_mul,
         at2 = at2,
     );
@@ -493,6 +626,9 @@ struct Context {
     /// The pipeline for a chip and how many DAG nodes its body evaluates,
     /// which is what the reduction's cost is proportional to.
     pipelines: Mutex<HashMap<String, Option<(ComputePipelineState, usize, usize)>>>,
+    /// Row-major to column-major, for the trace the round is about to read.
+    transpose_base: Option<ComputePipelineState>,
+    transpose_ext: Option<ComputePipelineState>,
 }
 
 impl Context {
@@ -506,7 +642,20 @@ fn context() -> &'static Context {
     static CTX: OnceLock<Context> = OnceLock::new();
     CTX.get_or_init(|| {
         let device = Device::system_default().expect("no Metal device found");
+        // Compiled once, unlike the per-chip bodies: nothing about a transpose
+        // depends on the constraints.
+        let source = format!("{}\n{TRANSPOSE_KERNELS}", header());
+        let pso = |name: &str| -> Option<ComputePipelineState> {
+            let library =
+                device.new_library_with_source(&source, &metal::CompileOptions::new()).ok()?;
+            let f = library.get_function(name, None).ok()?;
+            device.new_compute_pipeline_state_with_function(&f).ok()
+        };
+        let transpose_base = pso("zc_transpose_base");
+        let transpose_ext = pso("zc_transpose_ext");
         Context {
+            transpose_base,
+            transpose_ext,
             device,
             pipelines: Mutex::new(HashMap::new()),
         }
@@ -731,12 +880,55 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
         main_w: main_w as u32,
         prep_w: prep_w as u32,
     };
+    // The column-major copies the round will read, and the pipeline that makes
+    // them. Anything missing leaves this `None`, which puts the round back on
+    // the row-major buffers it was reading before.
+    let elem = if ext_columns { 16u64 } else { 4u64 };
+    let tpso = if ext_columns { ctx.transpose_ext.as_ref() } else { ctx.transpose_base.as_ref() };
+    let transposed = column_major().then(|| tpso).flatten().map(|t| {
+        let m = ctx
+            .device
+            .new_buffer((rows * main_w) as u64 * elem, MTLResourceOptions::StorageModeShared);
+        let pr = ctx
+            .device
+            .new_buffer((rows * prep_w.max(1)) as u64 * elem, MTLResourceOptions::StorageModeShared);
+        (t.clone(), m, pr)
+    });
+
     metal::objc::rc::autoreleasepool(|| {
         let queue = ctx.queue();
         let cb = queue.new_command_buffer();
+        if let Some((t, m, pr)) = transposed.as_ref() {
+            // Row-major in, column-major out, in the same command buffer as the
+            // round that reads it -- so it costs a pass over the trace and no
+            // round trip.
+            let tile = if ext_columns { 16u64 } else { 32u64 };
+            let mut tile_pass = |src: &metal::Buffer, dst: &metal::Buffer, w: usize| {
+                if w == 0 {
+                    return;
+                }
+                let enc = cb.new_compute_command_encoder();
+                enc.set_compute_pipeline_state(t);
+                enc.set_buffer(0, Some(src), 0);
+                enc.set_buffer(1, Some(dst), 0);
+                let dims = [rows as u32, w as u32];
+                enc.set_bytes(2, 8, dims.as_ptr().cast());
+                enc.dispatch_thread_groups(
+                    MTLSize::new((w as u64).div_ceil(tile), (rows as u64).div_ceil(tile), 1),
+                    MTLSize::new(tile, tile, 1),
+                );
+                enc.end_encoding();
+            };
+            tile_pass(&b_main, m, main_w);
+            tile_pass(&b_prep, pr, prep_w);
+        }
+        let (r_main, r_prep) = match transposed.as_ref() {
+            Some((_, m, pr)) => (m, pr),
+            None => (&b_main, &b_prep),
+        };
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(&pso);
-        for (i, b) in [&b_main, &b_prep, &b_pv, &b_eq, &b_ap, &b_gp].into_iter().enumerate() {
+        for (i, b) in [r_main, r_prep, &b_pv, &b_eq, &b_ap, &b_gp].into_iter().enumerate() {
             enc.set_buffer(i as u64, Some(b), 0);
         }
         enc.set_buffer(6, Some(&partials), 0);
