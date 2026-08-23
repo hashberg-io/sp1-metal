@@ -109,6 +109,67 @@ impl<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F>>
     }
 }
 
+#[cfg(feature = "metal")]
+impl<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F>>
+    JaggedAssistSumAsPolyCPUImpl<F, EF, Challenger>
+{
+    /// One round of the assist sumcheck on the GPU, or `None` if it declined.
+    ///
+    /// The prefix sums arrive as a vector of points and the kernel wants them
+    /// flat, so they are copied into one buffer here. That is `n` times the
+    /// point's dimension words against `n` times its dimension times a
+    /// sixteen-way fold of work, so it does not show up.
+    fn gpu_round(
+        &self,
+        round_num: usize,
+        z_col_eq_vals: &Buffer<EF>,
+        intermediate_eq_full_evals: &Buffer<EF>,
+        rhos: &Point<EF>,
+    ) -> Option<(EF, EF)> {
+        let n = z_col_eq_vals.len();
+        let mps_dim = self.merged_prefix_sums.first()?.dimension();
+        if n == 0 || self.merged_prefix_sums.len() < n {
+            return None;
+        }
+        if self.merged_prefix_sums.iter().take(n).any(|p| p.dimension() != mps_dim) {
+            return None;
+        }
+        let mut flat: Vec<F> = Vec::with_capacity(n * mps_dim);
+        for point in self.merged_prefix_sums.iter().take(n) {
+            flat.extend(point.iter().copied());
+        }
+        let rho_vals: Vec<EF> = rhos.iter().copied().collect();
+        let (z_row, z_index) = self.branching_program.points();
+        let z_row: Vec<EF> = z_row.iter().cloned().collect();
+        let z_index: Vec<EF> = z_index.iter().cloned().collect();
+        let table = crate::poly::BranchingProgram::<EF>::transition_table();
+        let mut out = vec![EF::zero(); 2 * n];
+        if !crate::metal::jagged_assist_typed(
+            &flat,
+            mps_dim,
+            z_col_eq_vals.as_slice(),
+            intermediate_eq_full_evals.as_slice(),
+            &rho_vals,
+            &z_row,
+            &z_index,
+            &table,
+            round_num,
+            self.branching_program.num_vars,
+            self.half,
+            &mut out,
+        ) {
+            return None;
+        }
+        let mut y_0 = EF::zero();
+        let mut y_half = EF::zero();
+        for pair in out.chunks_exact(2) {
+            y_0 += pair[0];
+            y_half += pair[1];
+        }
+        Some((y_0, y_half))
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F> + Send + Sync>
     JaggedAssistSumAsPoly<F, EF, CpuBackend, Challenger, Challenger>
     for JaggedAssistSumAsPolyCPUImpl<F, EF, Challenger>
@@ -141,11 +202,25 @@ impl<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F> + Send + Sy
         rhos: Point<EF>,
     ) -> (EF, Point<EF>) {
         let mut rhos = rhos.clone();
+        // Every column's branching program is independent, and the transition
+        // rule is a fixed table, so the whole round is one dispatch.
+        #[cfg(feature = "metal")]
+        let from_gpu = self.gpu_round(round_num, z_col_eq_vals, intermediate_eq_full_evals, &rhos);
+        #[cfg(not(feature = "metal"))]
+        let from_gpu: Option<(EF, EF)> = None;
+        #[cfg(feature = "metal")]
+        let checking = from_gpu.is_some() && crate::metal::assist_check();
+        #[cfg(not(feature = "metal"))]
+        let checking = false;
+
         // Calculate the partition chunk size.
         let chunk_size = std::cmp::max(z_col_eq_vals.len() / num_cpus::get(), 1);
 
         // Compute the values at x = 0 and x = 1/2.
-        let (y_0, y_half) = self
+        let (y_0, y_half) = if let (Some(pair), false) = (from_gpu, checking) {
+            pair
+        } else {
+        self
             .merged_prefix_sums
             .par_chunks(chunk_size)
             .zip_eq(z_col_eq_vals.par_chunks(chunk_size))
@@ -187,7 +262,15 @@ impl<F: Field, EF: ExtensionField<F>, Challenger: FieldChallenger<F> + Send + Sy
             .reduce(
                 || (EF::zero(), EF::zero()),
                 |(y_0, y_2), (y_0_i, y_2_i)| (y_0 + y_0_i, y_2 + y_2_i),
+            )
+        };
+
+        if let Some((g0, gh)) = from_gpu {
+            assert!(
+                !checking || (g0 == y_0 && gh == y_half),
+                "the jagged assist round from the GPU differs from upstream's",
             );
+        }
 
         // Store the values in the sum_values buffer.
         sum_values.as_mut_slice()[3 * round_num] = y_0;

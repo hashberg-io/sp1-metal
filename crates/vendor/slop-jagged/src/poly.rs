@@ -423,6 +423,42 @@ pub struct BranchingProgram<K: AbstractField> {
 }
 
 impl<K: AbstractField + 'static> BranchingProgram<K> {
+    /// The points the program reads its row and index bits from, for a
+    /// implementation that evaluates it somewhere other than here.
+    #[cfg(feature = "metal")]
+    pub(crate) fn points(&self) -> (&Point<K>, &Point<K>) {
+        (&self.z_row, &self.z_index)
+    }
+
+    /// The transition rule as a table, indexed by `memory_state * 16 +
+    /// bit_state`, holding the output state's index or 4 for a failure.
+    ///
+    /// Built by asking [`transition_function`] rather than by restating it, so
+    /// that a second implementation of the program cannot disagree with this
+    /// one about the rule.
+    #[cfg(feature = "metal")]
+    #[must_use]
+    pub(crate) fn transition_table() -> Vec<u32> {
+        let mut table = Vec::with_capacity(64);
+        let bit_states = all_bit_states();
+        for memory_state in all_memory_states() {
+            let mut row = vec![4u32; 16];
+            for (i, bit_state) in bit_states.iter().enumerate() {
+                if let StateOrFail::State(out) = transition_function(*bit_state, memory_state) {
+                    row[i] = out.get_index() as u32;
+                }
+            }
+            // `all_memory_states` does not enumerate in index order, so place
+            // the row where the kernel will look for it.
+            let at = memory_state.get_index() * 16;
+            if table.len() < at + 16 {
+                table.resize(at + 16, 4u32);
+            }
+            table[at..at + 16].copy_from_slice(&row);
+        }
+        table
+    }
+
     pub fn new(z_row: Point<K>, z_index: Point<K>) -> Self {
         let log_m = z_index.dimension().max(z_row.dimension());
 
