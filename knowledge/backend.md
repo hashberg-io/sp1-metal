@@ -641,3 +641,16 @@ Buffer traffic against GPU seconds, at n = 2,000,000, on an M4 Max whose memory 
 **`zerocheck` is the one phase with room**: two orders of magnitude below bandwidth means it is compute-bound, and what it computes is the constraint DAG three times per row pair. Reducing that is transpiler work — hoisting the subexpressions that do not depend on the folded variable, since the values at the three points are affine in the point — not kernel tuning. It is also the last place on the device where any arithmetic is being spent that the protocol does not strictly require.
 
 That is what makes the ceiling near. Three of the four phases are already moving memory as fast as the machine can, so the 5.96 seconds of device time is close to a floor, and the ~10x it implies is not a soft limit.
+
+### Past four shards
+
+The acceptance ladder stops at n = 2,000,000, which is exactly four shards against four permits — the one point where the concurrency cap has nothing to bind on. So it had never measured the case a prover would actually meet.
+
+| | shards | CPU | Metal | |
+|---|---:|---:|---:|---:|
+| fib n=2M | 4 | 60.03 s | 10.99 s | 5.463x |
+| fib n=4M | 6 | 114.79 s | 20.16 s | **5.694x** |
+
+Medians, not single pairs, and that is the point of the row. A single pair at n = 4,000,000 first read 4.80x, which looked like the backend losing its advantage at scale; three standalone runs and two more pairs put it at 5.69x, above the four-shard figure. Two separate outliers turned up in five runs at that size — 23.44 and 22.79 against a 20.1 median — so **anything quoted past four shards needs the median of three.**
+
+n = 8,000,000 is not measurable here. The CPU arm's peak resident memory goes from 58 GB at four shards to 98 GB at six on a 128 GB machine, so the next doubling would swap. That bounds the ladder rather than the backend: the Metal arm peaks at 47 GB where the CPU arm peaks at 98.
