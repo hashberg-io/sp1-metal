@@ -624,3 +624,20 @@ So the lever is **not to map the same allocation twice**, and there are two plac
 - The encode writes a codeword and the Merkle kernels hash it immediately, and each mapped it separately. A hand-off in the crate below both takes the commit phase's inputs from 0% resident to 65%.
 
 The rule the hand-off rests on is worth stating on its own, because it is the same rule the two hangs of §17 broke from the other side: **a buffer may be kept for a second use only while the allocation it borrows is still borrowed by the first.** The consumer removes the entry, so a pointer can never be matched after the memory behind it has gone.
+
+### Which phases have any room left
+
+Buffer traffic against GPU seconds, at n = 2,000,000, on an M4 Max whose memory tops out near 410 GB/s:
+
+| phase | GPU s | bytes moved | rate |
+|---|---:|---:|---:|
+| gkr | 1.16 | 408 GB | **352 GB/s** |
+| pcs | 0.84 | 185 GB | **221 GB/s** |
+| commit | 3.11 | 73 GB of buffers, but ten passes inside the encode | at the limit |
+| zerocheck | 3.13 | 18 GB | **6 GB/s** |
+
+`gkr` is at the machine's bandwidth and there is nothing in it to win. `pcs` is over half of it. The encode makes about ten passes over a codeword four times the trace, so its real traffic is an order of magnitude above what the buffer figures show, which puts it at the limit too; the other half of `commit` is Poseidon2, which is arithmetic.
+
+**`zerocheck` is the one phase with room**: two orders of magnitude below bandwidth means it is compute-bound, and what it computes is the constraint DAG three times per row pair. Reducing that is transpiler work — hoisting the subexpressions that do not depend on the folded variable, since the values at the three points are affine in the point — not kernel tuning. It is also the last place on the device where any arithmetic is being spent that the protocol does not strictly require.
+
+That is what makes the ceiling near. Three of the four phases are already moving memory as fast as the machine can, so the 5.96 seconds of device time is close to a floor, and the ~10x it implies is not a soft limit.
