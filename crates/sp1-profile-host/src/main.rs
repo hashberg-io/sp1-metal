@@ -19,6 +19,16 @@
 //! python3 ../../tools/span_profile.py prove.log --json profile.json
 //! ```
 
+
+// A general-purpose allocator instead of the system one, so that "does
+// allocation churn cost wall time" can be answered by measurement rather than
+// argued. A proof faults in about 54 GB of fresh pages; whether returning them
+// to the kernel and taking them back is worth anything is the whole of the
+// question, and this is the cheapest way to ask it.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::sync::Arc;
 use std::time::Instant;
 
