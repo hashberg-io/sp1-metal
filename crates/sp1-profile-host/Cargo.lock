@@ -3678,12 +3678,12 @@ dependencies = [
 [[package]]
 name = "slop-multilinear"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffdacfe81725b672b35204e5a6a7a6a4d8468950eed71bef6e0c8f31431ca128"
 dependencies = [
  "derive-where",
  "futures",
+ "metal",
  "num_cpus",
+ "p3-koala-bear",
  "rand 0.8.7",
  "rayon",
  "serde",
@@ -3694,6 +3694,7 @@ dependencies = [
  "slop-futures",
  "slop-matrix",
  "slop-tensor",
+ "sp1-metal-core",
 ]
 
 [[package]]
@@ -4173,6 +4174,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "slop-dft",
+ "slop-multilinear",
  "sp1-hypercube",
  "sp1-sdk",
  "tokio",

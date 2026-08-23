@@ -146,6 +146,10 @@ fn report_metal(elapsed: std::time::Duration) {
         if all.out_bytes() == 0 { 0.0 } else { all.out_staged as f64 / all.out_bytes() as f64 * 100.0 },
         all.in_copy_s + all.out_copy_s,
     );
+    // What every fold in the proof cost, counted where they all funnel through
+    // rather than at the call sites, which sampling could not separate.
+    #[cfg(feature = "metal")]
+    eprint!("{}", slop_multilinear::metal::report());
     let [rejected, interaction] = sp1_hypercube::metal::cpu_round_counts();
     eprintln!(
         "gkr rounds left on the CPU: {} rejected layers in {:.3}s, {} interaction layers in {:.3}s",

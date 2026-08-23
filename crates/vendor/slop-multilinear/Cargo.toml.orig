@@ -1,0 +1,35 @@
+[package]
+name = "slop-multilinear"
+description = "Multilinear polynomial extensions for SLOP"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+metal = ["dep:metal", "dep:sp1-metal-core", "dep:p3-koala-bear"]
+
+[dependencies]
+slop-alloc = { workspace = true }
+slop-tensor = { workspace = true }
+slop-futures = { workspace = true }
+slop-commit = { workspace = true }
+# slop-baby-bear = { workspace = true }
+
+slop-algebra = { workspace = true }
+slop-matrix = { workspace = true }
+slop-challenger = { workspace = true }
+
+serde = { workspace = true }
+rayon = { workspace = true }
+derive-where = { workspace = true }
+rand = { workspace = true }
+futures = { workspace = true }
+num_cpus = { workspace = true }
+
+metal = { version = "0.29", optional = true }
+p3-koala-bear = { version = "=0.4.3-succinct", optional = true }
+sp1-metal-core = { path = "../../sp1-metal-core", optional = true }

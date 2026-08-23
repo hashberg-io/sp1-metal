@@ -27,4 +27,5 @@ lto = "thin"
 [patch.crates-io]
 sp1-hypercube = { path = "../vendor/sp1-hypercube" }
 slop-jagged = { path = "../vendor/slop-jagged" }
+slop-multilinear = { path = "../vendor/slop-multilinear" }
 slop-dft = { path = "../vendor/slop-dft" }
