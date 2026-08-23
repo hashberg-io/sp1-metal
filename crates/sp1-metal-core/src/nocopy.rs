@@ -52,6 +52,10 @@ pub unsafe fn read_only(device: &Device, bytes: &[u8]) -> Buffer {
             None,
         );
     }
+    // Copying is the host reading these bytes, so anything still writing them
+    // has to finish first. Borrowing them is not: the dispatch that reads the
+    // buffer is ordered behind the one that wrote it by the queue.
+    crate::queue::drain();
     let start = std::time::Instant::now();
     let buffer = device.new_buffer_with_data(
         bytes.as_ptr().cast(),

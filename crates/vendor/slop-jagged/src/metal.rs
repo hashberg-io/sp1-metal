@@ -15,7 +15,6 @@
 
 use std::sync::OnceLock;
 
-use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 use sp1_metal_probes::stats::{self, Input, Output};
 
@@ -421,14 +420,7 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
         enc.set_bytes(3, 4, (&n32 as *const u32).cast());
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        let start = std::time::Instant::now();
-        cb.commit();
-        cb.wait_until_completed();
-        let wall = start.elapsed().as_secs_f64();
-        let (t0, t1): (f64, f64) =
-            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-        stats::record_dispatch(wall, t1 - t0);
-        stats::record_interval(t0, t1);
+        sp1_metal_core::queue::submit(cb);
     });
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);
     let raw = partials.contents().cast::<[u32; 4]>();
@@ -543,14 +535,7 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
-        let start = std::time::Instant::now();
-        cb.commit();
-        cb.wait_until_completed();
-        let wall = start.elapsed().as_secs_f64();
-        let (t0, t1): (f64, f64) =
-            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-        stats::record_dispatch(wall, t1 - t0);
-        stats::record_interval(t0, t1);
+        sp1_metal_core::queue::submit(cb);
     });
     if direct {
         stats::record_output(Output::Direct, out_bytes, 0);
@@ -659,14 +644,7 @@ pub(crate) fn jagged_values_typed<K: 'static + Copy>(
         let groups = (total as u64).div_ceil(THREADS).min(4096).max(1);
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        let start = std::time::Instant::now();
-        cb.commit();
-        cb.wait_until_completed();
-        let wall = start.elapsed().as_secs_f64();
-        let (t0, t1): (f64, f64) =
-            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-        stats::record_dispatch(wall, t1 - t0);
-        stats::record_interval(t0, t1);
+        sp1_metal_core::queue::submit(cb);
         if direct {
             return;
         }
@@ -803,14 +781,7 @@ pub(crate) fn jagged_assist_typed<F: 'static + Copy, E: 'static + Copy>(
         let groups = (n as u64).div_ceil(THREADS).min(2048).max(1);
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        let start = std::time::Instant::now();
-        cb.commit();
-        cb.wait_until_completed();
-        let wall = start.elapsed().as_secs_f64();
-        let (t0, t1): (f64, f64) =
-            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-        stats::record_dispatch(wall, t1 - t0);
-        stats::record_interval(t0, t1);
+        sp1_metal_core::queue::submit(cb);
         if direct {
             return;
         }

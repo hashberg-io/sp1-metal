@@ -10,5 +10,6 @@
 //! — and [`nocopy`] states the one rule the whole design rests on.
 
 pub mod nocopy;
+pub mod queue;
 pub mod stats;
 pub mod tally;

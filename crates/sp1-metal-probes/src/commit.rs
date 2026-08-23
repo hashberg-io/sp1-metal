@@ -21,7 +21,6 @@
 
 use std::sync::OnceLock;
 
-use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 
 use crate::gpu::shader_src;
@@ -107,6 +106,8 @@ fn upload(device: &Device, words: &[u32]) -> Buffer {
             )
         };
     }
+    // A copy is the host reading these words; see `nocopy::read_only`.
+    crate::queue::drain();
     let buffer = device.new_buffer_with_data(
         words.as_ptr().cast(),
         bytes.max(1) as u64,
@@ -233,16 +234,9 @@ pub fn digest_layers(tensors: &[(&[u32], usize)], rows: usize) -> Option<Vec<Vec
         dispatch(enc, parents as u64);
         enc.end_encoding();
     }
-    let start = std::time::Instant::now();
-    cb.commit();
-    cb.wait_until_completed();
-    let wall = start.elapsed().as_secs_f64();
-    // GPUStartTime and GPUEndTime are ordinary Objective-C properties on
-    // MTLCommandBuffer that the metal crate does not bind.
-    let (t0, t1): (f64, f64) =
-        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-    crate::stats::record_dispatch(wall, t1 - t0);
-    crate::stats::record_interval(t0, t1);
+    // Waits for the encode as well, which is committed to this queue just
+    // before the tree and deliberately not waited for there.
+    crate::queue::submit(cb);
 
     let start = std::time::Instant::now();
     let mut copied = 0usize;

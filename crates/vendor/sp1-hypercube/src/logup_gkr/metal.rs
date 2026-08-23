@@ -605,22 +605,13 @@ pub fn site_report() -> String {
 /// Commits a command buffer, waits for it, and records what the GPU spent
 /// against the site that submitted it.
 fn run_and_record_at(cb: &metal::CommandBufferRef, site: usize) {
-    let start = std::time::Instant::now();
-    cb.commit();
-    cb.wait_until_completed();
-    let wall = start.elapsed().as_secs_f64();
-    // GPUStartTime and GPUEndTime are not bound by the metal crate, but they
-    // are ordinary Objective-C properties on MTLCommandBuffer.
-    let (t0, t1): (f64, f64) =
-        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+    let (wall, gpu) = sp1_metal_probes::queue::submit(cb);
     let mut m = SITES[site].lock().expect("poisoned");
     m.0 += 1;
-    m.1 += t1 - t0;
+    m.1 += gpu;
     m.2 += wall;
     drop(m);
-    STATS.record(wall, t1 - t0);
-    stats::record_dispatch(wall, t1 - t0);
-    stats::record_interval(t0, t1);
+    STATS.record(wall, gpu);
 }
 
 

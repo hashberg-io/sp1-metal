@@ -19,7 +19,6 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 
-use metal::objc::{msg_send, sel, sel_impl};
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize};
 use slop_algebra::{AbstractExtensionField, AbstractField, Field, PrimeField32};
 use slop_multilinear::{Mle, PaddedMle};
@@ -629,14 +628,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
             MTLSize::new(THREADS, 1, 1),
         );
         enc.end_encoding();
-        let start = std::time::Instant::now();
-        cb.commit();
-        cb.wait_until_completed();
-        let wall = start.elapsed().as_secs_f64();
-        let (t0, t1): (f64, f64) =
-            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-        stats::record_dispatch(wall, t1 - t0);
-        stats::record_interval(t0, t1);
+        sp1_metal_probes::queue::submit(cb);
     });
 
     stats::record_output(Output::Staged, groups as usize * 3 * 16, 0);

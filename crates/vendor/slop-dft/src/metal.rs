@@ -35,14 +35,13 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use metal::objc::{msg_send, sel, sel_impl};
 use metal::{
     Buffer, ComputeCommandEncoderRef, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
 };
 use slop_algebra::TwoAdicField;
 use slop_alloc::CpuBackend;
 use slop_tensor::Tensor;
-use sp1_metal_core::nocopy;
+use sp1_metal_core::{nocopy, queue};
 use sp1_metal_core::stats::{self, Input, Output, Phase};
 
 use crate::DftOrdering;
@@ -351,16 +350,23 @@ pub fn coset_dft_into<F: TwoAdicField>(
     let enc = cb.new_compute_command_encoder();
     encode_dif(enc, ctx, &b_src, &b_dst, &tw, rows, cols, log_blowup);
     enc.end_encoding();
-    let start = std::time::Instant::now();
-    cb.commit();
-    cb.wait_until_completed();
-    let wall = start.elapsed().as_secs_f64();
-    let (t0, t1): (f64, f64) = unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
-    stats::record_dispatch(wall, t1 - t0);
-    stats::record_interval(t0, t1);
+    // The codeword is read next by the Merkle kernels that commit it, and they
+    // run on this thread's queue behind this buffer, so the host has no reason
+    // to wait here. It does have to wait when it is about to read the codeword
+    // itself: to copy it out of a staging buffer, or to compare it against the
+    // CPU encoder under `SP1_METAL_ENCODE=check`.
+    if direct && !checking() {
+        queue::submit_deferred(cb);
+        stats::record_output(Output::Direct, out_bytes, 0);
+    } else {
+        queue::submit(cb);
+    }
 
     if direct {
-        stats::record_output(Output::Direct, out_bytes, 0);
+        // Recorded above when deferred.
+        if checking() {
+            stats::record_output(Output::Direct, out_bytes, 0);
+        }
     } else {
         let start = std::time::Instant::now();
         // SAFETY: the kernel wrote exactly `out_bytes` bytes into the staging
