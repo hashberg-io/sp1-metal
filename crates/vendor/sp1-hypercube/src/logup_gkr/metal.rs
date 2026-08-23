@@ -1504,7 +1504,9 @@ impl Out {
 /// Returns `None` when the chip is too small to be worth the round trip, or
 /// when the fields are not the ones the kernels are written for, leaving the
 /// caller to do it the way it always did.
-pub fn transition_chip<K, E>(
+#[allow(clippy::too_many_arguments)]
+fn stage_transition<K, E>(
+    cb: &metal::CommandBufferRef,
     n0: &[K],
     d0: &[E],
     n1: &[K],
@@ -1512,12 +1514,11 @@ pub fn transition_chip<K, E>(
     width: usize,
     rows: usize,
     out_rows: usize,
-) -> Option<(Vec<E>, Vec<E>, Vec<E>, Vec<E>)>
+) -> Option<[Out; 4]>
 where
     K: slop_algebra::Field,
     E: slop_algebra::Field,
 {
-    let _phase = stats::enter(stats::Phase::Gkr);
     if !is::<E, EF>() {
         return None;
     }
@@ -1545,7 +1546,6 @@ where
     if d0.len() != rows * width || d1.len() != rows * width {
         return None;
     }
-    arena_reset();
     let ctx = context();
     let out = pooled(|| {
         let outs = [
@@ -1565,8 +1565,6 @@ where
             rows: rows as u32,
             width: width as u32,
         };
-        let queue = ctx.queue();
-        let cb = queue.new_command_buffer();
         let enc = cb.new_compute_command_encoder();
         enc.set_compute_pipeline_state(if base {
             &ctx.transition_base
@@ -1589,12 +1587,63 @@ where
             MTLSize::new(THREADS.min(total as u64), 1, 1),
         );
         enc.end_encoding();
-        run_and_record_at(cb, 3);
-        let [a, b, c, d] = outs;
-        (a.finish(), b.finish(), c.finish(), d.finish())
+        outs
     });
-    // SAFETY: E is EF, checked above.
-    Some(unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) })
+    Some(out)
+}
+
+/// Builds a whole layer's chips, in one command buffer.
+///
+/// The driver walks a layer one chip at a time, and each chip used to get a
+/// buffer and a round trip to itself: 201 of them for 0.11 seconds of GPU work,
+/// blocking 4.08 ms apiece. The work is the same either way; what the round
+/// trips cost is re-entering a queue that three other proving threads are also
+/// using, and a layer only has to do that once.
+///
+/// `chips` is `(n0, d0, n1, d1, width, rows, out_rows)` per chip. The result has
+/// one entry per chip, `None` where the chip was not one the kernels serve.
+///
+/// The arena is reset once here rather than per chip, since the whole layer's
+/// staging has to stay valid until the single wait below.
+#[allow(clippy::type_complexity)]
+pub fn transition_layer<K, E>(
+    chips: &[(&[K], &[E], &[K], &[E], usize, usize, usize)],
+) -> Vec<Option<(Vec<E>, Vec<E>, Vec<E>, Vec<E>)>>
+where
+    K: slop_algebra::Field,
+    E: slop_algebra::Field,
+{
+    let _phase = stats::enter(stats::Phase::Gkr);
+    if chips.is_empty() {
+        return Vec::new();
+    }
+    if !is::<E, EF>() || !(is::<K, BaseField>() || is::<K, EF>()) || !transition_on_gpu() {
+        return vec![None; chips.len()];
+    }
+    arena_reset();
+    let ctx = context();
+    let queue = ctx.queue();
+    let cb = queue.new_command_buffer();
+    let staged: Vec<Option<[Out; 4]>> = chips
+        .iter()
+        .map(|&(n0, d0, n1, d1, width, rows, out_rows)| {
+            stage_transition(cb, n0, d0, n1, d1, width, rows, out_rows)
+        })
+        .collect();
+    if staged.iter().all(Option::is_none) {
+        return vec![None; chips.len()];
+    }
+    run_and_record_at(cb, 3);
+    staged
+        .into_iter()
+        .map(|outs| {
+            outs.map(|[a, b, c, d]| {
+                let out = (a.finish(), b.finish(), c.finish(), d.finish());
+                // SAFETY: E is EF, checked above.
+                unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) }
+            })
+        })
+        .collect()
 }
 
 /// The tables the first-layer kernel walks, flattened out of a chip's

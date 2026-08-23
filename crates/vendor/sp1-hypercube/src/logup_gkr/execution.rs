@@ -348,6 +348,38 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
         let mut denominator_0 = Vec::new();
         let mut numerator_1 = Vec::new();
         let mut denominator_1 = Vec::new();
+
+        // The whole layer's chips go to the device in one command buffer and
+        // are waited for once, since the work is the same either way and what a
+        // round trip costs is re-entering a queue three other proving threads
+        // are using. Chips the kernels decline come back as `None` and take the
+        // path below.
+        #[cfg(feature = "metal")]
+        let from_gpu = {
+            let chips: Vec<_> = itertools::izip!(
+                layer.numerator_0.iter(),
+                layer.denominator_0.iter(),
+                layer.numerator_1.iter(),
+                layer.denominator_1.iter()
+            )
+            .filter_map(|(n0, d0, n1, d1)| {
+                let n0_mle = n0.inner().as_ref()?;
+                Some((
+                    n0_mle.guts().as_slice(),
+                    d0.inner().as_ref().unwrap().guts().as_slice(),
+                    n1.inner().as_ref().unwrap().guts().as_slice(),
+                    d1.inner().as_ref().unwrap().guts().as_slice(),
+                    n0_mle.num_polynomials(),
+                    n0_mle.guts().sizes()[0],
+                    n0.num_real_entries().div_ceil(2),
+                ))
+            })
+            .collect();
+            crate::metal::transition_layer(&chips)
+        };
+        #[cfg(feature = "metal")]
+        let mut from_gpu = from_gpu.into_iter();
+
         for (n0_padded, d0_padded, n1_padded, d1_padded) in itertools::izip!(
             layer.numerator_0.clone(),
             layer.denominator_0.clone(),
@@ -369,25 +401,21 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
                 let n1_mle = n1_padded.inner().as_ref().unwrap();
                 let d1_mle = d1_padded.inner().as_ref().unwrap();
                 // One output cell per thread and no reduction, so this is the
-                // easiest thing in the phase to move; it declines the chips too
-                // small to be worth a round trip.
+                // easiest thing in the phase to move; the whole layer went in
+                // one command buffer above, and this takes its chip's share.
                 #[cfg(feature = "metal")]
-                let on_gpu = crate::metal::transition_chip(
-                    n0_mle.guts().as_slice(),
-                    d0_mle.guts().as_slice(),
-                    n1_mle.guts().as_slice(),
-                    d1_mle.guts().as_slice(),
-                    num_interactions,
-                    n0_mle.guts().sizes()[0],
-                    row_count,
-                )
-                .map(|(a, b, c, d)| {
-                    next_n0 = a;
-                    next_d0 = b;
-                    next_n1 = c;
-                    next_d1 = d;
-                })
-                .is_some();
+                let on_gpu = from_gpu
+                    .next()
+                    .flatten()
+                    .map(|(a, b, c, d)| {
+                        next_n0 = a;
+                        next_d0 = b;
+                        next_n1 = c;
+                        next_d1 = d;
+                    })
+                    .is_some();
+                #[cfg(feature = "metal")]
+                let _ = (&d0_mle, &n1_mle, &d1_mle);
                 #[cfg(not(feature = "metal"))]
                 let on_gpu = false;
                 #[cfg(feature = "metal")]
