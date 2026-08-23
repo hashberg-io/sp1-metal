@@ -531,7 +531,60 @@ fn record_out(direct: bool, bytes: usize) {
     stats::record_output(if direct { Output::Direct } else { Output::Staged }, bytes, 0);
 }
 
+/// How many command buffers each dispatch site submitted, and what they cost.
+///
+/// The round trips are what the CPU waits on -- 1.60 ms apiece with four shards
+/// proving against 0.34 with one -- so the question is which sites produce them
+/// and whether any of those sites is a loop that could submit once.
+pub static SITES: [Mutex<(u64, f64, f64)>; 6] = [
+    Mutex::new((0, 0.0, 0.0)),
+    Mutex::new((0, 0.0, 0.0)),
+    Mutex::new((0, 0.0, 0.0)),
+    Mutex::new((0, 0.0, 0.0)),
+    Mutex::new((0, 0.0, 0.0)),
+    Mutex::new((0, 0.0, 0.0)),
+];
+
+/// The sites, in the order they appear in this file.
+pub const SITE_NAMES: [&str; 6] =
+    ["small-chip batch", "layer fold", "single fold", "layer transition", "first layer", "other"];
+
+/// `(dispatches, GPU seconds, wall seconds)` per site.
+#[must_use]
+pub fn site_report() -> String {
+    let mut out = String::from("\ngkr dispatch site      count      gpu_s     wall_s   ms/call\n");
+    for (name, m) in SITE_NAMES.iter().zip(SITES.iter()) {
+        let (n, gpu, wall) = *m.lock().expect("poisoned");
+        if n > 0 {
+            out.push_str(&format!(
+                "{name:<20} {n:>8} {gpu:>10.3} {wall:>10.3} {:>9.3}\n",
+                (wall - gpu) * 1000.0 / n as f64
+            ));
+        }
+    }
+    out
+}
+
 /// Commits a command buffer, waits for it, and records what the GPU spent.
+fn run_and_record_at(cb: &metal::CommandBufferRef, site: usize) {
+    let start = std::time::Instant::now();
+    cb.commit();
+    cb.wait_until_completed();
+    let wall = start.elapsed().as_secs_f64();
+    let (t0, t1): (f64, f64) =
+        unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+    let mut m = SITES[site].lock().expect("poisoned");
+    m.0 += 1;
+    m.1 += t1 - t0;
+    m.2 += wall;
+    drop(m);
+    STATS.record(wall, t1 - t0);
+    stats::record_dispatch(wall, t1 - t0);
+    stats::record_interval(t0, t1);
+}
+
+/// Commits a command buffer, waits for it, and records what the GPU spent.
+#[allow(dead_code)]
 fn run_and_record(cb: &metal::CommandBufferRef) {
     let start = std::time::Instant::now();
     cb.commit();
@@ -779,7 +832,7 @@ where
     let Some(cb) = command_buffer else {
         return totals;
     };
-    run_and_record(cb);
+    run_and_record_at(cb, 0);
     if let Some((partials, groups, _)) = batch {
         let raw = partials.contents().cast::<EF>();
         let mut sum = (EF::zero(), EF::zero(), EF::zero());
@@ -937,7 +990,7 @@ where
             stage_num(numerators.1),
             stage_den(denominators.1),
         );
-        run_and_record(cb);
+        run_and_record_at(cb, 1);
         let out = (
             finish_all(staged.0),
             finish_all(staged.1),
@@ -1126,7 +1179,7 @@ where
     let queue = ctx.queue();
     let cb = queue.new_command_buffer();
     encode_fold(cb, pso, &in_buf, &pad_buf, &out_buf, params, alpha_words, total);
-    run_and_record(cb);
+    run_and_record_at(cb, 2);
 
     if !direct {
         // SAFETY: the kernel wrote `out_bytes` bytes of extension elements.
@@ -1306,6 +1359,23 @@ fn finish_all(folds: Vec<Fold>) -> Vec<PaddedMle<EF>> {
 }
 
 
+/// The size at which a zerocheck column fold is worth a dispatch of its own.
+///
+/// Separate from the GKR round's gate because the two are not the same trade.
+/// A GKR round's fold shares a command buffer with a hundred others; this one
+/// gets a buffer and a round trip to itself, and the driver hands them over one
+/// chip at a time, so what it is priced against is a wait rather than a kernel.
+/// `SP1_METAL_ZEROCHECK_FOLD` overrides it.
+fn zerocheck_fold_min() -> usize {
+    static MIN: OnceLock<usize> = OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("SP1_METAL_ZEROCHECK_FOLD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(min_entries_for_gpu)
+    })
+}
+
 /// Fixes any padded MLE's last variable on the GPU, for callers outside the GKR
 /// round.
 ///
@@ -1319,7 +1389,7 @@ where
 {
     let _phase = stats::enter(stats::Phase::Gkr);
     if is::<E, EF>()
-        && mle.inner().as_ref().map_or(0, |i| i.guts().as_slice().len()) >= min_entries_for_gpu()
+        && mle.inner().as_ref().map_or(0, |i| i.guts().as_slice().len()) >= zerocheck_fold_min()
     {
         // SAFETY: the type ids match, so these are the same types.
         let a: EF = unsafe { std::mem::transmute_copy(&alpha) };
@@ -1503,7 +1573,7 @@ where
             MTLSize::new(THREADS.min(total as u64), 1, 1),
         );
         enc.end_encoding();
-        run_and_record(cb);
+        run_and_record_at(cb, 3);
         let [a, b, c, d] = outs;
         (a.finish(), b.finish(), c.finish(), d.finish())
     });
@@ -1723,7 +1793,7 @@ where
         let groups = (total as u64).div_ceil(THREADS).min(MAX_GROUPS as u64).max(1);
         enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
         enc.end_encoding();
-        run_and_record(cb);
+        run_and_record_at(cb, 4);
 
         for (direct, buffer, ptr, bytes) in [
             (numer_direct, &b_numer, numer_out.as_mut_ptr().cast::<u8>(), numer_bytes),

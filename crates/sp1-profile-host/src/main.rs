@@ -166,6 +166,7 @@ fn report_metal(elapsed: std::time::Duration) {
     eprint!("{}", sp1_hypercube::prover::zerocheck::counters::reject_report());
     #[cfg(feature = "metal")]
     eprint!("{}", sp1_hypercube::prover::zerocheck::counters::no_pipeline_report());
+    eprint!("{}", sp1_hypercube::metal::site_report());
     let [rejected, interaction] = sp1_hypercube::metal::cpu_round_counts();
     eprintln!(
         "gkr rounds left on the CPU: {} rejected layers in {:.3}s, {} interaction layers in {:.3}s",
