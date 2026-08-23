@@ -531,15 +531,17 @@ The ladder stops at n = 2,000,000, which is exactly four shards against four per
 
 # What happened, the fourth time
 
-Written 2026-08-23. **10.99 s against 60.03 s at four shards (5.46x), 20.16 s against 114.79 s at six (5.69x)** — medians, and the wall clock did not move.
+Written 2026-08-23, **re-measured on a quiet machine** after the first pass was taken while another job was running.
+
+**10.85 s against 60.25 s at four shards — 5.556x. The acceptance envelope is 3.71x - 5.63x**, from 3.75x - 5.45x.
 
 | | what it was worth | what it turned out to be |
 |---|---|---|
-| 1. The jagged sumcheck's waiting | measured work removed, wall unchanged | **not queueing — the cost of lending the device memory** |
-| 2. Make the device's work smaller | nothing yet | three of four phases are already at the machine's bandwidth |
-| 3. Deferral, done safely | not built | the prize is confirmed real; the safe subset is worth ~1.6% |
+| 1. The jagged sumcheck's waiting | **0.79 thread-seconds, ~1.5% of wall** | **not queueing — the cost of lending the device memory** |
+| 2. Make the device's work smaller | nothing yet | zerocheck is the only phase with room, at 6 GB/s |
+| 3. Deferral, done safely | not built | prize confirmed real; the safe subset is worth ~1.6% |
 | 4. The floor | not built | 1 s of it is per-program setup a real prover amortises |
-| 5. Past four shards | **5.69x at six shards** | the advantage holds; the ladder cannot go further here |
+| 5. Past four shards | measured, and unresolvable | the Metal arm's spread there is 25% against the CPU arm's 0.9% |
 
 ## 1. What it costs to lend the device memory
 
@@ -547,49 +549,59 @@ The full account is in `backend.md` §20. The short form: the jagged sumcheck wa
 
 **Nine tenths of what a large dispatch blocks for is the first use of its buffers.** Touching the pages from the host first does not help: what costs is the device's own access, and it is proportional to size, which is why it hid behind the small per-chip buffers of everything looked at before.
 
-Two allocations were being mapped twice and now are not — a sumcheck round's arrays, reduced and then folded, and the codeword the encode writes and the Merkle kernels hash. The jagged sumcheck falls from 2.44 to 2.19 thread-seconds and the commit phase's inputs go from 0% resident to 65%.
+Two allocations were mapped twice and now are not — a sumcheck round's arrays, reduced and then folded, and the codeword the encode writes and the Merkle kernels hash.
 
-**The wall clock does not move.** A single pair said 10.70 s and was quoted; the median of three is 10.99, which is where it started. The work removed is real and directly measured, and it is not enough to see.
+**What it is worth, from an A/B on one binary, three runs each:**
 
-## 2. Which phases have room — three of four have none
+| | reuse on | reuse off |
+|---|---|---|
+| jagged fold, waiting | 0.95 - 1.03 | 1.24 - 1.33 |
+| jagged sumcheck | 2.18 - 2.27 | 2.37 - 2.46 |
+| all queue waiting | 16.90 - 17.08 | 17.58 - 17.95 |
 
-Bytes moved against GPU seconds, on a machine that tops out near 410 GB/s: **gkr 352, pcs 221**, the encode above both once its ten internal passes are counted rather than its buffers. **zerocheck 6.**
+Non-overlapping on every internal measure: **0.79 thread-seconds of waiting removed, about 0.16 s of wall.** Real, and small enough that it needed the A/B to be seen — the wall medians are 10.89 against 11.05, which three runs can barely separate.
 
-So the only phase with arithmetic headroom is zerocheck, and what it computes is the constraint DAG three times per row pair. Reducing that is transpiler work — hoisting the subexpressions that do not depend on the folded variable, since the three points are affine in the point — not kernel tuning.
+That is also the correction to what was first claimed for it. A single pair said 10.70 against 11.04 and was quoted as 5.39x to 5.63x; a median said 10.99 and was quoted as no change at all. **Both were taken on a machine that was not quiet.** The A/B is what settles it, because it compares two things under the same conditions instead of comparing a number against a memory.
 
-It also settles the ceiling. If most of the device's work is already bandwidth-limited, the 5.96 seconds it spends is close to a floor and the ~10x it implies is not soft.
+## 2. Which phases have room — one of four
+
+Bytes moved against GPU seconds, medians of three on a quiet machine, against a peak near 410 GB/s: **gkr 271, pcs 221**, the encode higher still once its ten internal passes are counted rather than its buffers. **zerocheck 6.**
+
+Two orders of magnitude below bandwidth means zerocheck is compute-bound, and what it computes is the constraint DAG three times per row pair. Reducing that is transpiler work — hoisting the subexpressions that do not depend on the folded variable, since the three points are affine in the point — not kernel tuning.
 
 ## 3. Deferral — the prize is real, and it was still not built
 
 Item 1's finding looked as though it might have obviated this: if the waiting is buffer mapping rather than queueing, not waiting would not help. **Measured, and it does not obviate it.** `cb.commit()` costs 4 microseconds — 0.015 thread-seconds across 3,940 dispatches — so the mapping is charged after the commit returns, and a host that did not wait could get on with something while the driver does it.
 
-What stops it is still what stopped it last time: the wait has to be attached to the data, since a shard's work moves between tokio workers, and the readers include crates that are not vendored. The safe subset — deferring only where every reader is in code this project owns — is the jagged fold, whose waiting is 0.99 thread-seconds, so about 0.18 s of wall.
+What stops it is what stopped it last time: the wait has to be attached to the data, since a shard's work moves between tokio workers, and the readers include crates that are not vendored. The safe subset — deferring only where every reader is in code this project owns — is the jagged fold, whose waiting is about 1.0 thread-seconds, so roughly 0.18 s of wall.
 
-**Not built.** A 1.6% gain whose failure mode is a silently wrong proof is a bad trade, and the last list already spent a day establishing exactly how silent it is.
+**Not built.** A 1.6% gain whose failure mode is a silently wrong proof is a bad trade.
 
 ## 4. The floor — most of it is not per-proof
 
 1.86 seconds, and it divides as about a second of setup and 0.8 of a minimum padded shard. The setup is `compile raw program` at 0.4, `build compress program` at 0.2, `setup_from_preprocessed_data_and_traces` at 0.2, and the vkey at 0.1.
 
-**Almost all of that is per-program, not per-proof.** The acceptance harness is a one-shot binary that compiles the guest and sets up the verifying key every run; a prover proving the same program repeatedly pays it once. The only piece that is genuinely waste is `build compress program` — recursion setup during a core proof — and removing it means vendoring `sp1-prover`, the largest crate in the tree, for 0.2 seconds.
+**Almost all of that is per-program, not per-proof.** The acceptance harness is a one-shot binary that compiles the guest and sets up the verifying key every run; a prover proving the same program repeatedly pays it once. The only genuine waste is `build compress program` — recursion setup during a core proof — and removing it means vendoring `sp1-prover`, the largest crate in the tree, for 0.2 seconds.
 
 **Not built**, and the useful conclusion is that the floor is smaller than it looks: a repeat proof of the same program starts about a second lower.
 
-## 5. Past four shards — the advantage holds
+## 5. Past four shards — measured three times, and it cannot be resolved
 
 | | shards | CPU | Metal | |
 |---|---:|---:|---:|---:|
-| fib n=2M | 4 | 60.03 s | 10.99 s | 5.463x |
-| fib n=4M | 6 | 114.79 s | 20.16 s | **5.694x** |
+| fib n=2M | 4 | 60.25 s | 10.85 s | 5.556x |
+| fib n=4M | 6 | 112.41 s | 19.95 s | 5.634x |
 
 The ladder had stopped at exactly four shards against four permits — the one size where the concurrency cap has nothing to bind on.
 
-Two of five runs at n = 4,000,000 were outliers, 23.44 and 22.79 against a 20.16 median, and the first was briefly taken for a finding: "the backend loses its advantage at scale". It does not. **Past four shards, quote the median of three.**
+It took three goes to stop drawing conclusions from it. A single pair said 4.80x, "the backend loses its advantage at scale". Three runs and two pairs said 5.69x, "it holds and improves". Eight runs on a quiet machine give **18.12, 19.41, 19.49, 19.79, 20.10, 20.29, 21.85, 22.70** — a 25% spread against a CPU arm that varies by 0.9%.
 
-The ladder cannot go further here: the CPU arm's peak resident memory goes from 58 GB at four shards to 98 at six, on a 128 GB machine. The Metal arm peaks at 47 where the CPU arm peaks at 98, which is the more useful half of that.
+**The honest answer is that the advantage neither falls nor clearly improves, and this measurement cannot tell the difference.** Two things explain the spread and both are worth keeping: six shards over four permits leaves a tail two shards deep, and how well it overlaps the first four finishing is scheduling rather than work; and the slow readings cluster right after the CPU-arm runs, so a hundred seconds of sixteen-core load leaves the machine in a state the next run inherits for a minute or so.
+
+n = 8,000,000 is not measurable here — the CPU arm goes from 58 GB of peak resident memory at four shards to 98 on a 128 GB machine.
 
 ## Where this leaves it
 
-**The device's work is close to a floor and the wall clock has stopped responding.** Two lists have now moved it by less than run-to-run noise, while removing real work each time — which is what it looks like when a system stops being bound by the thing you are removing.
+The acceptance envelope is **3.71x - 5.63x**, from 3.75x - 5.45x. What moved it was 0.79 thread-seconds of buffer mapping; the other four items produced measurements rather than seconds.
 
-What is left is one item and it is not small: **the constraint arithmetic in zerocheck**, which is the only place on the device where work is being spent that the protocol does not strictly require, and which needs the transpiler to hoist rather than the kernel to be tuned.
+**Three of the four phases now move memory at a fair fraction of what the machine can, and the wall clock has stopped responding to work being removed from it.** What is left is one item: **the constraint arithmetic in zerocheck**, the only place on the device still spending work the protocol does not require, and transpiler work rather than kernel tuning.

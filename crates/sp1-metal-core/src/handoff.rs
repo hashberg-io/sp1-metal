@@ -18,8 +18,20 @@
 //! kept, which bounds how long a stale key can sit here to one hand-off.
 
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use metal::Buffer;
+
+/// Whether buffers are kept for a second use, read once.
+///
+/// On so that they are; the switch exists because the effect of not mapping the
+/// same allocation twice is small enough that it needs an A/B on one binary to
+/// be seen at all.
+#[must_use]
+pub fn reusing() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_REUSE").map(|v| v != "0").unwrap_or(true))
+}
 
 /// How many hand-offs may be in flight at once. A commitment encodes several
 /// codewords before hashing any of them, so this is not one.
@@ -33,6 +45,9 @@ thread_local! {
 ///
 /// The caller must keep the allocation alive and unmoved until then.
 pub fn keep(bytes: *const u8, len: usize, buffer: &Buffer) {
+    if !reusing() {
+        return;
+    }
     HANDOFF.with(|h| {
         let mut h = h.borrow_mut();
         if h.len() >= SLOTS {

@@ -631,10 +631,12 @@ Buffer traffic against GPU seconds, at n = 2,000,000, on an M4 Max whose memory 
 
 | phase | GPU s | bytes moved | rate |
 |---|---:|---:|---:|
-| gkr | 1.16 | 408 GB | **352 GB/s** |
-| pcs | 0.84 | 185 GB | **221 GB/s** |
-| commit | 3.11 | 73 GB of buffers, but ten passes inside the encode | at the limit |
-| zerocheck | 3.13 | 18 GB | **6 GB/s** |
+| gkr | 1.43 | 408 GB | **271 GB/s** |
+| pcs | 0.88 | 185 GB | **221 GB/s** |
+| commit | 3.57 | 73 GB of buffers, but ten passes inside the encode | at the limit |
+| zerocheck | 3.19 | 18 GB | **6 GB/s** |
+
+Medians of three on a quiet machine. An earlier reading of this table put `gkr` at 352 GB/s, which was taken while the machine was loaded and is too high; the conclusion it supports is unchanged, and `zerocheck` reads 6 GB/s in every run.
 
 `gkr` is at the machine's bandwidth and there is nothing in it to win. `pcs` is over half of it. The encode makes about ten passes over a codeword four times the trace, so its real traffic is an order of magnitude above what the buffer figures show, which puts it at the limit too; the other half of `commit` is Poseidon2, which is arithmetic.
 
@@ -648,9 +650,15 @@ The acceptance ladder stops at n = 2,000,000, which is exactly four shards again
 
 | | shards | CPU | Metal | |
 |---|---:|---:|---:|---:|
-| fib n=2M | 4 | 60.03 s | 10.99 s | 5.463x |
-| fib n=4M | 6 | 114.79 s | 20.16 s | **5.694x** |
+| fib n=2M | 4 | 60.25 s | 10.85 s | 5.556x |
+| fib n=4M | 6 | 112.41 s | 19.95 s | 5.634x |
 
-Medians, not single pairs, and that is the point of the row. A single pair at n = 4,000,000 first read 4.80x, which looked like the backend losing its advantage at scale; three standalone runs and two more pairs put it at 5.69x, above the four-shard figure. Two separate outliers turned up in five runs at that size — 23.44 and 22.79 against a 20.1 median — so **anything quoted past four shards needs the median of three.**
+**The advantage neither falls nor clearly improves at six shards, and the measurement cannot resolve the difference.** That is the honest reading, and it took three attempts to arrive at:
 
-n = 8,000,000 is not measurable here. The CPU arm's peak resident memory goes from 58 GB at four shards to 98 GB at six on a 128 GB machine, so the next doubling would swap. That bounds the ladder rather than the backend: the Metal arm peaks at 47 GB where the CPU arm peaks at 98.
+- a single pair said **4.80x**, which read as the backend losing its advantage at scale;
+- three runs and two pairs said **5.69x**, which read as it improving;
+- eight runs on a quiet machine give **18.12, 19.41, 19.49, 19.79, 20.10, 20.29, 21.85, 22.70** — a 25% spread against a CPU arm that varies by 0.9%.
+
+Two things are worth taking from that. **The Metal arm is far noisier than the CPU arm at six shards**, which is what six shards over four permits looks like: the tail is two shards deep and how well it overlaps the first four finishing is scheduling, not work. And **the slow readings cluster immediately after the CPU-arm runs**, which is a hundred seconds of sixteen-core load leaving the machine in a state the next run inherits — so even an idle machine is not a quiet one for a minute or so afterwards.
+
+n = 8,000,000 is not measurable here. The CPU arm's peak resident memory goes from 58 GB at four shards to 98 at six on a 128 GB machine, so the next doubling would swap. That bounds the ladder rather than the backend: the Metal arm peaks at 47 GB where the CPU arm peaks at 98.

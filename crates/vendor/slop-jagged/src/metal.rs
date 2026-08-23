@@ -401,6 +401,9 @@ fn as_words<T>(xs: &[T]) -> &[u8] {
 /// something else in between. Entries do not outlive the round -- see
 /// [`clear_round_buffers`].
 fn round_buffer(device: &Device, words: &[u8]) -> Buffer {
+    if !sp1_metal_core::handoff::reusing() {
+        return read_only(device, words);
+    }
     let key = (words.as_ptr() as usize, words.len());
     if let Some(hit) = ROUND_BUFFERS.with(|c| {
         c.borrow().iter().find(|(k, _)| *k == key).map(|(_, b)| b.clone())
