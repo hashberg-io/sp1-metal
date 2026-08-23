@@ -169,10 +169,73 @@ The startup is the smaller half of it. `setup` is a second and barely moves, but
 
 That sharpens what everything above is bounded by. Of the 13.68 seconds at n = 2,000,000, about 3.1 are fixed; the part that scales with work is 10.6 against roughly 58 on the CPU, or **5.5x on the part a backend can touch**. The ratio the whole project reports is that number diluted by a constant, and the dilution is worth more than any remaining item on this list.
 
-## The list this leaves
+---
 
-The next list is short, and one entry on it comes from this one's exclusions.
+# The next list, from 4.49x
 
-`next-levers.md` ruled out making the existing kernels faster, and gave a reason that has since stopped being true: *"The device is busy 27.5% of the proof; a kernel that is twice as fast buys nothing while the CPU is the constraint."* **The device is now busy 44% of the proof and 100% of several seconds of it**, and item 4's blocking is the CPU waiting on exactly that. Coverage, then scheduling, then tuning was the right order; tuning is where the order now arrives.
+Written 2026-08-23 against **13.56 s paired with 61.46 s**, device busy 44.3%.
 
-The encode is the first target and the clearest: it makes about eighteen passes over a codeword four times the size of the trace, one butterfly stage per pass, where a radix-4 stage would halve the passes and the memory traffic with them.
+## What changed, and it changes the ranking
+
+The previous list ruled out tuning the existing kernels, and gave a reason that has stopped being true: *"The device is busy 27.5% of the proof; a kernel that is twice as fast buys nothing while the CPU is the constraint."*
+
+**The GPU is now oversubscribed.** Four proving threads want 10.09 GPU-seconds inside a 13.6 second proof and get a 6.78 second union, so **8.4 thread-seconds are spent waiting on the device** — more than folding was ever thought to cost.
+
+| | dispatches | GPU s | wall s | blocked |
+|---|---:|---:|---:|---:|
+| commit | 137 | **4.91** | 6.27 | 1.36 |
+| zerocheck | 1258 | 2.59 | 3.92 | 1.33 |
+| gkr | 2304 | 1.75 | 5.39 | **3.64** |
+| pcs | 408 | 0.84 | 2.92 | 2.08 |
+
+Coverage, then scheduling, then tuning was the right order. Tuning is where the order arrives.
+
+## 1. The encode kernel — 3.05 of the 10.09 GPU-seconds, 30% of all GPU time
+
+Measured by differencing rather than attributed: `commit` GPU time is **4.91 s with the encode on and 1.86 s off**, and device busy goes 30.9% to 44.3%. One port made itself the largest GPU consumer in the proof.
+
+It makes about **eighteen passes over a codeword four times the size of the trace** — the spread, one butterfly stage per global pass, and the tiled tail. A radix-4 stage does two stages per pass, taking sixteen global passes to eight: eighteen passes to ten. The transform is memory-bound, so passes are the cost.
+
+**Estimated: 13.56 → 12.6-13.0 s, 4.7x-4.9x.** *Stop if* `commit` GPU seconds do not fall below about 3.5.
+
+Cheaper alternative if radix-4 proves awkward: reshape the tile. 64 rows by 64 columns holds six stages in 16 KB; 256 by 16 holds eight; 32 KB of threadgroup memory holds nine.
+
+## 2. Zerocheck's unattributed 4.6 thread-seconds — the largest block nobody has measured
+
+`zerocheck` is the largest span at 8.5 thread-seconds and its Metal region accounts for 3.9. Nearly five thread-seconds are elsewhere in that span and nothing measures them.
+
+**The first action is a counter, not a profile.** That instruction paid off twice on the last list and cost nothing both times. Candidates worth their own counters: building `ZeroCheckPoly`, the `partial_lagrange` and eq construction, and chips rejected by `MAX_NODES = 16_384` in the transpiler — but the point is to stop guessing between them.
+
+**Estimated: unknown, potentially the largest here. Cheap to find out.**
+
+## 3. Dispatch latency, framed correctly this time — 8.4 thread-seconds
+
+The previous list's mechanism was wrong; the waiting is real. GKR blocks **1.58 ms per dispatch for 0.76 ms of GPU work**, across 2,304 dispatches. That is not host overhead, it is queueing behind three other proving threads on a device at 44%.
+
+Which makes most of it downstream of item 1: shrink the GPU work and the queue drains. What is left after that is `pcs` — 408 dispatches for 0.84 GPU-seconds, 2 ms of wall each for 0.2 ms of work, the worst ratio in the table and the one place fewer and larger dispatches are still available.
+
+**Estimated: 0.3-0.8 s, most of it as a side effect of item 1.**
+
+## 4. `generate GKR circuit` — 4.4 thread-seconds
+
+The first layer and the layer transitions are both on the GPU and 4.4 thread-seconds are still here. Same treatment as item 2: count before porting.
+
+## 5. The jagged sumcheck's construction — 2.6 + 2.1 thread-seconds
+
+`create jagged sumcheck poly` (2.6) and `prove evaluation claims` (2.1). The guts and the assist sumcheck are already ported, so what is left is building the polynomial rather than proving it.
+
+## 6. The floor — 3.09 s, now 23% of the proof
+
+Unchanged and still unreachable, but grown from a footnote to nearly a quarter of the wall clock. **It caps the absolute ratio at 19.9x and the realistic one at about 7x.** The difference from last time is that items 1 to 5 total roughly 2 s of wall, so the floor is now the largest single line in the budget.
+
+## Not on the list, and why
+
+- **Raising `SP1_METAL_MIN_LAYER`.** Tested rather than assumed: 64 entries is 13.56 s, 1,024 is 13.93, 16,384 is 14.19. The gate is at its optimum, and raising it hands work back to the CPU faster than it saves round trips.
+- **Chaining a round to its fold.** Impossible; the challenger stands between them.
+- **Folding MLEs.** Done. 2.2 thread-seconds, of which 1.6 is a billion cells of real arithmetic.
+- **Allocation churn.** Measured and answered: mimalloc was 45% slower.
+- **Tracegen and execution.** 1.8 thread-seconds, and not GPU-shaped.
+
+## The arithmetic
+
+Items 1, 3 and 5 are worth roughly 1.5-2 s between them, landing at **4.9x-5.5x**. Item 2 is the only one that could beat that, and the only honest thing to say about it is that nobody has measured it yet. Item 6 says none of it goes past about 7x.
