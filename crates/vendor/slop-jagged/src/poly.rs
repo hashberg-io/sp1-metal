@@ -276,8 +276,31 @@ impl JaggedLittlePolynomialProverParams {
 
         let col_ranges = ColRanges::new(&self.col_prefix_sums_usize, total_area);
 
+        // One extension multiply per entry and no dependence between entries,
+        // so the whole area is a single dispatch when the field is the one the
+        // kernels are written for.
+        #[cfg(feature = "metal")]
+        let on_gpu = crate::metal::jagged_values_typed(
+            col_eq.guts().as_slice(),
+            row_eq.guts().as_slice(),
+            &self.col_prefix_sums_usize,
+            &mut result,
+        );
+        #[cfg(not(feature = "metal"))]
+        let on_gpu = false;
+        // Under `SP1_METAL_JAGGED_VALUES=check` both paths run and are compared.
+        #[cfg(feature = "metal")]
+        let expected = (on_gpu && crate::metal::values_check()).then(|| result.clone());
+        #[cfg(feature = "metal")]
+        let skip_cpu = on_gpu && expected.is_none();
+        #[cfg(not(feature = "metal"))]
+        let skip_cpu = on_gpu;
+
         let result_chunk_size = max(total_area / num_cpus::get(), 1);
         tracing::debug_span!("compute jagged values").in_scope(|| {
+            if skip_cpu {
+                return;
+            }
             (result.chunks_mut(result_chunk_size).enumerate().par_bridge()).for_each(
                 |(chunk_idx, chunk)| {
                     let i = chunk_idx * result_chunk_size;
@@ -305,6 +328,14 @@ impl JaggedLittlePolynomialProverParams {
                 },
             );
         });
+
+        #[cfg(feature = "metal")]
+        if let Some(from_gpu) = expected {
+            assert!(
+                from_gpu == result,
+                "the jagged little polynomial's guts from the GPU differ from upstream's",
+            );
+        }
 
         result.into()
     }

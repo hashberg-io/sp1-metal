@@ -24,6 +24,39 @@ const THREADS: u64 = 256;
 const MIN_PAIRS: usize = 1 << 12;
 
 const KERNELS: &str = r#"
+// The jagged little polynomial's guts: one entry per cell of the stacked
+// trace area. A cell belongs to the column whose prefix-sum range contains
+// it, and its value is that column's eq weight times the row's -- except in
+// the final range, which is padding and evaluates to zero.
+//
+// The ranges are found by binary search rather than by walking, because a
+// thread here starts at an arbitrary index. Duplicate prefix sums mark empty
+// columns, and taking the last range that starts at or before the index skips
+// them, which is what the sequential walk does by advancing past a column of
+// size zero.
+kernel void jagged_values(device const uint4* col_eq [[buffer(0)]],
+                          device const uint4* row_eq [[buffer(1)]],
+                          device const uint* prefix [[buffer(2)]],
+                          device uint4* out [[buffer(3)]],
+                          constant uint& n_ranges [[buffer(4)]],
+                          constant uint& total [[buffer(5)]],
+                          uint gid [[thread_position_in_grid]],
+                          uint grid [[threads_per_grid]]) {
+    for (uint idx = gid; idx < total; idx += grid) {
+        uint lo = 0u;
+        uint hi = n_ranges - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi + 1u) >> 1;
+            if (prefix[mid] <= idx) { lo = mid; } else { hi = mid - 1u; }
+        }
+        if (lo + 1u >= n_ranges) {
+            out[idx] = uint4(0u);
+        } else {
+            out[idx] = ext_mul(col_eq[lo], row_eq[idx - prefix[lo]]);
+        }
+    }
+}
+
 // One thread per pair: the products at the even index, the odd one, and of the
 // pairwise sums, all from one pass over the two arrays.
 #define HADAMARD_ROUND(NAME, BASE_T, MUL, ADD_BASE)                                  \
@@ -103,6 +136,7 @@ struct Context {
     round_ext: ComputePipelineState,
     fold_base: ComputePipelineState,
     fold_ext: ComputePipelineState,
+    values: ComputePipelineState,
 }
 
 impl Context {
@@ -132,6 +166,7 @@ fn context() -> Option<&'static Context> {
             round_ext: pso("hadamard_round_ext")?,
             fold_base: pso("jagged_fold_base")?,
             fold_ext: pso("jagged_fold_ext")?,
+            values: pso("jagged_values")?,
             device,
         })
     })
@@ -353,4 +388,119 @@ pub(crate) fn fold_typed<T: 'static, E: 'static + Copy + Send + Sync>(
         stats::record_output(Output::Staged, out_bytes, start.elapsed().as_nanos() as u64);
     }
     Some(out)
+}
+
+/// Whether the jagged little polynomial's guts are filled on the GPU,
+/// overridable with `SP1_METAL_JAGGED_VALUES`.
+fn values_on_gpu() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_JAGGED_VALUES").map(|v| v != "0").unwrap_or(true))
+}
+
+/// Whether to fill the guts both ways and compare, with
+/// `SP1_METAL_JAGGED_VALUES=check`.
+///
+/// The interesting cases here are the boundaries -- an empty column, which
+/// shows up as a repeated prefix sum, and the final range, which is padding --
+/// and a real proof's parameters exercise them where an invented one might not.
+#[must_use]
+pub(crate) fn values_check() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_JAGGED_VALUES").is_ok_and(|v| v == "check"))
+}
+
+/// Fills the jagged little polynomial's guts, one entry per cell of the
+/// stacked area.
+///
+/// One extension multiply per sixteen bytes written, which is the memory-bound
+/// case: it only pays with nothing copied at either end, and both ends here are
+/// buffers borrowing the caller's pages.
+///
+/// Returns `false` when the field is not the one the kernels are written for,
+/// when the area is too small to be worth a dispatch, or when the output would
+/// not fit in a Metal buffer -- leaving the caller to fill it as it always did.
+pub(crate) fn jagged_values_typed<K: 'static + Copy>(
+    col_eq: &[K],
+    row_eq: &[K],
+    prefix_sums: &[usize],
+    out: &mut [K],
+) -> bool {
+    if (!values_on_gpu() && !values_check()) || !matches!(kind::<K>(), Some(true)) {
+        return false;
+    }
+    let total = out.len();
+    if total < MIN_PAIRS || prefix_sums.len() < 2 || total > u32::MAX as usize {
+        return false;
+    }
+    let Some(ctx) = context() else {
+        return false;
+    };
+    let out_bytes = std::mem::size_of_val(out);
+    if out_bytes as u64 > ctx.device.max_buffer_length() {
+        return false;
+    }
+    // Every non-final range indexes `row_eq` by the offset within it, and
+    // `col_eq` by its own index; refuse rather than let the kernel read past
+    // either.
+    let widest = prefix_sums.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+    if col_eq.len() + 1 < prefix_sums.len() || row_eq.len() < widest {
+        return false;
+    }
+    let prefix32: Vec<u32> = prefix_sums.iter().map(|&x| x as u32).collect();
+    if prefix_sums.iter().any(|&x| x > u32::MAX as usize) {
+        return false;
+    }
+
+    let _phase = stats::enter(stats::Phase::Pcs);
+    let queue = ctx.queue();
+    metal::objc::rc::autoreleasepool(|| {
+        // SAFETY: each buffer borrows a slice that outlives the one dispatch
+        // below, which is awaited before this returns.
+        let b_col = unsafe { sp1_metal_probes::nocopy::read_only(&ctx.device, as_words(col_eq)) };
+        let b_row = unsafe { sp1_metal_probes::nocopy::read_only(&ctx.device, as_words(row_eq)) };
+        let b_pre = unsafe { sp1_metal_probes::nocopy::read_only(&ctx.device, as_words(&prefix32)) };
+        // SAFETY: as above, and nothing reads `out` until the wait below.
+        let (b_out, direct) = unsafe {
+            sp1_metal_probes::nocopy::write_into(
+                &ctx.device,
+                std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), out_bytes),
+            )
+        };
+        let n_ranges = prefix32.len() as u32;
+        let total32 = total as u32;
+        let cb = queue.new_command_buffer();
+        let enc = cb.new_compute_command_encoder();
+        enc.set_compute_pipeline_state(&ctx.values);
+        enc.set_buffer(0, Some(&b_col), 0);
+        enc.set_buffer(1, Some(&b_row), 0);
+        enc.set_buffer(2, Some(&b_pre), 0);
+        enc.set_buffer(3, Some(&b_out), 0);
+        enc.set_bytes(4, 4, (&n_ranges as *const u32).cast());
+        enc.set_bytes(5, 4, (&total32 as *const u32).cast());
+        let groups = (total as u64).div_ceil(THREADS).min(4096).max(1);
+        enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
+        enc.end_encoding();
+        let start = std::time::Instant::now();
+        cb.commit();
+        cb.wait_until_completed();
+        let wall = start.elapsed().as_secs_f64();
+        let (t0, t1): (f64, f64) =
+            unsafe { (msg_send![cb, GPUStartTime], msg_send![cb, GPUEndTime]) };
+        stats::record_dispatch(wall, t1 - t0);
+        stats::record_interval(t0, t1);
+        if direct {
+            return;
+        }
+        let start = std::time::Instant::now();
+        // SAFETY: the kernel wrote exactly this many bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                b_out.contents().cast::<u8>(),
+                out.as_mut_ptr().cast::<u8>(),
+                out_bytes,
+            );
+        }
+        stats::record_output(Output::Staged, out_bytes, start.elapsed().as_nanos() as u64);
+    });
+    true
 }
