@@ -82,12 +82,15 @@ fn layer_entries<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> usize {
         .sum()
 }
 
-/// Whether the chips big enough to dispatch account for most of the layer.
+/// Whether a layer is worth taking to the GPU at all.
 ///
-/// Chips below the threshold are summed by `cpu_chip`, which reproduces
-/// upstream's arithmetic but not its loop structure. Standing in for a little
-/// of the layer is fine; standing in for most of it is not, and in that case
-/// the whole layer goes back to upstream's own reduction untouched.
+/// This used to ask whether the chips big enough for their own dispatch
+/// accounted for most of the layer, because everything below the threshold was
+/// summed on the CPU and standing in for most of a layer that way was worse
+/// than leaving the whole layer to upstream. With the small chips batched into
+/// one dispatch of their own that no longer applies: every chip is covered
+/// either way, so the only question is whether the layer as a whole is big
+/// enough to be worth the round trip.
 fn worth_dispatching<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> bool {
     let min = min_entries_for_gpu();
     let (mut big, mut all) = (0usize, 0usize);
@@ -98,7 +101,29 @@ fn worth_dispatching<T: slop_algebra::Field>(mles: &[PaddedMle<T>]) -> bool {
             big += len;
         }
     }
-    all > 0 && big * 2 >= all
+    if all == 0 {
+        return false;
+    }
+    if batch_on_gpu() {
+        return all >= min_layer_entries();
+    }
+    big * 2 >= all
+}
+
+/// Entries in a whole layer below which even a batched dispatch is not worth
+/// it, overridable with `SP1_METAL_MIN_LAYER`.
+///
+/// Much lower than the per-chip threshold, and for a different reason: a chip
+/// below that threshold would need a dispatch to itself, whereas a layer below
+/// this one needs a single dispatch shared by all of it.
+fn min_layer_entries() -> usize {
+    static MIN: OnceLock<usize> = OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("SP1_METAL_MIN_LAYER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1 << 6)
+    })
 }
 
 /// Shader source: the probe suite's field arithmetic verbatim, so the kernels
@@ -123,6 +148,8 @@ struct Context {
     transition_ext: ComputePipelineState,
     transition_base: ComputePipelineState,
     first_layer: ComputePipelineState,
+    batch_ext: ComputePipelineState,
+    batch_base: ComputePipelineState,
     /// Scratch buffers for per-threadgroup partials, checked out and returned.
     ///
     /// One shared buffer would be a data race: SP1 proves shards concurrently,
@@ -148,6 +175,8 @@ impl Context {
         let transition_ext = pso("gkr_transition_ext");
         let transition_base = pso("gkr_transition_base");
         let first_layer = pso("first_layer");
+        let batch_ext = pso("logup_round_batch_ext");
+        let batch_base = pso("logup_round_batch_base");
         Self {
             device,
             ext,
@@ -157,6 +186,8 @@ impl Context {
             transition_ext,
             transition_base,
             first_layer,
+            batch_ext,
+            batch_base,
             pool: Mutex::new(Vec::new()),
         }
     }
@@ -613,6 +644,8 @@ where
     // the CPU asks for no dispatches at all.
     let mut command_buffer: Option<&metal::CommandBufferRef> = None;
     let mut held: Vec<(Buffer, usize, Vec<Option<Buffer>>)> = Vec::new();
+    let mut small: Vec<SmallChip<N>> = Vec::new();
+    let mut batch: Option<(Buffer, usize, Vec<Option<Buffer>>)> = None;
     for (((n0, n1), d0), d1) in
         numerators.0.iter().zip(numerators.1).zip(denominators.0).zip(denominators.1)
     {
@@ -645,21 +678,20 @@ where
         }
         let n_full = (rows / 2).min(n_pairs);
         if len < min_entries_for_gpu() {
-            let fallback_start = std::time::Instant::now();
-            let chip = cpu_chip::<N>(
-                n0_inner.guts().as_slice(),
-                n1_inner.guts().as_slice(),
-                d0_inner.guts().as_slice(),
-                d1_inner.guts().as_slice(),
-                &eq_interaction[offset..offset + width],
-                eq_row,
+            // Too small to be worth a dispatch of its own, but a layer's chips
+            // all add into the same three sums, so the whole tail of them can
+            // share one. Collected here and dispatched together below.
+            small.push(SmallChip {
+                n0: n0_inner,
+                n1: n1_inner,
+                d0: d0_inner,
+                d1: d1_inner,
                 width,
-                lambda,
-            );
-            totals.0 += chip.0;
-            totals.1 += chip.1;
-            totals.2 += chip.2;
-            STATS.add_cpu_chip(fallback_start.elapsed().as_secs_f64());
+                n_pairs,
+                n_full,
+                eqi_off: offset,
+                len,
+            });
             continue;
         }
         // One thread per (row pair, interaction) cell. The grid is capped and
@@ -710,10 +742,82 @@ where
         held.push((partials, groups, vec![Some(b_n0), Some(b_n1), Some(b_d0), Some(b_d1), b_eqi, b_eqr]));
         let _ = numerator_words;
     }
+    // The batch of small chips joins the layer's own command buffer, so it
+    // costs no extra submission.
+    if !small.is_empty() {
+        match stage_small_batch(
+            ctx,
+            &small,
+            eq_interaction,
+            eq_row,
+            lambda_words,
+            &mut command_buffer,
+            &queue,
+        ) {
+            Some(entry) => batch = Some(entry),
+            None => {
+                let fallback_start = std::time::Instant::now();
+                for chip in &small {
+                    let c = cpu_chip::<N>(
+                        chip.n0.guts().as_slice(),
+                        chip.n1.guts().as_slice(),
+                        chip.d0.guts().as_slice(),
+                        chip.d1.guts().as_slice(),
+                        &eq_interaction[chip.eqi_off..chip.eqi_off + chip.width],
+                        eq_row,
+                        chip.width,
+                        lambda,
+                    );
+                    totals.0 += c.0;
+                    totals.1 += c.1;
+                    totals.2 += c.2;
+                }
+                STATS.add_cpu_chip(fallback_start.elapsed().as_secs_f64());
+            }
+        }
+    }
     let Some(cb) = command_buffer else {
         return totals;
     };
     run_and_record(cb);
+    if let Some((partials, groups, _)) = batch {
+        let raw = partials.contents().cast::<EF>();
+        let mut sum = (EF::zero(), EF::zero(), EF::zero());
+        for g in 0..groups {
+            // SAFETY: the kernel wrote 3 extension elements per threadgroup.
+            let (a, b, c) = unsafe { (*raw.add(3 * g), *raw.add(3 * g + 1), *raw.add(3 * g + 2)) };
+            sum.0 += a;
+            sum.1 += b;
+            sum.2 += c;
+        }
+        ctx.return_partials(partials);
+        if batch_check() {
+            let mut want = (EF::zero(), EF::zero(), EF::zero());
+            for chip in &small {
+                let c = cpu_chip::<N>(
+                    chip.n0.guts().as_slice(),
+                    chip.n1.guts().as_slice(),
+                    chip.d0.guts().as_slice(),
+                    chip.d1.guts().as_slice(),
+                    &eq_interaction[chip.eqi_off..chip.eqi_off + chip.width],
+                    eq_row,
+                    chip.width,
+                    lambda,
+                );
+                want.0 += c.0;
+                want.1 += c.1;
+                want.2 += c.2;
+            }
+            assert!(
+                want == sum,
+                "the batched round sums for {} small chips differ from the CPU's",
+                small.len(),
+            );
+        }
+        totals.0 += sum.0;
+        totals.1 += sum.1;
+        totals.2 += sum.2;
+    }
     for (partials, groups, _) in held {
         let raw = partials.contents().cast::<EF>();
         for g in 0..groups {
@@ -872,11 +976,45 @@ fn pooled<T>(f: impl FnOnce() -> T) -> T {
     metal::objc::rc::autoreleasepool(f)
 }
 
+/// Upstream's own reduction, with a note of which reason sent it there.
+///
+/// The two reasons call for different work if either turns out to be
+/// expensive: an interaction layer needs a kernel of its own, while a rejected
+/// circuit layer only needs the gate loosened.
+static CPU_ROUND: [Mutex<(usize, f64)>; 2] =
+    [Mutex::new((0, 0.0)), Mutex::new((0, 0.0))];
+
+fn timed_cpu_round<F, K>(
+    poly: &LogupRoundPolynomial<F, K, MetalRoundOps>,
+    interaction: bool,
+) -> (K, K, K)
+where
+    F: slop_algebra::Field,
+    K: slop_algebra::ExtensionField<F>,
+    MetalRoundOps: LogupRoundOps<F, K>,
+{
+    let start = std::time::Instant::now();
+    let out = cpu_round_evals(poly);
+    let mut c = CPU_ROUND[usize::from(interaction)].lock().expect("stats poisoned");
+    c.0 += 1;
+    c.1 += start.elapsed().as_secs_f64();
+    out
+}
+
+/// `[(rejected layers, seconds), (interaction layers, seconds)]`.
+#[must_use]
+pub fn cpu_round_counts() -> [(usize, f64); 2] {
+    [
+        *CPU_ROUND[0].lock().expect("stats poisoned"),
+        *CPU_ROUND[1].lock().expect("stats poisoned"),
+    ]
+}
+
 fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
-        PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::InteractionLayer(_) => timed_cpu_round(poly, true),
         PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
-            cpu_round_evals(poly)
+            timed_cpu_round(poly, false)
         }
         PolynomialLayer::CircuitLayer(layer) => pooled(|| circuit_layer::<BaseField>(
             &context().base,
@@ -892,9 +1030,9 @@ fn round_evals_base(poly: &LogupRoundPolynomial<BaseField, EF, MetalRoundOps>) -
 
 fn round_evals_ext(poly: &LogupRoundPolynomial<EF, EF, MetalRoundOps>) -> (EF, EF, EF) {
     match &poly.layer {
-        PolynomialLayer::InteractionLayer(_) => cpu_round_evals(poly),
+        PolynomialLayer::InteractionLayer(_) => timed_cpu_round(poly, true),
         PolynomialLayer::CircuitLayer(layer) if !worth_dispatching(&layer.numerator_0) => {
-            cpu_round_evals(poly)
+            timed_cpu_round(poly, false)
         }
         PolynomialLayer::CircuitLayer(layer) => pooled(|| circuit_layer::<EF>(
             &context().ext,
@@ -1603,4 +1741,172 @@ where
         }
     });
     true
+}
+
+/// A chip of a layer too small to be worth its own dispatch.
+struct SmallChip<N> {
+    n0: Arc<Mle<N>>,
+    n1: Arc<Mle<N>>,
+    d0: Arc<Mle<EF>>,
+    d1: Arc<Mle<EF>>,
+    width: usize,
+    n_pairs: usize,
+    n_full: usize,
+    eqi_off: usize,
+    len: usize,
+}
+
+/// What the batched kernel needs to know about one chip in the batch.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ChipDesc {
+    cells_before: u32,
+    data_off: u32,
+    eqi_off: u32,
+    width: u32,
+    n_pairs: u32,
+    n_full: u32,
+}
+
+/// Whether to sum the batched chips both ways and compare, with
+/// `SP1_METAL_BATCH=check`.
+///
+/// The batch kernel resolves a cell to its chip by binary search over an offset
+/// table, which is the kind of arithmetic that is either exactly right or
+/// wildly wrong, and a proof that still verifies is a coarse way to find out.
+fn batch_check() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_BATCH").is_ok_and(|v| v == "check"))
+}
+
+/// Whether small chips are batched at all, overridable with `SP1_METAL_BATCH`.
+fn batch_on_gpu() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_BATCH").map(|v| v != "0").unwrap_or(true))
+}
+
+/// Copies a layer's small chips side by side and encodes one dispatch over all
+/// of them, returning the partials to sum once the layer has run.
+///
+/// This is the one place the backend copies deliberately. Every other upload
+/// borrows the caller's pages, but these arrays have to be adjacent for a
+/// single kernel to walk them, and a chip below the dispatch threshold is at
+/// most a few hundred kilobytes. The alternative -- a dispatch each -- was
+/// measured and is a wash, which is what makes the copy worth paying.
+///
+/// Returns `None` when the batch is too small to be worth it or the fields are
+/// not the ones the kernels are written for, leaving the caller to sum the
+/// chips on the CPU.
+fn stage_small_batch<'a, N: slop_algebra::Field>(
+    ctx: &'static Context,
+    small: &[SmallChip<N>],
+    eq_interaction: &[EF],
+    eq_row: &[EF],
+    lambda_words: [u32; 4],
+    command_buffer: &mut Option<&'a metal::CommandBufferRef>,
+    queue: &'a CommandQueue,
+) -> Option<(Buffer, usize, Vec<Option<Buffer>>)>
+where
+    EF: slop_algebra::ExtensionField<N>,
+{
+    let base = if is::<N, BaseField>() {
+        true
+    } else if is::<N, EF>() {
+        false
+    } else {
+        return None;
+    };
+    if !batch_on_gpu() && !batch_check() {
+        return None;
+    }
+    let total_cells: usize = small.iter().map(|c| c.n_pairs * c.width).sum();
+    if small.len() < 2 || total_cells * 2 < min_layer_entries() {
+        return None;
+    }
+    let total_len: usize = small.iter().map(|c| c.len).sum();
+    let num_size = if base { 4 } else { 16 };
+
+    let b_n0 = arena_take(total_len * num_size)?;
+    let b_n1 = arena_take(total_len * num_size)?;
+    let b_d0 = arena_take(total_len * 16)?;
+    let b_d1 = arena_take(total_len * 16)?;
+
+    let mut descs = Vec::with_capacity(small.len());
+    let (mut cells, mut off) = (0usize, 0usize);
+    for chip in small {
+        descs.push(ChipDesc {
+            cells_before: cells as u32,
+            data_off: off as u32,
+            eqi_off: chip.eqi_off as u32,
+            width: chip.width as u32,
+            n_pairs: chip.n_pairs as u32,
+            n_full: chip.n_full as u32,
+        });
+        for (buffer, bytes, elem) in [
+            (&b_n0, as_words(chip.n0.guts().as_slice()), num_size),
+            (&b_n1, as_words(chip.n1.guts().as_slice()), num_size),
+            (&b_d0, as_words(chip.d0.guts().as_slice()), 16),
+            (&b_d1, as_words(chip.d1.guts().as_slice()), 16),
+        ] {
+            debug_assert_eq!(bytes.len(), chip.len * elem);
+            // SAFETY: the staging buffer was made with room for every chip's
+            // elements, and shared storage is host-writable.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    buffer.contents().cast::<u8>().add(off * elem),
+                    bytes.len(),
+                );
+            }
+        }
+        stats::record_input(Input::Copied, chip.len * (2 * num_size + 32), 0);
+        cells += chip.n_pairs * chip.width;
+        off += chip.len;
+    }
+
+    // The descriptors are staged rather than borrowed: this function returns
+    // before the layer's command buffer runs, so a buffer over `descs` would be
+    // reading a local that no longer exists. The two eq arrays are the
+    // caller's and outlive the dispatch, so those can be taken where they lie.
+    let desc_bytes = as_words(&descs);
+    let b_desc = arena_take(desc_bytes.len())?;
+    // SAFETY: the staging buffer was made with at least this many bytes, and
+    // shared storage is host-writable.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            desc_bytes.as_ptr(),
+            b_desc.contents().cast::<u8>(),
+            desc_bytes.len(),
+        );
+    }
+    stats::record_input(Input::Copied, desc_bytes.len(), 0);
+    let b_eqi = upload(as_words(eq_interaction));
+    let b_eqr = upload(as_words(eq_row));
+
+    #[repr(C)]
+    struct BatchParams {
+        n_chips: u32,
+        total_cells: u32,
+    }
+    let params = BatchParams { n_chips: small.len() as u32, total_cells: total_cells as u32 };
+    let groups = total_cells.div_ceil(THREADS as usize).min(MAX_GROUPS);
+    let partials = ctx.take_partials(groups);
+
+    let pso = if base { &ctx.batch_base } else { &ctx.batch_ext };
+    let cb = *command_buffer.get_or_insert_with(|| queue.new_command_buffer());
+    let enc = cb.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(pso);
+    for (i, b) in [&b_n0, &b_n1, &b_d0, &b_d1, &b_eqi, &b_eqr].into_iter().enumerate() {
+        enc.set_buffer(i as u64, Some(b), 0);
+    }
+    enc.set_buffer(6, Some(&partials), 0);
+    enc.set_bytes(7, std::mem::size_of::<BatchParams>() as u64, (&params as *const BatchParams).cast());
+    enc.set_bytes(8, 16, lambda_words.as_ptr().cast());
+    enc.set_buffer(9, Some(&b_desc), 0);
+    enc.dispatch_thread_groups(
+        MTLSize::new(groups as u64, 1, 1),
+        MTLSize::new(THREADS, 1, 1),
+    );
+    enc.end_encoding();
+    Some((partials, groups, vec![Some(b_n0), Some(b_n1), Some(b_d0), Some(b_d1), Some(b_desc), Some(b_eqi), Some(b_eqr)]))
 }

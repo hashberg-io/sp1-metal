@@ -431,3 +431,121 @@ kernel void first_layer(device const uint* main [[buffer(0)]],
         denom_out[idx] = denom;
     }
 }
+
+// ---------------------------------------------------------------------------
+// The same round reduction, but over every small chip of a layer at once.
+//
+// A shard's layer holds a long tail of chips too small to be worth a dispatch
+// each: the arithmetic is a few hundred cells and the launch costs more than it
+// saves, which a sweep of the per-chip threshold confirmed -- lowering it moved
+// work to the GPU and bought no time at all. Batching is the way to reach them,
+// and it is available because a layer's chips all add into the same three sums,
+// so nothing has to be kept separate.
+//
+// Their four arrays are copied into one staging buffer beside each other, which
+// is the one place this backend copies on purpose: a chip below the threshold
+// is at most a few hundred kilobytes, and the alternative is a dispatch for
+// each.
+struct ChipDesc {
+    uint cells_before;
+    uint data_off;
+    uint eqi_off;
+    uint width;
+    uint n_pairs;
+    uint n_full;
+};
+
+struct BatchParams {
+    uint n_chips;
+    uint total_cells;
+};
+
+#define LOGUP_ROUND_BATCH(NAME, NUM_T, NUM_TO_EXT)                                        \
+kernel void NAME(device const NUM_T* n0 [[buffer(0)]],                                    \
+                 device const NUM_T* n1 [[buffer(1)]],                                    \
+                 device const uint4* d0 [[buffer(2)]],                                    \
+                 device const uint4* d1 [[buffer(3)]],                                    \
+                 device const uint4* eq_int [[buffer(4)]],                                \
+                 device const uint4* eq_row [[buffer(5)]],                                \
+                 device uint4* partials [[buffer(6)]],                                    \
+                 constant BatchParams& p [[buffer(7)]],                                   \
+                 constant uint4& lambda [[buffer(8)]],                                    \
+                 device const ChipDesc* desc [[buffer(9)]],                               \
+                 uint gid [[thread_position_in_grid]],                                    \
+                 uint gsize [[threads_per_grid]],                                         \
+                 uint tid [[thread_position_in_threadgroup]],                             \
+                 uint tgid [[threadgroup_position_in_grid]],                              \
+                 ushort sgid [[simdgroup_index_in_threadgroup]],                          \
+                 ushort slane [[thread_index_in_simdgroup]]) {                            \
+    threadgroup uint4 s0[TG_SIMDS];                                                       \
+    threadgroup uint4 sh[TG_SIMDS];                                                       \
+    threadgroup uint4 se[TG_SIMDS];                                                       \
+    if (tid < TG_SIMDS) { s0[tid] = uint4(0u); sh[tid] = uint4(0u); se[tid] = uint4(0u); } \
+    uint4 acc0 = uint4(0u);                                                               \
+    uint4 acch = uint4(0u);                                                               \
+    uint4 acce = uint4(0u);                                                               \
+    for (uint cell = gid; cell < p.total_cells; cell += gsize) {                          \
+        uint lo_c = 0u;                                                                   \
+        uint hi_c = p.n_chips - 1u;                                                       \
+        while (lo_c < hi_c) {                                                             \
+            uint mid = (lo_c + hi_c + 1u) >> 1;                                           \
+            if (desc[mid].cells_before <= cell) { lo_c = mid; } else { hi_c = mid - 1u; } \
+        }                                                                                 \
+        ChipDesc c = desc[lo_c];                                                          \
+        uint local = cell - c.cells_before;                                               \
+        uint q = local / c.width;                                                         \
+        uint j = local - q * c.width;                                                     \
+        uint lo = c.data_off + 2u * q * c.width + j;                                      \
+        uint4 e = eq_int[c.eqi_off + j];                                                  \
+        uint4 eq0 = eq_row[2u * q];                                                       \
+        uint4 eqs = ext_add(eq0, eq_row[2u * q + 1u]);                                    \
+        uint4 a0 = NUM_TO_EXT(n0[lo]);                                                    \
+        uint4 a1 = NUM_TO_EXT(n1[lo]);                                                    \
+        uint4 b0 = d0[lo];                                                                \
+        uint4 b1 = d1[lo];                                                                \
+        uint4 a0s, a1s, b0s, b1s;                                                         \
+        if (q < c.n_full) {                                                               \
+            uint hi = lo + c.width;                                                       \
+            a0s = ext_add(a0, NUM_TO_EXT(n0[hi]));                                        \
+            a1s = ext_add(a1, NUM_TO_EXT(n1[hi]));                                        \
+            b0s = ext_add(b0, d0[hi]);                                                    \
+            b1s = ext_add(b1, d1[hi]);                                                    \
+        } else {                                                                          \
+            a0s = a0; a1s = a1; b0s = b0; b1s = b1;                                       \
+            b0s.x = kb_add(b0s.x, KB_ONE);                                                \
+            b1s.x = kb_add(b1s.x, KB_ONE);                                                \
+        }                                                                                 \
+        uint4 w0 = ext_mul_kara(e, eq0);                                                  \
+        uint4 wh = ext_mul_kara(e, eqs);                                                  \
+        uint4 num0 = ext_add(ext_mul_kara(b0, a1), ext_mul_kara(b1, a0));                 \
+        uint4 den0 = ext_mul_kara(b0, b1);                                                \
+        uint4 numh = ext_add(ext_mul_kara(b0s, a1s), ext_mul_kara(b1s, a0s));             \
+        uint4 denh = ext_mul_kara(b0s, b1s);                                              \
+        acc0 = ext_add(acc0, ext_mul_kara(w0, ext_add(ext_mul_kara(lambda, num0), den0))); \
+        acch = ext_add(acch, ext_mul_kara(wh, ext_add(ext_mul_kara(lambda, numh), denh))); \
+        acce = ext_add(acce, wh);                                                         \
+    }                                                                                     \
+    acc0 = simd_ext_sum(acc0);                                                            \
+    acch = simd_ext_sum(acch);                                                            \
+    acce = simd_ext_sum(acce);                                                            \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                                      \
+    if (slane == 0u) { s0[sgid] = acc0; sh[sgid] = acch; se[sgid] = acce; }               \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                                      \
+    if (tid == 0u) {                                                                      \
+        uint4 t0 = s0[0], th = sh[0], te = se[0];                                         \
+        for (uint k = 1u; k < TG_SIMDS; k++) {                                            \
+            t0 = ext_add(t0, s0[k]);                                                      \
+            th = ext_add(th, sh[k]);                                                      \
+            te = ext_add(te, se[k]);                                                      \
+        }                                                                                 \
+        partials[3u * tgid] = t0;                                                         \
+        partials[3u * tgid + 1u] = th;                                                    \
+        partials[3u * tgid + 2u] = te;                                                    \
+    }                                                                                     \
+}
+
+inline uint4 batch_ext_id(uint4 x) { return x; }
+inline uint4 batch_base_lift(uint x) { return uint4(x, 0u, 0u, 0u); }
+
+LOGUP_ROUND_BATCH(logup_round_batch_ext, uint4, batch_ext_id)
+LOGUP_ROUND_BATCH(logup_round_batch_base, uint, batch_base_lift)
