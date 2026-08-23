@@ -129,9 +129,14 @@ pub fn drain() -> f64 {
 pub fn submit(cb: &CommandBufferRef) -> (f64, f64) {
     let start = Instant::now();
     cb.commit();
+    // Whether giving the device access to a buffer is charged to the host here
+    // or to the driver afterwards decides whether not waiting could ever help.
+    let committed = start.elapsed().as_secs_f64();
     let deferred = drain();
     cb.wait_until_completed();
     let wall = start.elapsed().as_secs_f64() - deferred;
+    crate::tally::record("queue: commit", 0, (committed * 1e9) as u64);
+    crate::tally::record("queue: wait", 0, ((wall - committed).max(0.0) * 1e9) as u64);
     let (t0, t1) = interval(cb);
     stats::record_dispatch(wall, t1 - t0);
     stats::record_interval(t0, t1);
