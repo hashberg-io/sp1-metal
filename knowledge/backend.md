@@ -403,3 +403,68 @@ The same three axes and the same paired method, every switch set together so the
 The law holds and has moved up again: **flat in shard size** across a sixteen-fold range, **climbing with total work**. The envelope was 1.07 – 1.26x before any of this, 1.55 – 2.58x after the PCS opening, and is now **1.82 – 3.42x**.
 
 The climb with work has steepened once more, and for the same reason as before: what is left on the critical path is increasingly fixed cost, so a small proof pays a few seconds of constraint-kernel compilation that a large one amortises away. The floor rose most — 1.07x to 1.82x at the smallest size — because copying was a per-byte cost that small proofs could not amortise either.
+
+## 17. Three ports, chosen by a sampling profile
+
+`cpu-plan.md` ranked what was left on the CPU by what it would take off one shard's sequential path, and named a measurement that would say to stop for each. All three were built.
+
+### The GKR circuit's first layer
+
+Every cell of that layer is one affine form over a trace row plus a few extension multiplies, with no dependence between cells: an interaction's denominator is `alpha + beta_0 * kind + sum_j beta_j * v_j`, each `v_j` a form over the row's preprocessed and main columns, and its numerator is one more such form, negated for a receive.
+
+The forms are fixed per chip, which invites the zerocheck's treatment — generate a kernel for each. This does the opposite: the forms go up as a **table one kernel walks**, so every chip in the proof shares one pipeline and nothing is compiled at run time. The tables are tens of interactions of tens of terms against a height in the millions, so building them per shard costs nothing measurable.
+
+**22.7 of 122 user-CPU-seconds**, and `generate GKR circuit` from about 1.5 to about 1.0 thread-seconds per shard.
+
+### The jagged polynomial's guts, and its assist sumcheck
+
+The profile taken after the first layer moved put **14.5 thread-seconds in `partial_jagged_little_polynomial_evaluation`** and 6.2 in the evaluation sumcheck beside it — so the plan had named the smaller half. Both moved.
+
+The guts are one extension multiply per cell of the stacked area, the product of a column's eq weight and a row's, or zero in the final padding range. A GPU thread starts at an arbitrary index, so it finds its column by binary search rather than by upstream's sequential walk; taking the last range beginning at or before the index skips columns of size zero, which is what the walk does by advancing past them. **11.2 user-CPU-seconds.**
+
+The assist sumcheck runs a four-state branching program per column, twice a round, over about twenty layers. The transition rule is the part worth being careful about, so the kernel does not restate it: the host builds a 4x16 table by calling upstream's own `transition_function` for every combination. The eq weights have to come out in the order `partial_lagrange` produces them, since upstream pairs them positionally with its enumeration of bit states. **7.7 user-CPU-seconds.**
+
+### A layer's small chips, in one dispatch
+
+A layer holds a long tail of chips too small to be worth a dispatch each — and §16's threshold sweep had already shown that giving them one anyway is a wash. Batching works because a layer's chips all add into the same three sums, so nothing has to be kept apart. Their arrays are copied side by side, which is the one place this backend copies on purpose, and a cell finds its chip by binary search over an offset table.
+
+That made the gate in front of the whole layer wrong. It asked whether the chips big enough for their own dispatch accounted for most of the layer, because everything else was summed on the CPU. With the tail batched every chip is covered, so the only question left is whether the layer is worth a round trip — and the answer holds much further down: the count of layers handed back to upstream falls from **661 to 126** at 64 entries, flattening below that.
+
+**Across three paired runs: 17.87 s to 16.91 s, user CPU 80.8 to 76.0, and system time 64.5 to 50.2** — the last because a layer that stays on the CPU allocates, and these no longer do.
+
+### Where it stands
+
+| | before these three | after |
+|---|---:|---:|
+| wall, paired | 18.5 s vs 62.9 s — 3.40x | **17.0 s vs 63.6 s — 3.74x** |
+| user CPU seconds | 122.1 | **76.0** |
+| system CPU seconds | 64.8 | **50.2** |
+| peak resident memory | 44.9 GB | 47.1 GB (CPU path: 59.9 GB) |
+| device busy, union of intervals | 22.9% | **27.5%** |
+| GKR layers handed back to upstream | 661 | 126 |
+
+Every kernel is checked against upstream's own code rather than against an invented case: `SP1_METAL_FIRST_LAYER=check`, `SP1_METAL_JAGGED_VALUES=check`, `SP1_METAL_JAGGED_ASSIST=check` and `SP1_METAL_BATCH=check` each run both paths on every chip, column or layer of a real proof and compare. All four pass at n = 2,000,000.
+
+### Acceptance
+
+| axis | point | CPU | Metal | |
+|---|---|---:|---:|---:|
+| shard size | 1 MiB | 64.33 s | 17.17 s | 3.746x |
+| | 2 MiB | 64.95 s | 17.01 s | **3.819x** |
+| | 4 MiB | 64.04 s | 17.19 s | 3.726x |
+| | 8 MiB | 64.48 s | 17.07 s | 3.777x |
+| | 16 MiB | 64.60 s | 17.32 s | 3.730x |
+| work | fib n=250k | 17.18 s | 7.85 s | 2.189x |
+| | fib n=500k | 24.75 s | 10.69 s | 2.315x |
+| | fib n=1M | 40.30 s | 15.01 s | 2.684x |
+| | fib n=2M | 64.54 s | 16.67 s | **3.872x** |
+| guest | mem n=400k | 37.21 s | 14.77 s | 2.519x |
+| | bits n=1M | 54.04 s | 15.62 s | 3.460x |
+
+Flat in shard size across a sixteen-fold range, climbing with total work, and the envelope moves from 1.82 – 3.42x to **2.19 – 3.87x**.
+
+### One bug worth recording
+
+Two of these kernels hung the machine on their first run, and both times for the same reason: a Metal buffer created with `newBufferWithBytesNoCopy` over a **local** that had gone out of scope before the dispatch was submitted. The buffer keeps no reference to what it borrows. The first case died with the function that built the tables; the second was a descriptor array staged for a command buffer encoded later in the caller. Reading freed pages gave the kernel a zero width, and a division by zero on the GPU does not fault — it hangs.
+
+The rule this leaves: **a no-copy buffer borrows, so the thing it borrows must outlive the wait, not the call that made it.** Where that cannot be arranged, stage through the arena, whose buffers live until the next layer.

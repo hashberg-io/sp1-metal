@@ -93,3 +93,25 @@ Startup and tail together are 9.3 s of the 18.5, and neither is CPU-throughput-b
 ## Open
 
 A dead zone appeared once at about t = 8 s, a second in which neither the CPU nor the GPU did anything at all. It did not reproduce, `vm_stat` showed no compressor or swap activity across the run, and run-time kernel compilation is only 44 ms once macOS's shader cache is warm. Worth watching for, not worth chasing yet.
+
+---
+
+## What happened
+
+All three were built, and the analysis is `backend.md` §17. Paired on the acceptance workload: **63.6 s against 17.0 s, 3.74x**, from 3.40x. User CPU 122.1 to 76.0 seconds, system 64.8 to 50.2. Device busy, as the union of the command buffers' intervals, 22.9% to **27.5%**. Acceptance envelope 1.82 – 3.42x to **2.19 – 3.87x**.
+
+| | target | outcome |
+|---|---|---|
+| 1. the GKR first layer | `generate GKR circuit` below ~1 s per shard | met, about 1.0 s; 22.7 user-CPU-seconds |
+| 2. the jagged evaluation phase | `prove evaluation claims` below ~2.5 s per shard | **not met**, 3.83 s; 18.9 user-CPU-seconds |
+| 3. GKR's small chips, batched | `prove GKR circuit` below ~3 s per shard | met via the layer gate; 0.96 s of wall |
+
+**Point 2's target was named against the wrong half of the phase.** Profiling after point 1 landed put 14.5 thread-seconds in `partial_jagged_little_polynomial_evaluation` and 6.2 in the evaluation sumcheck this plan named. Both are now on the GPU and the jagged CPU work is gone -- `partial_jagged` fell from 14.5 thread-seconds to 0.23 -- but `prove evaluation claims` stays at 3.83 s per shard, because what is left in it is the basefold Dense PCS proof, 11.4 thread-seconds, which this plan never named. That is the next thing in that phase, not more jagged work.
+
+**Point 3 needed a second change to pay.** Batching the small chips alone moved nothing, because the CPU time was not in the per-chip fallback but in whole layers the gate handed back to upstream. Loosening that gate -- which batching is exactly what makes safe -- is where the 0.96 s came from.
+
+**The estimate of what these were worth was about right, and for the reason given.** This plan predicted ~4.1x from taking 37% of the CPU work; the ports took 38% of it and delivered 3.74x. What they did not do is change the shape: the proof is still about four seconds of startup, a saturated middle, and a tail at a fraction of the machine.
+
+### What is left
+
+Of the roughly 126 CPU-seconds still spent, the blocks worth naming are the Reed-Solomon encode (~22 thread-seconds, ruled out above and still ruled out), folding MLEs (~20, mostly GKR's own and partly unavoidable), trace generation and guest execution (~20, not GPU-shaped), the basefold Dense PCS proof (~11), and rayon and allocator overhead (~10). Nothing left is both large and obviously portable, and the floor named above -- startup plus tail, neither CPU-throughput-bound -- has not moved.
