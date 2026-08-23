@@ -468,3 +468,69 @@ Flat in shard size across a sixteen-fold range, climbing with total work, and th
 Two of these kernels hung the machine on their first run, and both times for the same reason: a Metal buffer created with `newBufferWithBytesNoCopy` over a **local** that had gone out of scope before the dispatch was submitted. The buffer keeps no reference to what it borrows. The first case died with the function that built the tables; the second was a descriptor array staged for a command buffer encoded later in the caller. Reading freed pages gave the kernel a zero width, and a division by zero on the GPU does not fault — it hangs.
 
 The rule this leaves: **a no-copy buffer borrows, so the thing it borrows must outlive the wait, not the call that made it.** Where that cannot be arranged, stage through the arena, whose buffers live until the next layer.
+
+## 18. Six levers, worked end to end
+
+`next-levers.md` ranked six things to try after 3.74x, each with the measurement that would say to stop. All six were worked. Three moved the number, one had already been spent by another, and two were wrong about what they were — which is the part worth keeping.
+
+**3.74x to 4.49x**, and peak resident memory from 47.1 GB to 32.2.
+
+### The encode, and a seam in the other direction
+
+The list said this needed `slop-basefold-prover` vendored, because `CpuDftEncoder` holds a concrete `Arc<Radix2DitParallel>` and there is nothing above it to substitute. True, and pointing the wrong way. `Radix2DitParallel`'s only relevant property is that it implements `Dft`, and that impl is forty lines of `slop-dft`: four dependencies, one consumer in the whole prover. Replacing the body of one trait method reaches every encode a proof performs.
+
+**When a concrete type blocks substitution from above, look at what the concrete type is standing on.** A fork is cheapest at the narrowest point of the graph, not at the point where the problem was noticed.
+
+The kernel then refused every call, because the probe suite had been written against `LOG_BLOWUP = 1` and the core prover's `CORE_LOG_BLOWUP` is 2 — the codeword is four times the trace, not twice. That makes three separate mislabellings of the same probe: a ratio whose denominator was one butterfly stage, quoted twice, and now a shape the prover never asks for. The spread kernel takes the blowup as a parameter and runs its top stages together, reading the trace once and never touching the padding.
+
+`commit traces` fell from 3.99 to 1.47 seconds a shard, which was the stop condition, and **peak resident memory from 47.1 GB to 27.8** — upstream builds each codeword in a fresh allocation, and this writes into the tensor that will hold it through a buffer that borrows its pages.
+
+A trap that is silent in the worst way: a tensor from `Tensor::with_sizes_in` has the capacity but a **length of zero**, because upstream fills it by extending. A kernel writing into one must set that length itself, or the codeword is correct in memory and every reader sees an empty slice.
+
+### Folding, which was not folding
+
+Every fold funnels through `mle_fix_last_variable`, so the counter went there rather than at the five call sites that sampling could not separate. Folding cost **6.4 thread-seconds, not the 28.5 the profile had said**, and 4.5 of those were 98,610 calls averaging thirty-nine cells, running at 1176 ns/cell against 1.72 for the calls carrying the work.
+
+That is also why two sampling profiles blamed rayon and could not name a caller: **rayon really was where the time went.** Sumcheck halves its polynomial each round, so its last rounds are a handful of rows, there are a great many of them, and each was handed to a work-stealing pool. Small folds now run inline; large ones use `par_chunks` rather than `chunks(..).par_bridge()`, which pulls a sequential iterator through a mutex and cannot split.
+
+Folding is now 2.2 thread-seconds, of which 1.6 is a billion cells of real arithmetic. There is nothing left here worth a kernel.
+
+### The dense PCS proof, which was not FRI
+
+Almost none of `Dense PCS evaluation proof` was the FRI rounds — those commit through the Merkle kernels and `fold_even_odd` was already parallel. It was `FriCpuProver::batch`, which combines every MLE of a shard into one polynomial before FRI begins and did it on one thread. Every row of the accumulator is independent; it was sequential because it was written as a fold. **5.4 to 3.1 thread-seconds.**
+
+### The two that did not move
+
+**System time** had already been spent by the encode: 50 of 126 CPU-seconds became 17 of 62, because the item's own diagnosis — that it tracks the memory footprint — is what made it fall. What is left is 3.39 million page reclaims against 175 GB the kernels write, so two thirds of the writes land on pages already faulted once. Building the host against mimalloc tests the churn hypothesis directly and is **decisively worse**: 19.72 s against 13.33, 14.3 million reclaims against 3.39, 83 GB peak against 32.
+
+**Dispatch blocking** proposed chaining a layer's round reduction and its fold, "though the second only needs the first's data, not its result". It needs the result: the challenger absorbs the round message and samples `alpha` between them. And `fix_layer` already folds a whole layer in one dispatch, so the round trips are already two per round. The 5.3 thread-seconds of blocking are real but they are queueing behind three other proving threads, not host round trips.
+
+### What that leaves
+
+The list ruled out making the existing kernels faster, and gave its reason: *"The device is busy 27.5% of the proof; a kernel that is twice as fast buys nothing while the CPU is the constraint."*
+
+**That precondition has flipped.** The device is now busy 44% of the proof and 100% of several seconds of it, and the blocking under item 4 is the CPU waiting on it. Coverage first, then scheduling, then tuning was the right order — and tuning is now where the order arrives. The encode is the obvious first target: it makes about eighteen passes over a codeword four times the size of the trace, one butterfly stage per pass, where a radix-4 stage would halve that.
+
+### Acceptance
+
+| axis | point | CPU | Metal | | was |
+|---|---|---:|---:|---:|---:|
+| shard size | 1 MiB | 60.68 s | 13.46 s | 4.507x | 3.746x |
+| | 2 MiB | 62.23 s | 13.86 s | 4.489x | 3.819x |
+| | 4 MiB | 62.96 s | 13.58 s | **4.637x** | 3.726x |
+| | 8 MiB | 62.25 s | 13.66 s | 4.558x | 3.777x |
+| | 16 MiB | 62.25 s | 13.47 s | 4.621x | 3.730x |
+| work | fib n=250k | 15.41 s | 5.25 s | 2.933x | 2.189x |
+| | fib n=500k | 22.93 s | 7.38 s | 3.106x | 2.315x |
+| | fib n=1M | 37.22 s | 11.01 s | 3.382x | 2.684x |
+| | fib n=2M | 62.85 s | 13.86 s | 4.535x | 3.872x |
+| guest | mem n=400k | 34.64 s | 10.72 s | 3.231x | 2.519x |
+| | bits n=1M | 52.08 s | 12.47 s | 4.175x | 3.460x |
+
+Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.19 – 3.87x to **2.93 – 4.64x**. The CPU arm is a second or two faster than it was, because two of the six changes are CPU-side and the same binary runs both arms — the ratio is against the better CPU, not the one that was there before.
+
+### The floor, measured
+
+Proving a guest that runs a thousand steps takes **3.09 seconds**, of which `setup` is 1.0 thread-seconds and **zerocheck is 2.2 on a shard with nothing in it** — SP1 pads every shard to a fixed shape, so the smallest possible proof still runs a full-shape one. The floor is not startup plus tail; it is one padded shard.
+
+Of the 13.68 seconds at n = 2,000,000, about 3.1 are that floor. The part that scales with work is 10.6 against roughly 58 on the CPU, so the backend is worth **about 5.5x on what it can touch**, and the number the project reports is that diluted by a constant it does not control.

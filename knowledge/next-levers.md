@@ -152,6 +152,27 @@ It was the step before them. `FriCpuProver::batch` combines every MLE of a shard
 
 **What it was worth: 5.4 → 3.1 thread-seconds and 14.62 → 13.68 s.** No kernel, and the item's guess that it needed the same vendoring as item 1 was right about the need and wrong about the crate.
 
-## 6. The tail and startup — still the floor
+## 6. The tail and startup — still the floor, and now measured rather than estimated
 
 Not reachable: the shard concurrency cap is `ProverSemaphore::new(4)` at `sp1-prover/src/worker/builder.rs:332`, a literal with no environment variable behind it, in a crate that would drag the whole recursion stack in with it. And for this workload it is not the binding constraint anyway — four shards, four permits.
+
+But the floor itself can be measured directly, which the item only estimated. Proving a guest that runs a thousand steps — one shard, and nothing in it — takes **3.09 seconds**:
+
+| | n = 1,000 | n = 250,000 | n = 2,000,000 |
+|---|---:|---:|---:|
+| wall | **3.09 s** | 5.26 s | 13.68 s |
+| zerocheck | 2.2 | 2.5 | 8.5 |
+| setup | 1.0 | 0.9 | 1.0 |
+| pcs | 1.1 | 1.7 | 8.5 |
+
+The startup is the smaller half of it. `setup` is a second and barely moves, but **zerocheck costs 2.2 thread-seconds on a shard with nothing in it** — because SP1 pads every shard to a fixed shape, so the smallest possible proof still runs a full-shape shard. The floor is not "startup plus tail", it is **one padded shard**, and it is 3.09 seconds.
+
+That sharpens what everything above is bounded by. Of the 13.68 seconds at n = 2,000,000, about 3.1 are fixed; the part that scales with work is 10.6 against roughly 58 on the CPU, or **5.5x on the part a backend can touch**. The ratio the whole project reports is that number diluted by a constant, and the dilution is worth more than any remaining item on this list.
+
+## The list this leaves
+
+The next list is short, and one entry on it comes from this one's exclusions.
+
+`next-levers.md` ruled out making the existing kernels faster, and gave a reason that has since stopped being true: *"The device is busy 27.5% of the proof; a kernel that is twice as fast buys nothing while the CPU is the constraint."* **The device is now busy 44% of the proof and 100% of several seconds of it**, and item 4's blocking is the CPU waiting on exactly that. Coverage, then scheduling, then tuning was the right order; tuning is where the order now arrives.
+
+The encode is the first target and the clearest: it makes about eighteen passes over a codeword four times the size of the trace, one butterfly stage per pass, where a radix-4 stage would halve the passes and the memory traffic with them.
