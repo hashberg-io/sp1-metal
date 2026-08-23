@@ -26,3 +26,23 @@ There is something below it. `Radix2DitParallel`'s only relevant property is tha
 Replacing one trait method here reaches every encode a proof performs, which is why this crate is vendored and `slop-basefold-prover` — six times the size, and a fork of the proving logic rather than of a transform — is not.
 
 **Changes from 6.4.0** are listed in [CHANGES.md](slop-dft/CHANGES.md).
+
+## `slop-multilinear`
+
+Vendored from `slop-multilinear` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.
+Upstream: https://github.com/succinctlabs/sp1
+
+**Why.** Two sampling profiles failed to say which of the prover's call sites the largest remaining block of CPU time belonged to, because rayon owns the stack for most of it.
+Every fold in the prover funnels through one function here, so a counter inside it attributes all of them at once — and what it found was not arithmetic but the cost of handing tiny folds to a work-stealing pool, which is fixed in the same file.
+
+**Changes from 6.4.0** are listed in [CHANGES.md](slop-multilinear/CHANGES.md).
+
+## `slop-basefold-prover`
+
+Vendored from `slop-basefold-prover` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.
+Upstream: https://github.com/succinctlabs/sp1
+
+**Why.** The dense evaluation proof's largest single piece is the random linear combination that batches a shard's MLEs before FRI begins, and it ran on one thread.
+There is no seam above it: `FriCpuProver::batch` is a method on a concrete type called from a concrete prover.
+
+**Changes from 6.4.0** are listed in [CHANGES.md](slop-basefold-prover/CHANGES.md).

@@ -28,4 +28,5 @@ lto = "thin"
 sp1-hypercube = { path = "../vendor/sp1-hypercube" }
 slop-jagged = { path = "../vendor/slop-jagged" }
 slop-multilinear = { path = "../vendor/slop-multilinear" }
+slop-basefold-prover = { path = "../vendor/slop-basefold-prover" }
 slop-dft = { path = "../vendor/slop-dft" }

@@ -3471,12 +3471,11 @@ dependencies = [
 [[package]]
 name = "slop-basefold-prover"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9322a50315808f06a40271123e6e587750fa2e17715a110b067575afd22ccbb"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "rand 0.8.7",
+ "rayon",
  "serde",
  "slop-algebra",
  "slop-alloc",
