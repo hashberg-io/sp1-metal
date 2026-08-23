@@ -545,6 +545,43 @@ pub static SITES: [Mutex<(u64, f64, f64)>; 6] = [
     Mutex::new((0, 0.0, 0.0)),
 ];
 
+/// Circuit generation, split by whether a chip's work reached the device.
+///
+/// Both loops that build the circuit walk a layer one chip at a time, and both
+/// decline the chips too small to be worth a round trip -- which is most of
+/// them. What that costs is not the dispatch count, which is visible, but the
+/// CPU work behind the declines, which is not.
+pub static GEN: [Mutex<(u64, u64, f64)>; 4] = [
+    Mutex::new((0, 0, 0.0)),
+    Mutex::new((0, 0, 0.0)),
+    Mutex::new((0, 0, 0.0)),
+    Mutex::new((0, 0, 0.0)),
+];
+
+/// `[first layer on the GPU, first layer on the CPU, transition on the GPU,
+/// transition on the CPU]`.
+pub const GEN_NAMES: [&str; 4] =
+    ["first layer gpu", "first layer cpu", "transition gpu", "transition cpu"];
+
+/// Records one chip's share of building the circuit.
+pub fn record_gen(slot: usize, cells: usize, nanos: u64) {
+    let mut m = GEN[slot].lock().expect("poisoned");
+    m.0 += 1;
+    m.1 += cells as u64;
+    m.2 += nanos as f64 / 1e9;
+}
+
+/// What building the circuit cost, by chip and by where it ran.
+#[must_use]
+pub fn gen_report() -> String {
+    let mut out = String::from("\ncircuit build         chips          cells   thread_s\n");
+    for (name, m) in GEN_NAMES.iter().zip(GEN.iter()) {
+        let (n, cells, secs) = *m.lock().expect("poisoned");
+        out.push_str(&format!("{name:<18} {n:>10} {cells:>14} {secs:>10.3}\n"));
+    }
+    out
+}
+
 /// The sites, in the order they appear in this file.
 pub const SITE_NAMES: [&str; 6] =
     ["small-chip batch", "layer fold", "single fold", "layer transition", "first layer", "other"];

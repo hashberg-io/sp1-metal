@@ -39,6 +39,14 @@ where
         max(num_non_zero_elements_out / num_cpus::get() * num_polynomials, num_polynomials);
     let mle_chunk_size = 2 * result_chunk_size;
 
+    // At the two ends of the interpolation the fold is a choice rather than a
+    // combination: `alpha * (y - x) + x` is `x` at zero and `y` at one. Both
+    // come up constantly -- splitting a layer into its even and odd halves is
+    // exactly a fold at zero and a fold at one -- and taking them as written
+    // costs a multiply and a subtraction per cell to compute a copy.
+    let take_even = alpha.is_zero();
+    let take_odd = alpha.is_one();
+
     // One chunk of the fold, written into its own slice of the result.
     let fold_chunk = |mle_chunk: &[F], result_chunk: &mut [EF]| {
         let num_result_rows = result_chunk.len() / num_polynomials;
@@ -46,10 +54,18 @@ where
         (0..num_result_rows).for_each(|i| {
             (0..num_polynomials).for_each(|j| {
                 let x = mle_chunk[(2 * i) * num_polynomials + j];
+                if take_even {
+                    result_chunk[i * num_polynomials + j] = x.into();
+                    return;
+                }
                 let y = mle_chunk
                     .get((2 * i + 1) * num_polynomials + j)
                     .copied()
                     .unwrap_or_else(|| padding_values[j]);
+                if take_odd {
+                    result_chunk[i * num_polynomials + j] = y.into();
+                    return;
+                }
                 // return alpha * y + (EF::one() - alpha) * x, but in a more efficient
                 // way that minimizes extension field
                 // multiplications.

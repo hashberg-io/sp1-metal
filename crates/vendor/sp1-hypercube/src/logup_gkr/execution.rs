@@ -10,6 +10,25 @@ use crate::{prover::Traces, Interaction};
 
 use super::{LogUpGkrCpuLayer, LogUpGkrOutput, LogupGkrCpuTraceGenerator};
 
+/// A vector whose elements are about to be written and are not read first.
+///
+/// The circuit's first layer allocates one of these per chip for the numerators
+/// and one for the denominators, and every cell of both is written before
+/// anything reads them -- by the kernel when the chip goes to the GPU, and by a
+/// `par_chunks_exact_mut` over the whole array when it does not. Filling them
+/// first is a wasted pass over the largest arrays in the phase, and the
+/// denominators are filled with ones rather than zeros, so it is a real loop
+/// rather than a memset.
+#[allow(clippy::uninit_vec)]
+fn uninit_vec<T>(len: usize) -> Vec<T> {
+    let mut v = Vec::with_capacity(len);
+    // SAFETY: `T` is a field element -- a plain array of words with no invalid
+    // bit patterns and no drop glue -- and every element is written before it
+    // is read. See the note above for why that holds on both paths.
+    unsafe { v.set_len(len) };
+    v
+}
+
 pub(crate) fn generate_interaction_vals<F: Field, EF: ExtensionField<F>>(
     interaction: &Interaction<F>,
     preprocessed_row: &[F],
@@ -110,6 +129,7 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::unused_self)]
     #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::uninit_vec)]
     pub(crate) fn generate_first_layer(
         &self,
         interactions: &BTreeMap<String, Vec<(&Interaction<F>, bool)>>,
@@ -128,14 +148,21 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
         let betas = Mle::partial_lagrange(&beta_seed).guts().as_slice().to_vec();
         let mut total_interactions = 0;
         for (name, interactions) in interactions.iter() {
+            #[cfg(feature = "metal")]
+            let chip_started = std::time::Instant::now();
             let main_trace = main_traces.get(name.as_str()).unwrap().clone();
             let height = main_trace.num_real_entries();
 
             let preprocessed_trace = preprocessed_traces.get(name.as_str()).cloned();
             let num_interactions = interactions.len();
             total_interactions += num_interactions;
-            let mut numer_evals = vec![F::zero(); height * num_interactions];
-            let mut denom_evals = vec![EF::one(); height * num_interactions];
+            // Uninitialised, because both paths below write every cell: the
+            // kernel fills the whole array and the CPU loop covers it with
+            // `par_chunks_exact_mut`. Filling first is a wasted pass over the
+            // largest thing this function touches, and the denominators are the
+            // expensive half -- ones rather than zeros, so not a memset.
+            let mut numer_evals = uninit_vec::<F>(height * num_interactions);
+            let mut denom_evals = uninit_vec::<EF>(height * num_interactions);
 
             // println!("preprocessed_trace: {:?}", preprocessed_trace.num_variables());
             // Every cell here is one affine form over a row and a handful of
@@ -286,6 +313,12 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
             denominator_0.push(denom_0);
             numerator_1.push(numer_1);
             denominator_1.push(denom_1);
+            #[cfg(feature = "metal")]
+            crate::metal::record_gen(
+                usize::from(!on_gpu),
+                height * num_interactions,
+                chip_started.elapsed().as_nanos() as u64,
+            );
         }
         let num_interaction_variables = total_interactions.next_power_of_two().ilog2();
 
@@ -321,12 +354,16 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
             layer.numerator_1.clone(),
             layer.denominator_1.clone()
         ) {
+            #[cfg(feature = "metal")]
+            let chip_started = std::time::Instant::now();
             let num_interactions = n0_padded.num_polynomials();
             let row_count = n0_padded.num_real_entries().div_ceil(2);
             let mut next_n0 = vec![EF::zero(); row_count * num_interactions];
             let mut next_d0 = vec![EF::one(); row_count * num_interactions];
             let mut next_n1 = vec![EF::zero(); row_count * num_interactions];
             let mut next_d1 = vec![EF::one(); row_count * num_interactions];
+            #[cfg(feature = "metal")]
+            let mut went_to_gpu = false;
             if let Some(n0_mle) = n0_padded.inner().as_ref() {
                 let d0_mle = d0_padded.inner().as_ref().unwrap();
                 let n1_mle = n1_padded.inner().as_ref().unwrap();
@@ -353,6 +390,10 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
                 .is_some();
                 #[cfg(not(feature = "metal"))]
                 let on_gpu = false;
+                #[cfg(feature = "metal")]
+                {
+                    went_to_gpu = on_gpu;
+                }
                 if !on_gpu {
                 n0_mle
                     .guts()
@@ -441,6 +482,12 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
             denominator_0.push(next_d0_padded);
             numerator_1.push(next_n1_padded);
             denominator_1.push(next_d1_padded);
+            #[cfg(feature = "metal")]
+            crate::metal::record_gen(
+                2 + usize::from(!went_to_gpu),
+                row_count * num_interactions,
+                chip_started.elapsed().as_nanos() as u64,
+            );
         }
         LogUpGkrCpuLayer {
             numerator_0,
