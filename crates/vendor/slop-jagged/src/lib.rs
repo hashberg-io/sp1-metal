@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_types)]
 #[cfg(feature = "metal")]
-mod metal;
+pub mod metal;
 
 mod basefold;
 mod hadamard;

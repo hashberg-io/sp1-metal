@@ -31,6 +31,7 @@ slop-symmetric = { workspace = true }
 itertools = { workspace = true }
 tracing = { workspace = true }
 rayon = { workspace = true }
+transpose = "0.2.3"
 serde = { workspace = true, features = ["rc"] }
 thiserror = { workspace = true }
 futures = { workspace = true }

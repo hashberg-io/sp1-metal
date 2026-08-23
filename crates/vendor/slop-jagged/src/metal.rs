@@ -20,6 +20,56 @@ use metal::{Buffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptio
 use sp1_metal_probes::stats::{self, Input, Output};
 
 const THREADS: u64 = 256;
+
+/// One counted step of building the jagged sumcheck polynomial.
+#[derive(Default)]
+pub struct Step {
+    calls: std::sync::atomic::AtomicU64,
+    cells: std::sync::atomic::AtomicU64,
+    nanos: std::sync::atomic::AtomicU64,
+}
+
+impl Step {
+    const fn new() -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicU64::new(0),
+            cells: std::sync::atomic::AtomicU64::new(0),
+            nanos: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn record(&self, cells: usize, nanos: u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.calls.fetch_add(1, Relaxed);
+        self.cells.fetch_add(cells as u64, Relaxed);
+        self.nanos.fetch_add(nanos, Relaxed);
+    }
+}
+
+/// `[the jagged multilinear itself, restacking the base MLEs against it]`.
+///
+/// `create jagged sumcheck poly` is 2.7 thread-seconds and half of it is on the
+/// GPU already, so the question is which of its two halves the rest is.
+pub static POLY: [Step; 2] = [Step::new(), Step::new()];
+
+/// The names of the steps.
+pub const POLY_NAMES: [&str; 2] = ["jagged multilinear", "restack"];
+
+/// What building the jagged sumcheck polynomial cost.
+#[must_use]
+pub fn poly_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut out = String::from("\njagged poly           calls          cells   thread_s\n");
+    for (name, st) in POLY_NAMES.iter().zip(POLY.iter()) {
+        out.push_str(&format!(
+            "{name:<18} {:>10} {:>14} {:>10.3}\n",
+            st.calls.load(Relaxed),
+            st.cells.load(Relaxed),
+            st.nanos.load(Relaxed) as f64 / 1e9
+        ));
+    }
+    out
+}
 /// Below this a dispatch costs more than the arithmetic saves.
 const MIN_PAIRS: usize = 1 << 12;
 

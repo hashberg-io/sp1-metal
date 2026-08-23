@@ -24,6 +24,7 @@ sp1-hypercube = "=6.4.0"
 # below the basefold prover, which is where this host's traces are committed.
 slop-dft = "=6.4.0"
 slop-multilinear = "=6.4.0"
+slop-jagged = "=6.4.0"
 
 anyhow = "1"
 bincode = "1.3.3"

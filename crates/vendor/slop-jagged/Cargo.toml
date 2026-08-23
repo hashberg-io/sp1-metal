@@ -46,6 +46,9 @@ optional = true
 version = "0.29"
 optional = true
 
+[dependencies.transpose]
+version = "0.2.3"
+
 [dependencies.derive-where]
 version = "1.5.0"
 features = ["serde"]

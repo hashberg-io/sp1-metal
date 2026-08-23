@@ -3622,6 +3622,7 @@ dependencies = [
  "sp1-metal-probes",
  "thiserror 1.0.69",
  "tracing",
+ "transpose",
 ]
 
 [[package]]
@@ -4192,6 +4193,7 @@ dependencies = [
  "bincode",
  "mimalloc",
  "slop-dft",
+ "slop-jagged",
  "slop-multilinear",
  "sp1-hypercube",
  "sp1-sdk",
