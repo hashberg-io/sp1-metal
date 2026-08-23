@@ -325,3 +325,77 @@ Of the 11.16 seconds at n = 2,000,000, about 1.9 are floor and 9.3 scale, agains
 | | bits n=1M | 49.94 s | 9.75 s | 5.122x | 4.175x |
 
 Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.93 - 4.64x to **3.75 - 5.45x**. The floor rose most again, 2.93x to 3.77x, which is the same thing the floor measurement says: what looked like an irreducible per-shard cost was work nobody had looked at.
+
+---
+
+# The third list, from 5.38x
+
+Written 2026-08-23 against **10.95 s paired with 60.03 s**.
+
+## The shape of the problem has changed
+
+| | |
+|---|---:|
+| CPU used | 34.3 user + 19.1 system = **4.9 of 16 cores** |
+| device busy, union of intervals | **5.96 s, 54.4% of the proof** |
+| time spent waiting on the device | **8.4 thread-seconds** |
+| total accounted span time | 28.8 (43.8 at 3.74x) |
+
+**Neither resource is saturated.** The proof is dependency-bound: four shards, each a chain of sumchecks whose rounds cannot overlap because a round's challenge comes from the previous round's message. That makes latency the target rather than throughput, which is the opposite of where this work started.
+
+It also sets the ceiling. The device union is 5.96 seconds, so **even with no CPU cost at all and perfect packing, the proof cannot go below about six seconds — roughly 10x** — until the kernels themselves get cheaper.
+
+## 1. `prove evaluation claims` and `Dense PCS evaluation proof` — 5.3 thread-seconds, never counted
+
+The largest block nobody has instrumented: 2.4 and 2.9 thread-seconds.
+
+Every previous time a block on one of these lists was counted rather than guessed at, the premise turned out to be wrong — four for four, one run each. **The first action is counters, not a port.**
+
+**Estimated: unknown, and the cheapest thing on this list to find out.**
+
+## 2. Stop waiting for what only the GPU reads — 8.4 thread-seconds
+
+Two seconds a shard spent blocked, on a machine that is half idle.
+
+A `MTLCommandQueue` runs the buffers committed to it in commit order, so a fold whose output is read only by the *next* dispatch needs no host wait at all: the ordering is already guaranteed and the wait buys nothing.
+
+This is the sound form of the lever that was twice proposed and twice wrong. Not a round and its own fold — the challenger stands between those — but **a fold and the next round's reduction**, which are both determined once alpha is known.
+
+**Estimated: 0.5-1.0 s.** *Stop if* blocking does not fall below about 5 thread-seconds.
+
+The risk is worth naming: any host read of memory the GPU has not finished writing is silent corruption rather than a crash. It needs an explicit drain at every CPU fallback and every staged copy, and the parity modes are what would catch a missed one.
+
+## 3. `Global`'s zerocheck as a table-driven kernel — 15% of zerocheck's cells
+
+Zerocheck's round reduction is 4.38 thread-seconds, still the largest single block, and `Global` carries 4.04 of its 27.6 G cells on the CPU because transpiling it costs 1,814 seconds of compilation.
+
+The GKR first layer solved exactly this shape: the constraints go up as **a table one kernel walks** rather than as a DAG unrolled into source, so every chip shares one pipeline and nothing is compiled at run time. This is the largest port left.
+
+**Estimated: 0.3-0.6 s.**
+
+## 4. Tuning where the device union actually goes — 5.96 s
+
+`commit` is 3.07 GPU-seconds, `zerocheck` 2.85, `gkr` 2.04. The encode has had its pass count halved already; the Merkle tree is Poseidon2-bound; **the zerocheck kernel is generated per chip and has never been looked at**. This also drains the queue that item 2 is waiting in.
+
+**Estimated: 0.3-0.6 s**, and it is the only item here that moves the ~10x ceiling.
+
+## 5. The two worst dispatch ratios
+
+`layer transition` blocks 4.08 ms per call for 0.56 ms of work; `first layer` blocks **21 ms** per call. Both are loops the driver walks one chip at a time, which is the shape the small-chip batch already solves for the GKR round.
+
+**Estimated: 0.2-0.4 s**, much of it subsumed by item 2.
+
+## 6. The floor — 1.86 s, now 17% of the proof
+
+`setup` is a thread-second of it, including `build compress program` — recursion setup running during a *core* proof. Not reachable without vendoring `sp1-prover`. It caps the absolute ratio at about 32x.
+
+## Not on the list, and why
+
+- **Tracegen and execution**, 1.9 thread-seconds. Not GPU-shaped.
+- **Allocation churn.** Answered by measurement: mimalloc was 45% worse. System time is 19.1 seconds but the CPU is not the constraint.
+- **More shard concurrency.** The `ProverSemaphore::new(4)` cap is not binding with four shards; the constraint is the chain inside a shard.
+- **Raising the layer gate or the zerocheck node bound.** Both measured worse, one catastrophically.
+
+## The arithmetic
+
+Items 1 to 5 are worth perhaps 1.5-2.5 s between them, landing at **6.4x-7.0x**. Past that the device union is the wall: nothing gets below about six seconds until the kernels get cheaper, which makes item 4 the one that decides whether there is a fourth list.
