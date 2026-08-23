@@ -88,6 +88,60 @@ kernel void dif_stage(device uint* a [[buffer(0)]],
     a[i1] = kb_mul(kb_sub(u, v), tw[j << (p.log_n - 1u - p.log_m)]);
 }
 
+// Two decimation-in-frequency stages in one pass over the codeword.
+//
+// The transform is memory-bound -- one multiply per element per stage, against
+// a read and a write of the whole codeword -- so what it costs is passes, and
+// a radix-4 butterfly does two stages for one pass at the same multiply count.
+//
+// Four points `q` apart, where `q` is half the upper stage's half-block. Write
+// `W` for the n-th root and `t` for the upper stage's twiddle stride; then
+// running stage `2q` and then stage `q` over them leaves
+//
+//     y0 = (x0+x2) + (x1+x3)
+//     y1 = [(x0+x2) - (x1+x3)] * W^(2jt)
+//     y2 = [(x0-x2) + i(x1-x3)] * W^(jt)
+//     y3 = [(x0-x2) - i(x1-x3)] * W^(3jt)
+//
+// where `i` is `W^(n/4)`, which is where the second stage's twiddle on the odd
+// half collapses to: that twiddle is `W^((j+q)t)` and `q*t` is exactly `n/4`
+// whatever the stage. So the pair of stages costs four multiplies per four
+// points, the same as the two radix-2 stages it replaces, for one pass instead
+// of two.
+//
+// `i` is `tw[n/4]`, so it is read from the table rather than passed in.
+kernel void dif_stage4(device uint* a [[buffer(0)]],
+                       device const uint* tw [[buffer(1)]],
+                       constant DifParams& p [[buffer(2)]],
+                       uint2 gid [[thread_position_in_grid]]) {
+    uint c = gid.x;
+    uint quad = gid.y;
+    uint q = 1u << (p.log_m - 1u);
+    uint j = quad & (q - 1u);
+    uint base = (quad >> (p.log_m - 1u)) << (p.log_m + 1u);
+    uint step = q * p.cols;
+    uint i0 = (base + j) * p.cols + c;
+    uint i1 = i0 + step;
+    uint i2 = i1 + step;
+    uint i3 = i2 + step;
+    uint x0 = a[i0];
+    uint x1 = a[i1];
+    uint x2 = a[i2];
+    uint x3 = a[i3];
+    // `j * t` is below n/4 and twice it is below n/2, so those two index the
+    // table directly; only `3jt` can reach past its end.
+    uint jt = j << (p.log_n - 1u - p.log_m);
+    uint root4 = tw[1u << (p.log_n - 2u)];
+    uint a02 = kb_add(x0, x2);
+    uint s02 = kb_sub(x0, x2);
+    uint a13 = kb_add(x1, x3);
+    uint is13 = kb_mul(kb_sub(x1, x3), root4);
+    a[i0] = kb_add(a02, a13);
+    a[i1] = kb_mul(kb_sub(a02, a13), tw[2u * jt]);
+    a[i2] = kb_mul(kb_add(s02, is13), tw[jt]);
+    a[i3] = kb_mul(kb_sub(s02, is13), dif_tw(tw, 3u * jt, p.log_n));
+}
+
 // The last six stages, run while a 64-row by 64-column tile stays in
 // threadgroup memory. Those stages pair rows less than 64 apart, so a
 // contiguous 64-row window is self-contained and the six stages cost one

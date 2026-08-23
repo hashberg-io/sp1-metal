@@ -73,6 +73,7 @@ struct Context {
     device: Device,
     spread: ComputePipelineState,
     stage: ComputePipelineState,
+    stage4: ComputePipelineState,
     tail: ComputePipelineState,
     /// One twiddle table per codeword height, built once and kept.
     ///
@@ -114,6 +115,7 @@ fn context() -> Option<&'static Context> {
         Some(Context {
             spread: pso("dif_spread")?,
             stage: pso("dif_stage")?,
+            stage4: pso("dif_stage4")?,
             tail: pso("dif_tail")?,
             twiddles: Mutex::new(HashMap::new()),
             device,
@@ -222,15 +224,28 @@ fn encode_dif(
     set_params(enc, 3, &params);
     dispatch_2d(enc, cols as u64, rows as u64);
     // The spread did the top `log_blowup` stages; the tail, when it applies,
-    // will do the bottom six while a tile is resident.
+    // will do the bottom six while a tile is resident. Everything between them
+    // goes two stages to a pass, since the transform is memory-bound and a
+    // radix-4 butterfly costs the same multiplies as the two it replaces.
     let lowest = if tail_applies(n, cols, log_blowup) { TILE_STAGES } else { 0 };
-    for s in (lowest..log_n - log_blowup).rev() {
+    let mut s = log_n - log_blowup;
+    if (s - lowest) % 2 == 1 {
+        s -= 1;
         params.log_m = s as u32;
         enc.set_compute_pipeline_state(&ctx.stage);
         enc.set_buffer(0, Some(dst), 0);
         enc.set_buffer(1, Some(tw), 0);
         set_params(enc, 2, &params);
         dispatch_2d(enc, cols as u64, (n / 2) as u64);
+    }
+    while s > lowest {
+        params.log_m = (s - 1) as u32;
+        enc.set_compute_pipeline_state(&ctx.stage4);
+        enc.set_buffer(0, Some(dst), 0);
+        enc.set_buffer(1, Some(tw), 0);
+        set_params(enc, 2, &params);
+        dispatch_2d(enc, cols as u64, (n / 4) as u64);
+        s -= 2;
     }
     if lowest > 0 {
         params.log_m = 0;

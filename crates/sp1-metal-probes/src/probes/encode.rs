@@ -74,7 +74,7 @@ fn tail_applies(n: usize, cols: usize, log_blowup: usize) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn encode_dif(
     enc: &metal::ComputeCommandEncoderRef,
-    psos: &(metal::ComputePipelineState, metal::ComputePipelineState, metal::ComputePipelineState),
+    psos: &DifPsos,
     src: &metal::Buffer,
     dst: &metal::Buffer,
     tw: &metal::Buffer,
@@ -97,7 +97,9 @@ fn encode_dif(
     set_bytes(enc, 3, &params);
     dispatch_2d(enc, cols as u64, rows as u64);
     let lowest = if tail_applies(n, cols, log_blowup) { TILE_STAGES } else { 0 };
-    for s in (lowest..log_n - log_blowup).rev() {
+    let mut s = log_n - log_blowup;
+    if (s - lowest) % 2 == 1 {
+        s -= 1;
         params.log_m = s as u32;
         enc.set_compute_pipeline_state(&psos.1);
         enc.set_buffer(0, Some(dst), 0);
@@ -105,9 +107,18 @@ fn encode_dif(
         set_bytes(enc, 2, &params);
         dispatch_2d(enc, cols as u64, (n / 2) as u64);
     }
+    while s > lowest {
+        params.log_m = (s - 1) as u32;
+        enc.set_compute_pipeline_state(&psos.2);
+        enc.set_buffer(0, Some(dst), 0);
+        enc.set_buffer(1, Some(tw), 0);
+        set_bytes(enc, 2, &params);
+        dispatch_2d(enc, cols as u64, (n / 4) as u64);
+        s -= 2;
+    }
     if lowest > 0 {
         params.log_m = 0;
-        enc.set_compute_pipeline_state(&psos.2);
+        enc.set_compute_pipeline_state(&psos.3);
         enc.set_buffer(0, Some(dst), 0);
         enc.set_buffer(1, Some(tw), 0);
         set_bytes(enc, 2, &params);
@@ -115,10 +126,20 @@ fn encode_dif(
     }
 }
 
-fn dif_psos(
-    gpu: &Gpu,
-) -> Result<(metal::ComputePipelineState, metal::ComputePipelineState, metal::ComputePipelineState), String> {
-    Ok((gpu.pipeline("dif_spread")?, gpu.pipeline("dif_stage")?, gpu.pipeline("dif_tail")?))
+type DifPsos = (
+    metal::ComputePipelineState,
+    metal::ComputePipelineState,
+    metal::ComputePipelineState,
+    metal::ComputePipelineState,
+);
+
+fn dif_psos(gpu: &Gpu) -> Result<DifPsos, String> {
+    Ok((
+        gpu.pipeline("dif_spread")?,
+        gpu.pipeline("dif_stage")?,
+        gpu.pipeline("dif_stage4")?,
+        gpu.pipeline("dif_tail")?,
+    ))
 }
 
 /// Runs the Metal encode once and returns the codeword in row-major order.
@@ -244,9 +265,11 @@ pub fn bench(gpu: &Gpu, rows: usize, cols: usize, reps: usize) -> Result<Value, 
     // six stages for one pass.
     let log_n = n.trailing_zeros() as usize;
     let tail = tail_applies(n, cols, LOG_BLOWUP);
-    let global_stages =
-        if tail { log_n - LOG_BLOWUP - TILE_STAGES } else { log_n - LOG_BLOWUP };
-    let passes = 1 + global_stages + usize::from(tail);
+    let lowest = if tail { TILE_STAGES } else { 0 };
+    let global_stages = log_n - LOG_BLOWUP - lowest;
+    // Two stages to a pass, plus one more if there is an odd stage left over.
+    let global_passes = global_stages / 2 + global_stages % 2;
+    let passes = 1 + global_passes + usize::from(tail);
     // A radix-2 DFT of N points is (N/2)·log2(N) butterflies, one multiply each.
     let n = rows << LOG_BLOWUP;
     let butterflies = (n / 2) as f64 * (n.trailing_zeros() as f64) * cols as f64;
@@ -272,6 +295,7 @@ pub fn bench(gpu: &Gpu, rows: usize, cols: usize, reps: usize) -> Result<Value, 
             "nanoseconds_per_input_cell": g.best / cells as f64 * 1e9,
             "passes_over_codeword": passes,
             "stages": log_n,
+            "global_passes": global_passes,
             "tiled_tail": tail,
             "effective_gbytes_per_s": (passes * n * cols * 2 * 4) as f64 / g.best / 1e9,
         },
@@ -367,14 +391,28 @@ pub fn check(gpu: &Gpu) -> Result<(), String> {
         return Err("packed CPU butterfly stage disagrees with the scalar one".to_string());
     }
 
-    // The whole encode, against slop's own. Shapes small enough that every stage
-    // is a global pass and large enough to exercise the tiled tail, at both the
-    // blowup this probe used to assume and the one the core prover actually
-    // configures. The kernels ship in the vendored `slop-dft` and this is the
-    // check that says they agree with what they replace.
+    // The whole encode, against slop's own. The kernels ship in the vendored
+    // `slop-dft` and this is the check that says they agree with what they
+    // replace, so the shapes have to reach every path through them:
+    //
+    // - 64x64 has no global stages at all, only the spread and the tiled tail;
+    // - 1024x64 has an even number of global stages, so they all pair off into
+    //   radix-4 passes;
+    // - 2048x64 has an odd number, which leaves one radix-2 stage at the top;
+    // - the 48-column shapes have no tiled tail, since it needs whole tiles, so
+    //   every stage below the spread is a global pass -- again in both parities.
+    //
+    // Both blowups: the one this probe used to assume, and the one the core
+    // prover actually configures.
     let dft = Radix2DitParallel::default();
     for &log_blowup in &[1usize, 2] {
-        for &(rows, cols) in &[(64usize, 64usize), (1024usize, 64usize)] {
+        for &(rows, cols) in &[
+            (64usize, 64usize),
+            (1024usize, 64usize),
+            (2048usize, 64usize),
+            (256usize, 48usize),
+            (512usize, 48usize),
+        ] {
             let src = rand_f_vec(&mut rng, rows * cols);
             let want =
                 slop_encode(&Tensor::from(src.clone()).reshape([rows, cols]), &dft, log_blowup);
