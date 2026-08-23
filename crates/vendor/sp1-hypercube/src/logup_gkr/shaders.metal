@@ -349,3 +349,85 @@ kernel void gkr_transition_base(device const uint* n0 [[buffer(0)]],
         out_d1[gid] = uint4(KB_ONE, 0u, 0u, 0u);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The GKR circuit's first layer: one numerator and one denominator per row per
+// interaction.
+//
+// An interaction's denominator is `alpha + beta_0 * kind + sum_j beta_j * v_j`,
+// where each `v_j` is an affine form over the row's preprocessed and main
+// columns, and its numerator is one more such form, negated for a receive.
+// Those forms are fixed per chip, so rather than generating a kernel for each
+// -- which is what the zerocheck does, and what costs it a compile per chip --
+// they are uploaded as a table this one kernel walks. Every chip in the proof
+// then shares a single pipeline.
+//
+// The tables are tiny beside the trace: tens of interactions of tens of terms,
+// against a height in the millions.
+struct FirstLayerParams {
+    uint rows;
+    uint num_interactions;
+    uint main_width;
+    uint prep_width;
+};
+
+// One affine form over a row, evaluated in the base field. A column index with
+// the top bit set names the preprocessed row rather than the main one.
+inline uint fl_apply(device const uint* main_row,
+                     device const uint* prep_row,
+                     device const uint* term_col,
+                     device const uint* term_w,
+                     uint from,
+                     uint to,
+                     uint constant_term) {
+    uint acc = constant_term;
+    for (uint t = from; t < to; ++t) {
+        uint c = term_col[t];
+        uint x = (c & 0x80000000u) ? prep_row[c & 0x7fffffffu] : main_row[c];
+        acc = kb_add(acc, kb_mul(term_w[t], x));
+    }
+    return acc;
+}
+
+kernel void first_layer(device const uint* main [[buffer(0)]],
+                        device const uint* prep [[buffer(1)]],
+                        device const uint4* betas [[buffer(2)]],
+                        device const uint* val_off [[buffer(3)]],
+                        device const uint* mult_val [[buffer(4)]],
+                        device const uint* term_off [[buffer(5)]],
+                        device const uint* val_const [[buffer(6)]],
+                        device const uint* term_col [[buffer(7)]],
+                        device const uint* term_w [[buffer(8)]],
+                        device const uint* arg_index [[buffer(9)]],
+                        device const uint* is_send [[buffer(10)]],
+                        device uint* numer_out [[buffer(11)]],
+                        device uint4* denom_out [[buffer(12)]],
+                        constant FirstLayerParams& p [[buffer(13)]],
+                        constant uint4& alpha [[buffer(14)]],
+                        uint gid [[thread_position_in_grid]],
+                        uint grid [[threads_per_grid]]) {
+    uint total = p.rows * p.num_interactions;
+    for (uint idx = gid; idx < total; idx += grid) {
+        uint row = idx / p.num_interactions;
+        uint i = idx - row * p.num_interactions;
+        device const uint* main_row = main + row * p.main_width;
+        device const uint* prep_row = prep + row * p.prep_width;
+
+        uint4 denom = ext_add(alpha, ext_mul_base(betas[0], arg_index[i]));
+        // The multiplicity is stored just past this interaction's values, so
+        // it -- not `val_off[i + 1]` -- is where the values stop.
+        uint vfrom = val_off[i];
+        uint vto = mult_val[i];
+        for (uint v = vfrom; v < vto; ++v) {
+            uint a = fl_apply(main_row, prep_row, term_col, term_w,
+                              term_off[v], term_off[v + 1u], val_const[v]);
+            denom = ext_add(denom, ext_mul_base(betas[v - vfrom + 1u], a));
+        }
+
+        uint mv = mult_val[i];
+        uint mult = fl_apply(main_row, prep_row, term_col, term_w,
+                             term_off[mv], term_off[mv + 1u], val_const[mv]);
+        numer_out[idx] = is_send[i] != 0u ? mult : kb_neg(mult);
+        denom_out[idx] = denom;
+    }
+}

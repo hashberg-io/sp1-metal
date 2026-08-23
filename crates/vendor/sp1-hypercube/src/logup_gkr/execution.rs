@@ -138,7 +138,43 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
             let mut denom_evals = vec![EF::one(); height * num_interactions];
 
             // println!("preprocessed_trace: {:?}", preprocessed_trace.num_variables());
-            if height > 0 {
+            // Every cell here is one affine form over a row and a handful of
+            // extension multiplies, with no dependence between cells, so the
+            // whole chip is a single dispatch. The forms are fixed per chip and
+            // go up as a table rather than as generated code.
+            #[cfg(feature = "metal")]
+            let on_gpu = height > 0
+                && {
+                    // The slice and the width come from the same place: a
+                    // preprocessed table can be present but empty, and taking
+                    // the width from the padded MLE while taking the values
+                    // from its inner one would let the kernel index past them.
+                    let prep_inner = preprocessed_trace.as_ref().and_then(|p| p.inner().as_ref());
+                    crate::metal::first_layer_chip(
+                        interactions,
+                        main_trace.inner().as_ref().unwrap().guts().as_slice(),
+                        main_trace.num_polynomials(),
+                        prep_inner.map_or(&[][..], |i| i.guts().as_slice()),
+                        prep_inner.map_or(0, |i| i.num_polynomials()),
+                        height,
+                        alpha,
+                        &betas,
+                        &mut numer_evals,
+                        &mut denom_evals,
+                    )
+                };
+            #[cfg(not(feature = "metal"))]
+            let on_gpu = false;
+            // Under `SP1_METAL_FIRST_LAYER=check` both paths run and the
+            // results are compared, on every chip of a real proof.
+            #[cfg(feature = "metal")]
+            let expected = (on_gpu && crate::metal::first_layer_check())
+                .then(|| (numer_evals.clone(), denom_evals.clone()));
+            #[cfg(feature = "metal")]
+            let run_cpu = !on_gpu || expected.is_some();
+            #[cfg(not(feature = "metal"))]
+            let run_cpu = !on_gpu;
+            if height > 0 && run_cpu {
                 match preprocessed_trace {
                     Some(prep) => {
                         numer_evals
@@ -217,6 +253,18 @@ impl<F: Field, EF: ExtensionField<F>, A> LogupGkrCpuTraceGenerator<F, EF, A> {
                             });
                     }
                 }
+            }
+
+            #[cfg(feature = "metal")]
+            if let Some((gpu_numer, gpu_denom)) = expected {
+                assert!(
+                    gpu_numer == numer_evals,
+                    "first-layer numerators from the GPU differ from upstream's for chip {name}",
+                );
+                assert!(
+                    gpu_denom == denom_evals,
+                    "first-layer denominators from the GPU differ from upstream's for chip {name}",
+                );
             }
 
             let numerator = RowMajorMatrix::new(numer_evals, num_interactions);

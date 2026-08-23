@@ -41,6 +41,8 @@ pub type BaseField = KoalaBear;
 /// Kept for the harness crate, which names it.
 pub type F = KoalaBear;
 pub type EF = slop_algebra::extension::BinomialExtensionField<KoalaBear, 4>;
+/// The same type, named for the places that also carry a generic `EF`.
+type EF2 = EF;
 
 const THREADS: u64 = 256;
 
@@ -120,6 +122,7 @@ struct Context {
     fold_base: ComputePipelineState,
     transition_ext: ComputePipelineState,
     transition_base: ComputePipelineState,
+    first_layer: ComputePipelineState,
     /// Scratch buffers for per-threadgroup partials, checked out and returned.
     ///
     /// One shared buffer would be a data race: SP1 proves shards concurrently,
@@ -144,6 +147,7 @@ impl Context {
         let fold_base = pso("fold_padded_base");
         let transition_ext = pso("gkr_transition_ext");
         let transition_base = pso("gkr_transition_base");
+        let first_layer = pso("first_layer");
         Self {
             device,
             ext,
@@ -152,6 +156,7 @@ impl Context {
             fold_base,
             transition_ext,
             transition_base,
+            first_layer,
             pool: Mutex::new(Vec::new()),
         }
     }
@@ -1366,4 +1371,236 @@ where
     });
     // SAFETY: E is EF, checked above.
     Some(unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(out)) })
+}
+
+/// The tables the first-layer kernel walks, flattened out of a chip's
+/// interactions.
+///
+/// Every affine form the chip evaluates -- each interaction's values and its
+/// multiplicity -- becomes one entry in `val_const` and `term_off`, and its
+/// terms become entries in `term_col` and `term_w`. Nothing here depends on the
+/// trace, only on the chip, so it is rebuilt per shard at a cost proportional
+/// to the number of terms rather than to the height.
+struct FirstLayerTables {
+    val_off: Vec<u32>,
+    mult_val: Vec<u32>,
+    term_off: Vec<u32>,
+    val_const: Vec<u32>,
+    term_col: Vec<u32>,
+    term_w: Vec<u32>,
+    arg_index: Vec<u32>,
+    is_send: Vec<u32>,
+}
+
+/// The Montgomery word behind a field element the kernels read.
+fn monty_word<F: slop_algebra::Field>(x: F) -> u32 {
+    // SAFETY: this is only called for KoalaBear, which is repr(transparent)
+    // over its Montgomery word; the caller checks the type first.
+    unsafe { *std::ptr::from_ref(&x).cast::<u32>() }
+}
+
+impl FirstLayerTables {
+    fn build<F: slop_algebra::Field>(interactions: &[(&crate::Interaction<F>, bool)]) -> Self {
+        let mut t = FirstLayerTables {
+            val_off: Vec::with_capacity(interactions.len() + 1),
+            mult_val: Vec::with_capacity(interactions.len()),
+            term_off: vec![0],
+            val_const: Vec::new(),
+            term_col: Vec::new(),
+            term_w: Vec::new(),
+            arg_index: Vec::with_capacity(interactions.len()),
+            is_send: Vec::with_capacity(interactions.len()),
+        };
+        let mut push_value = |t: &mut FirstLayerTables, col: &slop_air::VirtualPairCol<F>| {
+            t.val_const.push(monty_word(col.constant));
+            for (pair, weight) in &col.column_weights {
+                let encoded = match pair {
+                    slop_air::PairCol::Preprocessed(i) => (*i as u32) | 0x8000_0000,
+                    slop_air::PairCol::Main(i) => *i as u32,
+                };
+                t.term_col.push(encoded);
+                t.term_w.push(monty_word(*weight));
+            }
+            t.term_off.push(t.term_col.len() as u32);
+        };
+        for (interaction, is_send) in interactions {
+            t.val_off.push(t.val_const.len() as u32);
+            for value in &interaction.values {
+                push_value(&mut t, value);
+            }
+            // The multiplicity is one more affine form; it is appended after
+            // the values so that `val_off` still bounds the values alone.
+            t.mult_val.push(t.val_const.len() as u32);
+            push_value(&mut t, &interaction.multiplicity);
+            t.arg_index
+                .push(monty_word(F::from_canonical_usize(interaction.argument_index())));
+            t.is_send.push(u32::from(*is_send));
+        }
+        // A sentinel, so that the arrays are never read with an index the
+        // kernel cannot bound. The values of interaction `i` run from
+        // `val_off[i]` to `mult_val[i]`, which is where its multiplicity sits.
+        t.val_off.push(t.val_const.len() as u32);
+        t
+    }
+}
+
+/// Whether the first layer is built on the GPU, overridable with
+/// `SP1_METAL_FIRST_LAYER`.
+fn first_layer_on_gpu() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_FIRST_LAYER").map(|v| v != "0").unwrap_or(true))
+}
+
+/// Whether to build the first layer both ways and compare, with
+/// `SP1_METAL_FIRST_LAYER=check`.
+///
+/// A synthetic parity test would have to invent chips; this checks the kernel
+/// against upstream's own loop on every chip of a real proof, which is a far
+/// larger set of shapes than anything worth writing by hand. It roughly doubles
+/// the cost of the phase, so it is a check to run, not a mode to prove in.
+#[must_use]
+pub fn first_layer_check() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_FIRST_LAYER").is_ok_and(|v| v == "check"))
+}
+
+/// Fills one chip's numerator and denominator evaluations for the first GKR
+/// layer.
+///
+/// Returns `false` when the chip is too small to be worth a dispatch, or the
+/// fields are not the ones the kernels are written for, leaving the caller to
+/// fill them the way it always did. On `true` both slices are fully written.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn first_layer_chip<F, EF>(
+    interactions: &[(&crate::Interaction<F>, bool)],
+    main: &[F],
+    main_width: usize,
+    prep: &[F],
+    prep_width: usize,
+    rows: usize,
+    alpha: EF,
+    betas: &[EF],
+    numer_out: &mut [F],
+    denom_out: &mut [EF],
+) -> bool
+where
+    F: slop_algebra::Field,
+    EF: slop_algebra::Field,
+{
+    if (!first_layer_on_gpu() && !first_layer_check())
+        || !is::<F, BaseField>()
+        || !is::<EF, EF2>()
+    {
+        return false;
+    }
+    let n = interactions.len();
+    let total = rows * n;
+    if n == 0 || rows == 0 || total < min_entries_for_gpu() {
+        return false;
+    }
+    debug_assert_eq!(numer_out.len(), total);
+    debug_assert_eq!(denom_out.len(), total);
+    // The kernel indexes `betas` by an interaction's position, so a chip with
+    // more values than the seed provides would read past the end.
+    let widest = interactions.iter().map(|(i, _)| i.values.len()).max().unwrap_or(0);
+    if betas.len() < widest + 1 {
+        return false;
+    }
+    // The kernel indexes both traces by row, so refuse anything it could read
+    // past rather than trusting the caller's widths.
+    if main.len() < rows * main_width || prep.len() < rows * prep_width {
+        return false;
+    }
+    let _phase = stats::enter(stats::Phase::Gkr);
+    let tables = FirstLayerTables::build(interactions);
+
+    let ctx = context();
+    let queue = ctx.queue();
+    metal::objc::rc::autoreleasepool(|| {
+        // SAFETY: every buffer below borrows a slice that outlives the single
+        // dispatch, which is awaited before this returns.
+        let up = |bytes: &[u8]| unsafe { sp1_metal_probes::nocopy::read_only(&ctx.device, bytes) };
+        let b_main = up(as_words(main));
+        // An absent preprocessed table still has to be bound, and an empty
+        // slice has no address worth taking, so bind a word of nothing. No
+        // term names a preprocessed column in that case, so it is never read.
+        let nothing = [0u32; 4];
+        let b_prep = up(if prep.is_empty() { as_words(&nothing) } else { as_words(prep) });
+        let b_betas = up(as_words(betas));
+        let b_val_off = up(as_words(&tables.val_off));
+        let b_mult_val = up(as_words(&tables.mult_val));
+        let b_term_off = up(as_words(&tables.term_off));
+        let b_val_const = up(as_words(&tables.val_const));
+        let b_term_col = up(as_words(&tables.term_col));
+        let b_term_w = up(as_words(&tables.term_w));
+        let b_arg = up(as_words(&tables.arg_index));
+        let b_send = up(as_words(&tables.is_send));
+
+        let numer_bytes = std::mem::size_of_val(numer_out);
+        let denom_bytes = std::mem::size_of_val(denom_out);
+        // SAFETY: as above, and nothing reads the outputs until the wait below.
+        let (b_numer, numer_direct) = unsafe {
+            sp1_metal_probes::nocopy::write_into(
+                &ctx.device,
+                std::slice::from_raw_parts_mut(numer_out.as_mut_ptr().cast::<u8>(), numer_bytes),
+            )
+        };
+        let (b_denom, denom_direct) = unsafe {
+            sp1_metal_probes::nocopy::write_into(
+                &ctx.device,
+                std::slice::from_raw_parts_mut(denom_out.as_mut_ptr().cast::<u8>(), denom_bytes),
+            )
+        };
+
+        #[repr(C)]
+        struct Params {
+            rows: u32,
+            num_interactions: u32,
+            main_width: u32,
+            prep_width: u32,
+        }
+        let params = Params {
+            rows: rows as u32,
+            num_interactions: n as u32,
+            main_width: main_width as u32,
+            prep_width: prep_width as u32,
+        };
+        let alpha_words: [u32; 4] = unsafe { std::mem::transmute_copy(&alpha) };
+
+        let cb = queue.new_command_buffer();
+        let enc = cb.new_compute_command_encoder();
+        enc.set_compute_pipeline_state(&ctx.first_layer);
+        for (i, b) in [
+            &b_main, &b_prep, &b_betas, &b_val_off, &b_mult_val, &b_term_off, &b_val_const,
+            &b_term_col, &b_term_w, &b_arg, &b_send, &b_numer,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            enc.set_buffer(i as u64, Some(b), 0);
+        }
+        enc.set_buffer(12, Some(&b_denom), 0);
+        enc.set_bytes(13, std::mem::size_of::<Params>() as u64, (&params as *const Params).cast());
+        enc.set_bytes(14, 16, alpha_words.as_ptr().cast());
+        let groups = (total as u64).div_ceil(THREADS).min(MAX_GROUPS as u64).max(1);
+        enc.dispatch_thread_groups(MTLSize::new(groups, 1, 1), MTLSize::new(THREADS, 1, 1));
+        enc.end_encoding();
+        run_and_record(cb);
+
+        for (direct, buffer, ptr, bytes) in [
+            (numer_direct, &b_numer, numer_out.as_mut_ptr().cast::<u8>(), numer_bytes),
+            (denom_direct, &b_denom, denom_out.as_mut_ptr().cast::<u8>(), denom_bytes),
+        ] {
+            if direct {
+                continue;
+            }
+            let start = std::time::Instant::now();
+            // SAFETY: the kernel wrote exactly this many bytes.
+            unsafe {
+                std::ptr::copy_nonoverlapping(buffer.contents().cast::<u8>(), ptr, bytes);
+            }
+            stats::record_output(Output::Staged, bytes, start.elapsed().as_nanos() as u64);
+        }
+    });
+    true
 }
