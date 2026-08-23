@@ -152,6 +152,13 @@ where
                 return out;
             }
         }
+        // Everything past here is the CPU reduction, which is what a chip with
+        // no generated kernel costs. Timed separately so that "port `Global`"
+        // is a decision with a number behind it rather than a share of cells.
+        #[cfg(feature = "metal")]
+        let fallback = sp1_metal_probes::tally::Span::start("zerocheck: cpu round");
+        #[cfg(feature = "metal")]
+        let fallback_cells = main_values.num_polynomials() << main_values.num_variables();
         let air = self.air.clone();
         let public_values = self.public_values.clone();
         let powers_of_alpha = self.powers_of_alpha.clone();
@@ -264,10 +271,13 @@ where
                 })
                 .collect::<Vec<_>>();
 
-            cumul_ys.into_iter().fold(
+            let out = cumul_ys.into_iter().fold(
                 (EF::zero(), EF::zero(), EF::zero()),
                 |(y_0, y_2, y_4), (y_0_i, y_2_i, y_4_i)| (y_0 + y_0_i, y_2 + y_2_i, y_4 + y_4_i),
-            )
+            );
+            #[cfg(feature = "metal")]
+            fallback.stop(fallback_cells);
+            out
         }
     }
 }
