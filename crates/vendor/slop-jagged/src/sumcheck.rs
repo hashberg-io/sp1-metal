@@ -112,3 +112,68 @@ fn restack<F: Field>(mles: &Message<Mle<F>>, log_stacking_height: u32) -> Messag
         .collect::<Vec<_>>();
     Message::from(components)
 }
+
+#[cfg(test)]
+mod restack_tests {
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use slop_algebra::AbstractField;
+    use slop_baby_bear::BabyBear;
+    use slop_stacked::interleave_multilinears_with_fixed_rate;
+
+    use super::*;
+
+    /// [`restack`] against the function it replaces, at shapes that reach every
+    /// path through it.
+    ///
+    /// The proof only ever asks for the case where the data fits one stack, so
+    /// the cases where it does not -- several full stacks, a partial tail, an
+    /// exact fit -- are only ever covered here.
+    #[test]
+    fn restack_matches_upstream() {
+        let mut rng = StdRng::seed_from_u64(7);
+        // (component shapes as (rows, polynomials), log stacking height)
+        let cases: &[(&[(usize, usize)], u32)] = &[
+            (&[(8, 1)], 5),           // one component, one polynomial, fits exactly
+            (&[(8, 3)], 6),           // one component, a real transpose, tail padded
+            (&[(4, 2), (8, 1)], 4),   // two components, exactly two stacks
+            (&[(8, 4), (4, 3)], 3),   // several full stacks and a partial tail
+            (&[(16, 2), (2, 1)], 7),  // one stack with room to spare
+            (&[(4, 1), (4, 1)], 3),   // an exact fit across components
+        ];
+        for (shapes, log_stacking_height) in cases {
+            let mles = shapes
+                .iter()
+                .map(|&(rows, polys)| {
+                    let guts: Vec<BabyBear> =
+                        (0..rows * polys).map(|_| rng.gen::<BabyBear>()).collect();
+                    Mle::new(Tensor::from(guts).reshape([rows, polys]))
+                })
+                .collect::<Vec<_>>();
+            let message = Message::from(mles);
+            let want =
+                interleave_multilinears_with_fixed_rate(1, message.clone(), *log_stacking_height);
+            let got = restack(&message, *log_stacking_height);
+            assert_eq!(got.len(), want.len(), "component count at {shapes:?}");
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                assert_eq!(g.guts().sizes(), w.guts().sizes(), "shape of {i} at {shapes:?}");
+                assert_eq!(
+                    g.guts().as_slice(),
+                    w.guts().as_slice(),
+                    "values of {i} at {shapes:?}"
+                );
+            }
+        }
+    }
+
+    /// An empty batch, which upstream answers with a single zero-width
+    /// component rather than with nothing.
+    #[test]
+    fn restack_of_nothing_matches_upstream() {
+        let message: Message<Mle<BabyBear>> = Message::from(Vec::<Mle<BabyBear>>::new());
+        let want = interleave_multilinears_with_fixed_rate(1, message.clone(), 4);
+        let got = restack(&message, 4);
+        assert_eq!(got.len(), want.len());
+        assert_eq!(got[0].guts().sizes(), want[0].guts().sizes());
+        let _ = BabyBear::one();
+    }
+}
