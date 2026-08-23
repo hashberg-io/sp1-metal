@@ -440,6 +440,30 @@ fn zerocheck_on_gpu() -> bool {
 /// magnitude smaller. Past this the chip stays on the CPU.
 const MAX_NODES: usize = 16_384;
 
+/// The node bound in force, which `SP1_METAL_ZEROCHECK_MAX_NODES` overrides.
+///
+/// The default was set from the precompiles, which are three orders of
+/// magnitude past it, and nothing had ever chosen it against the core chips.
+/// The counters say exactly one core chip is caught by it -- `Global`, at
+/// 22,794 nodes -- and raising the bound to let that one through is measured at
+/// **1,814 seconds of kernel compilation**, taking the acceptance proof from
+/// 12.0 seconds to 463.6. The other sixty-one kernels compile in 0.04 seconds
+/// between them, so the cost is not linear in the node count and the bound is
+/// not conservative: it is the edge of a cliff.
+///
+/// What `Global` would need is the treatment the GKR first layer got -- the
+/// constraints as a table one kernel walks, rather than a DAG unrolled into
+/// source -- not a larger number here.
+fn max_nodes() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("SP1_METAL_ZEROCHECK_MAX_NODES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MAX_NODES)
+    })
+}
+
 /// The pipeline for a chip, generated and compiled on first sight.
 ///
 /// `constraints` is only called on a miss, because building the symbolic DAG is
@@ -456,17 +480,29 @@ fn pipeline_for<Fx: PrimeField32>(
     }
     let cs = constraints();
     let compile_start = std::time::Instant::now();
-    let built = (!cs.is_empty())
-        .then(|| transpile_round(&cs, is_first_round, ext_columns))
-        .filter(|(_, nodes)| *nodes <= MAX_NODES)
-        .and_then(|(source, _)| {
-            let library = ctx
+    // Why a chip has no kernel is worth saying out loud: the three reasons are
+    // very different problems, and a chip that falls back is silent otherwise.
+    let built = if cs.is_empty() {
+        crate::prover::zerocheck::counters::note_no_pipeline(key, "no constraints", 0);
+        None
+    } else {
+        let (source, nodes) = transpile_round(&cs, is_first_round, ext_columns);
+        if nodes > max_nodes() {
+            crate::prover::zerocheck::counters::note_no_pipeline(key, "over the node bound", nodes);
+            None
+        } else {
+            let pso = ctx
                 .device
                 .new_library_with_source(&source, &metal::CompileOptions::new())
-                .ok()?;
-            let f = library.get_function("zc_round", None).ok()?;
-            ctx.device.new_compute_pipeline_state_with_function(&f).ok()
-        });
+                .ok()
+                .and_then(|library| library.get_function("zc_round", None).ok())
+                .and_then(|f| ctx.device.new_compute_pipeline_state_with_function(&f).ok());
+            if pso.is_none() {
+                crate::prover::zerocheck::counters::note_no_pipeline(key, "did not compile", nodes);
+            }
+            pso
+        }
+    };
     stats::record_compile(compile_start.elapsed().as_secs_f64());
     ctx.pipelines
         .lock()

@@ -15,6 +15,7 @@
 //! separate two call sites, count at the sites rather than profiling harder.**
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// One bucket: how many times, over how many cells, for how long.
 #[derive(Default)]
@@ -148,6 +149,30 @@ pub fn reject_report() -> String {
     for (name, b) in [("eq built", &LAGRANGE), ("eq reused", &LAGRANGE_HIT)] {
         let (calls, cells, secs) = b.counts();
         out.push_str(&format!("{name:<18} {calls:>10} {cells:>14} {secs:>10.3}\n"));
+    }
+    out
+}
+
+/// The chips that got no kernel, with the reason and the size that caused it.
+static NO_PIPELINE: Mutex<Vec<(String, &'static str, usize)>> = Mutex::new(Vec::new());
+
+/// Records that a chip will run its rounds on the CPU, and why.
+///
+/// Called once per chip, from behind the pipeline cache.
+pub fn note_no_pipeline(key: &str, reason: &'static str, nodes: usize) {
+    NO_PIPELINE.lock().expect("poisoned").push((key.to_string(), reason, nodes));
+}
+
+/// Which chips have no kernel.
+#[must_use]
+pub fn no_pipeline_report() -> String {
+    let chips = NO_PIPELINE.lock().expect("poisoned");
+    if chips.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\n{} chips have no zerocheck kernel:\n", chips.len());
+    for (key, reason, nodes) in chips.iter() {
+        out.push_str(&format!("  {key:<44} {reason} ({nodes} nodes)\n"));
     }
     out
 }
