@@ -1,3 +1,4 @@
+// Modified from slop-jagged 6.4.0 by the sp1-metal project; see CHANGES.md.
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use slop_stacked::interleave_multilinears_with_fixed_rate;
 use std::sync::Arc;

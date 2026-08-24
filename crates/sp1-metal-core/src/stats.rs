@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Where the bytes go, split by phase and by whether the GPU had to be fed.
 //!
 //! The counters this replaces could say how much was uploaded but not what an

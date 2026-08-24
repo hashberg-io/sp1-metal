@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! When Metal will take memory where it lies.
 //!
 //! `newBufferWithBytesNoCopy` is the whole reason a GPU backend on unified

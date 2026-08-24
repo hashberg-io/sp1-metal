@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to slop-dft 6.4.0 by the sp1-metal project; see CHANGES.md.
 // ---------------------------------------------------------------------------
 // Step 2: the Reed-Solomon encode inside a BaseFold commitment.
 //

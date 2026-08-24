@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Committing without waiting, and why it does not work here.
 //!
 //! Most of what this backend waits for, it does not read. A sumcheck round's

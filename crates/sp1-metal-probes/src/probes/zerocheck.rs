@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Synthetic zerocheck first round: evaluates T random degree-3 monomials per
 //! row of a column-major base-field trace, combines them with powers of a
 //! random extension-field alpha, weights by eq(row), and reduces to a single

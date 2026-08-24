@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to sp1-hypercube 6.4.0 by the sp1-metal project; see CHANGES.md.
 //! A Metal implementation of the logup GKR round.
 //!
 //! Lives inside the fork rather than beside it so that `DefaultRoundOps` can

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! STREAM-style triad on integer lanes: pins the streaming-bandwidth ceiling,
 //! which is the hard limit for fold-shaped (bandwidth-bound) prover kernels.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The Merkle tree half of a BaseFold commitment.
 //!
 //! `commit traces` is a Reed-Solomon encode followed by a Merkle tree over the

@@ -3,6 +3,9 @@
 Third-party source vendored into this repository because it has to be modified.
 Each directory here is an unmodified upstream release plus a recorded set of changes; nothing else in this repository is a fork.
 
+Every crate here is `MIT OR Apache-2.0`, the same terms this repository is offered under, and none of them ships a licence file inside its crates.io package; the canonical texts are at [LICENSE-APACHE](../../LICENSE-APACHE) and [LICENSE-MIT](../../LICENSE-MIT), and the attribution is in [NOTICE](../../NOTICE).
+Each crate's `CHANGES.md` lists every file that differs from the release, and each of those files carries a notice at its top saying so — which is what the Apache licence asks of a modified redistribution.
+
 ## `sp1-hypercube`
 
 Vendored from `sp1-hypercube` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.

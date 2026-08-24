@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What the logup GKR round reduction costs, CPU against Metal.
 //!
 //! The shape is a circuit layer as the prover builds one: several chips with

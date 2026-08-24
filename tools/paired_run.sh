@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # One paired measurement of the acceptance workload: the same binary twice,
 # with every Metal switch off and then on, and peak resident memory sampled
 # from ps rather than taken from `/usr/bin/time -l`, which overstates it.

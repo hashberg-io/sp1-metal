@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What a kernel costs before it computes anything.
 //!
 //! The Hypercube prover's sumcheck and BaseFold rounds halve their working set

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Keeping a buffer between two uses of the same live allocation.
 //!
 //! Giving the device access to a borrowed allocation costs time proportional to

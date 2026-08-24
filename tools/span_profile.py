@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Aggregate tracing span timings from an SP1 CPU prover log into phase buckets.
 
 Feed it the output of an SP1 host built with `sp1_sdk::utils::setup_logger()` and run with `RUST_LOGGER=flat RUST_LOG=debug`.

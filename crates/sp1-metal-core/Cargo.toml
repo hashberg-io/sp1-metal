@@ -2,6 +2,8 @@
 name = "sp1-metal-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "The parts of the Metal backend that every crate above it needs: when Metal will take memory where it lies, and where the bytes went."
 publish = false
 

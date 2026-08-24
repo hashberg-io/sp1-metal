@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Proves a given RISC-V ELF with the SP1 CPU prover under span-timing
 //! instrumentation, so tools/span_profile.py can split wall time into phases.
 //!

@@ -1,3 +1,4 @@
+// Modified from slop-jagged 6.4.0 by the sp1-metal project; see CHANGES.md.
 //! This module contains the implementation of the special multilinear polynomial appearing in the
 //! jagged sumcheck protocol.
 //!

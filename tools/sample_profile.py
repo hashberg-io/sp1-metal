@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Turn a macOS `sample` call graph into a flat profile of where CPU time goes.
 
 `sample` reports leaves and totals, neither of which answers "which operation

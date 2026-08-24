@@ -1,3 +1,4 @@
+// Modified from slop-jagged 6.4.0 by the sp1-metal project; see CHANGES.md.
 use std::sync::Arc;
 
 use slop_algebra::{ExtensionField, Field};

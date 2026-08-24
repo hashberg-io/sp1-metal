@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! CPU mirror of the KoalaBear Montgomery arithmetic used by the Metal
 //! kernels, plus conversions between raw Montgomery words and slop's field
 //! types. The slop types are the parity reference; the raw mirror exists only

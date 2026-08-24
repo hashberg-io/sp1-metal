@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to sp1-hypercube 6.4.0 by the sp1-metal project; see CHANGES.md.
 
 // ---------------------------------------------------------------------------
 // The logup GKR round reduction.

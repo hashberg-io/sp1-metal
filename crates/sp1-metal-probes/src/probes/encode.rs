@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What BaseFold's commitment actually spends its time on.
 //!
 //! `commit traces` is the second largest phase of a shard proof, and it is not

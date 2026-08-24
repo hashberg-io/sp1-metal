@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to slop-dft 6.4.0 by the sp1-metal project; see CHANGES.md.
 //! The Reed-Solomon encode, on the GPU.
 //!
 //! Committing a shard's traces is the second largest phase of a proof, and it

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Where the time in an upload actually goes: allocating the buffer, or copying.
 use metal::{Device, MTLResourceOptions};
 use std::time::Instant;

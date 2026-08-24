@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! slop's sumcheck driver, running unmodified with GPU kernels underneath.
 //!
 //! `reduce_sumcheck_to_evaluation` is generic over `SumcheckPolyFirstRound`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Poseidon2 width-16 over KoalaBear, parity-checked against slop's
 //! `my_kb_16_perm` permutation (the one the Merkle/hashing layers use).
 //! This is the canonical compute-bound prover primitive.

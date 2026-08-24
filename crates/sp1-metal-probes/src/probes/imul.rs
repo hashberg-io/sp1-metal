@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Register-resident integer op throughput: add, 32x32 low multiply, mulhi,
 //! and full KoalaBear Montgomery multiply. The mulhi rate is the single
 //! biggest unknown in the compute model — Apple does not publish it — and it

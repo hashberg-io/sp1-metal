@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // Reference kernels: what this machine can actually do, so a real kernel is
 // measured against a ceiling that was observed rather than quoted.
 

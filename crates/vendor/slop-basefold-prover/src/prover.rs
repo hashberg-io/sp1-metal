@@ -1,3 +1,4 @@
+// Modified from slop-basefold-prover 6.4.0 by the sp1-metal project; see CHANGES.md.
 use slop_algebra::AbstractField;
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 

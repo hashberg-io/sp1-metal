@@ -1,0 +1,28 @@
+sp1-metal
+Copyright (c) 2026 Stefano Gogioso
+
+This product includes software developed by Succinct Labs as part of SP1
+(https://github.com/succinctlabs/sp1), licensed under either of Apache License,
+Version 2.0 or the MIT license, at the recipient's option.
+
+The following crates under `crates/vendor/` are redistributed here in modified
+form. Each is the corresponding crates.io release of that version, unpacked
+verbatim, with the modifications recorded in the `CHANGES.md` file beside it.
+Files that differ from the release are listed there; all other files are
+unmodified.
+
+  crates/vendor/sp1-hypercube          from sp1-hypercube 6.4.0
+  crates/vendor/slop-dft               from slop-dft 6.4.0
+  crates/vendor/slop-jagged            from slop-jagged 6.4.0
+  crates/vendor/slop-multilinear       from slop-multilinear 6.4.0
+  crates/vendor/slop-basefold-prover   from slop-basefold-prover 6.4.0
+
+None of these releases ships a LICENSE or NOTICE file inside its crates.io
+package; each declares `license = "MIT OR Apache-2.0"` in its own manifest, and
+the canonical texts are at LICENSE-APACHE and LICENSE-MIT in this repository.
+
+`CpuRoundOps` in crates/vendor/sp1-hypercube/src/logup_gkr/logup_poly.rs holds
+code moved verbatim out of `LogupRoundPolynomial`'s inline round reduction, and
+is therefore Succinct Labs' work rather than this project's.
+
+Everything outside `crates/vendor/` is original to this project.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Turn the acceptance scaling table into the relationship it implies.
 
 Reads the TSV written by the acceptance study (axis, guest, n, shard_size,

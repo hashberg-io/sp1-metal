@@ -2,6 +2,8 @@
 name = "sp1-profile-host"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashberg-io/sp1-metal"
 description = "Minimal SP1 CPU-prover host that emits span timings for tools/span_profile.py."
 publish = false
 

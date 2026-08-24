@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `MetalBackend`: slop's device seam, implemented for Apple GPUs.
 //!
 //! slop is generic over `A: Backend`, one small unsafe trait over `Allocator +

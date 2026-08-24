@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::size_of;

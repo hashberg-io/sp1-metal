@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to sp1-hypercube 6.4.0 by the sp1-metal project; see CHANGES.md.
 //! Where zerocheck's time goes, at the granularity that separates its parts.
 //!
 //! `zerocheck` is the largest span in the proof at 8.5 thread-seconds and the

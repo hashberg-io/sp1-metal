@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! GPU-vs-CPU parity at small sizes. Every Metal primitive is compared
 //! against the slop CPU implementation on shared random vectors; these run in
 //! milliseconds and are the CI gate for kernel correctness.

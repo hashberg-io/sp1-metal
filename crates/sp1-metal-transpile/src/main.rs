@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Turning a real chip's symbolic AIR constraints into Metal.
 //!
 //! The probe suite priced the *shape* of constraint evaluation with a synthetic

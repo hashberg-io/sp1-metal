@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The floor of the Metal backend.
 //!
 //! Two things live here, and they are here rather than in the probe suite for

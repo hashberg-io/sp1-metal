@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // The round reduction as it stood before the rewrite of 2026-08-22: one thread
 // per row pair, schoolbook extension multiply, three 256-wide threadgroup
 // arrays for the reduction. Kept so the shipped kernel can be scored against

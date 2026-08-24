@@ -15,3 +15,10 @@ Status: measured, and paused. The probe suite that was supposed to price the wor
 - [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — Metal kernels for the Hypercube hot primitives, packed-CPU baselines, and GPU-vs-CPU parity tests. `cargo test` runs the parity suite; `cargo run --release --bin probes -- all --cpu` runs the throughput ladder.
 - [`crates/sp1-profile-host`](crates/sp1-profile-host) — a minimal sp1-sdk host that replays a proof under span timing. Outside the workspace: sp1-sdk pulls a very large dependency tree.
 - [`tools/`](tools) — the span profiler, the summary that turns probe results into per-phase factors, and the end-to-end model.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option, matching the terms SP1 itself is offered under.
+
+`crates/vendor/` redistributes five SP1 crates in modified form; see [NOTICE](NOTICE) for the attribution and each crate's `CHANGES.md` for what was changed.
+Unless you state otherwise, any contribution you intentionally submit for inclusion shall be dual licensed as above, without additional terms or conditions.

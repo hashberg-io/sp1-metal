@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Added to slop-multilinear 6.4.0 by the sp1-metal project; see CHANGES.md.
 //! Who is folding, and how much of it there is.
 //!
 //! The largest remaining block of CPU time in a proof — 28.5 thread-seconds of

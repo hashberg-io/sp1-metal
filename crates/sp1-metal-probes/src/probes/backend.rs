@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What slop's device seam costs on unified memory.
 //!
 //! This drives a real `slop_alloc::Buffer<T, MetalBackend>` through a kernel:

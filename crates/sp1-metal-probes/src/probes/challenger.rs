@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The GPU-side challenger, and what removing the host from the round loop is
 //! worth.
 //!

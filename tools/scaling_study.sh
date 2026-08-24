@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # The acceptance study: how the Metal path's speedup scales.
 #
 # Every point is two proofs through the *same* binary, switched by the two

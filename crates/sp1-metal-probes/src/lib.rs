@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Probe suite for an SP1 Metal proving backend on Apple Silicon.
 //!
 //! Every probe has two faces: a parity check against the slop CPU

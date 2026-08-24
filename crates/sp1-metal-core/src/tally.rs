@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Named counters, for attributing a block of work without a profiler.
 //!
 //! Sampling has failed on this project four times, always the same way: rayon

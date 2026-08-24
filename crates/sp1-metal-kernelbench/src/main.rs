@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Scores the fork's logup GKR round kernel against ceilings measured here.
 //!
 //! Times are the GPU's own, from `GPUStartTime` and `GPUEndTime` on the command

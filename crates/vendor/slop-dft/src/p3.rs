@@ -1,3 +1,4 @@
+// Modified from slop-dft 6.4.0 by the sp1-metal project; see CHANGES.md.
 use std::convert::Infallible;
 
 pub use p3_dft::*;

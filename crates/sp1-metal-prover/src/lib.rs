@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Harness for the fork's Metal GKR round.
 //!
 //! The implementation itself lives in `sp1-hypercube` behind its `metal`

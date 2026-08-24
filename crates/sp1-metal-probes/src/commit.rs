@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! slop's Merkle tree commitment, built on the GPU.
 //!
 //! `commit_tensors` is the expensive half of committing a shard's traces — 47.9

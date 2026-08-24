@@ -6,6 +6,8 @@ exclude = ["crates/sp1-profile-host", "crates/sp1-metal-transpile", "crates/vend
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashberg-io/sp1-metal"
 
 [workspace.dependencies]
 slop-algebra = "=6.4.0"

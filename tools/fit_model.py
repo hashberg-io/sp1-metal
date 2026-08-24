@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Predict end-to-end Metal speedup from a span profile and per-phase GPU speedups.
 
 Inputs: the phase totals JSON from tools/span_profile.py, and a JSON object mapping phase names to expected GPU speedup factors (phases absent from the map, or mapped to 1, stay CPU-resident).
