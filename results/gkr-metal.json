@@ -1,0 +1,30 @@
+{
+  "gkr_round_on_a_shard_sized_layer": {
+    "shape": {
+      "rows": 65536,
+      "interactions": 108,
+      "chips": 8
+    },
+    "cpu_ms": 104.591,
+    "metal_ms": 11.539,
+    "speedup": 9.06,
+    "reduction": {
+      "cpu_ms": 84.435,
+      "metal_ms": 6.143,
+      "speedup": 13.74
+    },
+    "fold": {
+      "cpu_ms": 20.156,
+      "metal_ms": 5.396,
+      "speedup": 3.74
+    },
+    "uploads": 288,
+    "uploads_no_copy": 240,
+    "note": "measured in isolation with the sp1-metal-prover harness; the CPU side is upstream's own reduction over rayon"
+  },
+  "end_to_end_model": {
+    "vs_shipped_cpu_serial": 6.97,
+    "vs_shipped_cpu_pipelined": 8.15,
+    "note": "tools/fit_model.py over results/profile.json with gkr=9.06"
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "butterfly_stage": {
+      "cpu_packed": {
+        "gbytes_per_s_best": 422.0543912858223,
+        "times": {
+          "all_s": [
+            0.00134525,
+            0.001272042,
+            0.001278375,
+            0.001515833,
+            0.001532208,
+            0.001784458,
+            0.001520875,
+            0.001314708,
+            0.001311042,
+            0.001390542
+          ],
+          "best_s": 0.001272042,
+          "mean_s": 0.0014265333
+        }
+      },
+      "gpu": {
+        "gbytes_per_s_best": 429.78313708255183,
+        "times": {
+          "all_s": [
+            0.001899291,
+            0.001760708,
+            0.001727291,
+            0.001791292,
+            0.001743333,
+            0.001298416,
+            0.00132775,
+            0.001274791,
+            0.001249167,
+            0.001305333
+          ],
+          "best_s": 0.001249167,
+          "mean_s": 0.0015377372
+        }
+      },
+      "gpu_over_cpu_packed": 1.0183122032522471,
+      "params": {
+        "lanes": 4,
+        "log_m": 12,
+        "n": 67108864,
+        "reps": 10
+      }
+    },
+    "cpu": {
+      "gbytes_per_s_best": 1.7708352534821883,
+      "giga_butterflies_per_s_best": 3.098961693593829,
+      "nanoseconds_per_input_cell": 6.7764632403850555,
+      "note": "slop's own CPU encoder: p3 Radix2DitParallel, bit-reversed, rayon on all cores",
+      "times": {
+        "all_s": [
+          0.461022584,
+          0.45544975,
+          0.457095291,
+          0.456909792,
+          0.462256667,
+          0.45476075,
+          0.459706792,
+          0.456384917,
+          0.458622375,
+          0.460495083
+        ],
+        "best_s": 0.45476075,
+        "mean_s": 0.4582704001
+      }
+    },
+    "cpu_packed": {
+      "giga_butterflies_per_s_best": 23.58348462438911,
+      "nanoseconds_per_input_cell": 0.890453651547432,
+      "note": "the same decimation-in-frequency transform in packed NEON lanes, rayon on all cores",
+      "times": {
+        "all_s": [
+          0.064927208,
+          0.080902917,
+          0.083434667,
+          0.065171708,
+          0.059757333,
+          0.078614833,
+          0.068771,
+          0.091013708,
+          0.074544958,
+          0.060183042
+        ],
+        "best_s": 0.059757333,
+        "mean_s": 0.0727321374
+      }
+    },
+    "gpu": {
+      "effective_gbytes_per_s": 494.73650729089644,
+      "giga_butterflies_per_s_best": 40.58385411370635,
+      "nanoseconds_per_input_cell": 0.5174471586942673,
+      "passes_over_codeword": 16,
+      "stages": 21,
+      "tiled_tail": true,
+      "times": {
+        "all_s": [
+          0.034754125,
+          0.034740875,
+          0.034774,
+          0.034806667,
+          0.034725291,
+          0.034774583,
+          0.03474875,
+          0.034740917,
+          0.034745083,
+          0.034795709
+        ],
+        "best_s": 0.034725291,
+        "mean_s": 0.0347606
+      }
+    },
+    "gpu_over_cpu_packed": 1.7208590994960995,
+    "gpu_over_slop": 13.095952169270518,
+    "packed_over_slop": 7.610124601778998,
+    "params": {
+      "cols": 64,
+      "log_blowup": 1,
+      "reps": 10,
+      "rows": 1048576
+    },
+    "probe": "encode"
+  }
+}

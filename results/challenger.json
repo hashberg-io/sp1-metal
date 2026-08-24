@@ -1,0 +1,128 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "device_sponge_gain_given_concurrency": 1.3467010582139454,
+    "fold_device_challenger": {
+      "note": "every round in one submission; the sponge runs on the GPU",
+      "per_round_us": 83.56818181818181,
+      "times": {
+        "all_s": [
+          0.002985542,
+          0.001886709,
+          0.00186025,
+          0.0018385,
+          0.001907083,
+          0.001909792,
+          0.001861167,
+          0.001997583,
+          0.001857334,
+          0.001852375
+        ],
+        "best_s": 0.0018385,
+        "mean_s": 0.0019956335
+      },
+      "total_ms": 1.8385
+    },
+    "fold_device_challenger_concurrent": {
+      "folds": 4,
+      "note": "device sponge and concurrency together",
+      "per_fold_ms": 1.231698,
+      "per_fold_per_round_us": 55.98627272727273,
+      "times": {
+        "all_s": [
+          0.004986833,
+          0.004926792,
+          0.004950583,
+          0.004953375,
+          0.004973666,
+          0.004953,
+          0.004971833,
+          0.00499475,
+          0.005044291,
+          0.0050005
+        ],
+        "best_s": 0.004926792,
+        "mean_s": 0.0049755623
+      },
+      "total_ms": 4.926792
+    },
+    "fold_host_challenger": {
+      "note": "one command buffer per round, the best a host-driven port can do",
+      "per_round_us": 187.37877272727272,
+      "times": {
+        "all_s": [
+          0.004150625,
+          0.004154625,
+          0.004133542,
+          0.004132375,
+          0.00426225,
+          0.004168042,
+          0.004284958,
+          0.004335542,
+          0.004122333,
+          0.0042
+        ],
+        "best_s": 0.004122333,
+        "mean_s": 0.0041944292000000005
+      },
+      "total_ms": 4.122332999999999
+    },
+    "fold_host_challenger_concurrent": {
+      "folds": 4,
+      "note": "one round-trip latency per round for the whole batch, not per fold",
+      "per_fold_ms": 1.6587290000000001,
+      "per_fold_per_round_us": 75.39677272727273,
+      "times": {
+        "all_s": [
+          0.007596084,
+          0.007144916,
+          0.007299125,
+          0.007201708,
+          0.006817958,
+          0.006876041,
+          0.0068635,
+          0.006731417,
+          0.006656916,
+          0.006634916
+        ],
+        "best_s": 0.006634916,
+        "mean_s": 0.006982258100000001
+      },
+      "total_ms": 6.6349160000000005
+    },
+    "params": {
+      "n": 4194304,
+      "reps": 10,
+      "rounds": 22
+    },
+    "probe": "challenger",
+    "speedup": 2.2422262714169157,
+    "speedup_from_both": 3.346869930778486,
+    "speedup_from_concurrency": 2.4852359849016925,
+    "sponge_only": {
+      "note": "observe two extension elements and sample one, on the device",
+      "per_challenge_us": 44.498136363636355,
+      "times": {
+        "all_s": [
+          0.000979,
+          0.00105475,
+          0.000990458,
+          0.001033625,
+          0.001096375,
+          0.001051,
+          0.000978959,
+          0.001035,
+          0.000986333,
+          0.001013417
+        ],
+        "best_s": 0.000978959,
+        "mean_s": 0.0010218917
+      }
+    }
+  }
+}

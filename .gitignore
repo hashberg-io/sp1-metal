@@ -4,7 +4,6 @@
 /crates/vendor/sp1-hypercube/target
 /crates/sp1-metal-prover/target
 /crates/sp1-metal-transpile/transpile.json
-/results
 __pycache__/
 .DS_Store
 /target-*

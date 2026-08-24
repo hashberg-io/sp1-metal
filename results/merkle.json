@@ -1,0 +1,61 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "cpu_slop": {
+      "mega_permutations_per_s": 3.3842409070658066,
+      "milliseconds": 5577.134583,
+      "nanoseconds_per_input_cell": 41.552890710532665,
+      "note": "slop's Poseidon2KoalaBear16Prover, which already runs on packed NEON lanes",
+      "times": {
+        "all_s": [
+          5.577147083,
+          5.577134583,
+          5.592469,
+          5.578587167,
+          5.588973792,
+          5.588092416,
+          5.595518209,
+          5.585737041,
+          5.587821833,
+          5.582371375
+        ],
+        "best_s": 5.577134583,
+        "mean_s": 5.5853852499
+      }
+    },
+    "gpu": {
+      "mega_permutations_per_s": 516.2514288677678,
+      "milliseconds": 36.560416,
+      "nanoseconds_per_input_cell": 0.2723963260650635,
+      "times": {
+        "all_s": [
+          0.036640875,
+          0.036666167,
+          0.036650292,
+          0.036620209,
+          0.036631333,
+          0.03662525,
+          0.036639875,
+          0.036560416,
+          0.036670416,
+          0.036604833
+        ],
+        "best_s": 0.036560416,
+        "mean_s": 0.036630966599999995
+      }
+    },
+    "gpu_over_slop": 152.54570908055314,
+    "params": {
+      "permutations": 18874367.0,
+      "reps": 10,
+      "rows": 2097152,
+      "width": 64
+    },
+    "probe": "merkle"
+  }
+}
