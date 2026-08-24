@@ -55,6 +55,8 @@ cargo run --release --bin probes -- check                # every kernel against 
 ( cd crates/vendor/sp1-hypercube && cargo test --release ) # 14, includes the four GKR tests
 ```
 
+Building a vendored crate in place resolves its dev-dependencies and so rewrites the `Cargo.lock` that came with the release; `git checkout -- crates/vendor` puts it back.
+
 The five phases with a `=check` mode run both the GPU and the CPU path on every call of a real proof and compare element for element; that, and the fact that proofs are verified rather than merely produced, is the strongest correctness evidence here.
 
 ## License
