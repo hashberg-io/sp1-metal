@@ -10,5 +10,8 @@ New, off by default. Without it this crate compiles to exactly what upstream pub
 - **`src/p3.rs`.** `Radix2DitParallel`'s `Dft` impl tries the GPU first and falls through to upstream's body for anything the kernels do not compute exactly.
   Under `SP1_METAL_ENCODE=check` it runs both and compares element for element.
 - **`src/lib.rs`.** Declares the module.
+- **`Cargo.toml`.** Declares the feature and its three optional dependencies.
 
 Nothing else is modified, and with the feature off `p3.rs` is upstream's file with two `#[cfg]` blocks that compile to nothing.
+
+Every file that differs from the release is listed above, and each carries a notice at its top.

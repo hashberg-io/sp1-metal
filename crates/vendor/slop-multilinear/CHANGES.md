@@ -15,3 +15,7 @@ New, off by default. It adds counters, not kernels.
 - **`src/metal.rs`, new.** Counts and times folds, bucketed by width, plus `fold_mle` and `mle_fixed_at_zero`.
   Every fold in the prover funnels through `mle_fix_last_variable`, so one counter there attributes what five call sites and two sampling profiles could not.
 - **`src/restrict.rs`, `src/fold.rs`.** Two `#[cfg]`-gated timing blocks each.
+- **`src/lib.rs`.** Declares the module.
+- **`Cargo.toml`.** Declares the feature and its three optional dependencies.
+
+Every file that differs from the release is listed above, and each carries a notice at its top.
