@@ -33,6 +33,13 @@ cd guests/fib && cargo prove build
 `tools/scaling_study.sh` prefers a freshly built ELF under `target/` over the one in `elf/`, so rebuilding is how you check the shipped one rather than a separate procedure.
 `cargo prove build` is not reproducible byte for byte across toolchain versions, so expect the hashes to differ; what should not differ is the measurement.
 
+## The shipped binary reproduces the published number
+
+`results/scaling-quiet.tsv` records 60.25 s on the CPU against 10.85 s on the GPU at a 4 MiB shard size, a ratio of 5.556x, measured against the guest before it was committed here.
+Run against the committed ELF on a quiet machine, `tools/quickstart.sh` gives 59.84 s against 10.94 s, a ratio of 5.47x — inside 1.5% on every figure, and inside the run-to-run spread this project has recorded elsewhere.
+
+That is the link between the binary in `fib/elf/` and every number published from it.
+
 ## Running them
 
 The ladder runs all three:
