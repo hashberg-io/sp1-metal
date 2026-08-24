@@ -1,4 +1,4 @@
-# An intermittent hang in the Metal path on keccak
+# An intermittent hang in the Metal path
 
 Found by the benchmark suite on 2026-08-24, M4 Max, git 6d15661.
 
@@ -43,3 +43,14 @@ done
 ```
 
 Watch for a run that stops making progress; `ps -Ao etime,%cpu,command | grep sp1-profile-host` will show it at 0% CPU.
+
+## It is not keccak-specific
+
+Later the same day, the full tier reached `compressed` mode and `guests/fib --mode compressed` stalled the same way: **0.0% CPU for over sixteen minutes** with the machine 98% idle, on the warm-up run before any timed repeat.
+
+That widens the finding considerably. The hang was first seen on keccak at n>=2000 in `core` mode, and keccak's small size never hung; now it appears on the simplest guest in the suite in a different proof mode. So the trigger is not the Keccak chips, not the workload size, and not the node bound. Whatever it is, `fib` in `core` mode has proved through it hundreds of times without incident, which is why it took a fourteen-guest suite across two proof modes to surface.
+
+Two consequences for whoever picks this up:
+
+- **`compressed` mode is unmeasured because of it.** That is the mode D7's bar is actually written against, so the one number this project most needs is the one the hang blocks.
+- **Look for something shared** by keccak-at-scale and fib-under-recursion rather than for something in either. A lost wakeup between a command buffer's completion handler and the thread awaiting it fits both, and fits the earlier deferral hang recorded in `knowledge/backend.md`.
