@@ -6,6 +6,9 @@ Each directory here is an unmodified upstream release plus a recorded set of cha
 Every crate here is `MIT OR Apache-2.0`, the same terms this repository is offered under, and none of them ships a licence file inside its crates.io package; the canonical texts are at [LICENSE-APACHE](../../LICENSE-APACHE) and [LICENSE-MIT](../../LICENSE-MIT), and the attribution is in [NOTICE](../../NOTICE).
 Each crate's `CHANGES.md` lists every file that differs from the release, and each of those files carries a notice at its top saying so — which is what the Apache licence asks of a modified redistribution.
 
+A note for anyone running `cargo doc` over these: `sp1-hypercube` has six unresolved intra-doc links, in `ir/ast.rs`, `ir/expr.rs`, `ir/lean.rs`, `machine.rs` and `air/public_values.rs`.
+All six are upstream's and none is in a file this project touched, so they are left exactly as the release has them rather than quietly fixed — a fork that diverges for cosmetic reasons is harder to offer back.
+
 ## `sp1-hypercube`
 
 Vendored from `sp1-hypercube` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.

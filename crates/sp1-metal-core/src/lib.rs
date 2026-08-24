@@ -10,6 +10,10 @@
 //! dispatches reach is worse than no counter, because it reads as a measurement
 //! — and [`nocopy`] states the one rule the whole design rests on.
 
+// Every crate that dispatches reaches this one, so its surface is the only
+// one in the project a stranger has to read. Keep it documented.
+#![warn(missing_docs)]
+
 pub mod handoff;
 pub mod nocopy;
 pub mod queue;

@@ -22,22 +22,42 @@ const DFT_SRC: &str = include_str!("../../vendor/slop-dft/src/shaders.metal");
 pub fn shader_src() -> String {
     format!("{PROBE_SRC}\n{DFT_SRC}")
 }
+/// Threads per group the probes dispatch with unless a probe says otherwise.
+/// Large enough to fill a threadgroup on every M-series part measured here.
 pub const THREADGROUP_SIZE: u64 = 256;
 
+/// A Metal device with the probe library compiled against it.
+///
+/// Pipelines are compiled on first use and cached, so a probe that dispatches
+/// the same kernel a hundred times pays for it once.
 pub struct Gpu {
+    /// The system default device.
     pub device: Device,
+    /// One queue, shared by every dispatch this harness makes.
     pub queue: CommandQueue,
     library: Library,
     pipelines: RefCell<HashMap<String, ComputePipelineState>>,
 }
 
+/// The timings of a repeated measurement.
+///
+/// `best` is what the probes report: on a machine with other work on it the
+/// minimum is the reading least contaminated by that work.
 pub struct BenchTimes {
+    /// The fastest run, in seconds.
     pub best: f64,
+    /// The arithmetic mean of every run, in seconds.
     pub mean: f64,
+    /// Every run, in order, in seconds.
     pub times: Vec<f64>,
 }
 
 impl Gpu {
+    /// Opens the default device and compiles the probe library against it.
+    ///
+    /// The compile is the expensive part and macOS caches it against the
+    /// source, so the first run after any shader edit is far slower than the
+    /// rest -- a fact that has cost this project a wrong conclusion before.
     pub fn new() -> Result<Self, String> {
         let device = Device::system_default().ok_or("no Metal device found")?;
         let queue = device.new_command_queue();
@@ -47,6 +67,7 @@ impl Gpu {
         Ok(Self { device, queue, library, pipelines: RefCell::new(HashMap::new()) })
     }
 
+    /// The compute pipeline for kernel `name`, compiled once and cached.
     pub fn pipeline(&self, name: &str) -> Result<ComputePipelineState, String> {
         if let Some(pso) = self.pipelines.borrow().get(name) {
             return Ok(pso.clone());

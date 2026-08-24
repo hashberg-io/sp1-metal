@@ -16,8 +16,10 @@
 //!   already wrapped them;
 //! - a buffer is created over the pages where they lie, which is cheap but not
 //!   free and pins the pages for the dispatch;
-//! - the bytes are copied into a staging buffer, because the pointer or the
-//!   length is not page-aligned and `newBufferWithBytesNoCopy` will refuse.
+//! - the bytes are copied into a staging buffer, because the pointer is not
+//!   page-aligned and `newBufferWithBytesNoCopy` will refuse. The length is
+//!   not a requirement, though this project spent a long time believing it
+//!   was -- see [`crate::nocopy`].
 //!
 //! Outputs divide the same way, and their third case is the one worth naming:
 //! an output that stays on the device is an input the next kernel gets for
@@ -289,16 +291,37 @@ pub fn device_busy_s() -> (f64, f64) {
 /// One phase's totals, in bytes and seconds.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PhaseTotals {
+    /// Bytes a kernel read that were already in a device buffer, so nothing at
+    /// all had to happen to them. This is the number the backend exists to
+    /// maximise.
     pub in_resident: u64,
+    /// Bytes a kernel read through a buffer created over the caller's own
+    /// pages -- cheap, but not free, and it pins those pages for the dispatch.
     pub in_wrapped: u64,
+    /// Bytes a kernel read that had to be copied into a staging buffer first,
+    /// because the pointer was not page-aligned.
     pub in_copied: u64,
+    /// Seconds spent doing the copying counted by [`Self::in_copied`].
     pub in_copy_s: f64,
+    /// Bytes a kernel wrote that stayed on the device, which the next kernel
+    /// gets for free.
     pub out_resident: u64,
+    /// Bytes a kernel wrote straight into the caller's own pages.
     pub out_direct: u64,
+    /// Bytes a kernel wrote into a staging buffer that then had to be copied
+    /// back out.
     pub out_staged: u64,
+    /// Seconds spent doing the copying counted by [`Self::out_staged`].
     pub out_copy_s: f64,
+    /// How many kernel dispatches this phase issued.
     pub dispatches: u64,
+    /// Seconds the device spent executing this phase's kernels, as the command
+    /// buffers themselves report. This is a union over overlapping work, not a
+    /// sum, so it cannot exceed wall time.
     pub gpu_s: f64,
+    /// Seconds the calling threads spent between submitting this phase's work
+    /// and having it back -- so it includes waiting, and the gap between this
+    /// and [`Self::gpu_s`] is the thing most worth explaining.
     pub wall_s: f64,
 }
 

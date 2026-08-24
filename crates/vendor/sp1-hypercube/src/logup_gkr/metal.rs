@@ -357,9 +357,12 @@ fn bind_small(enc: &metal::ComputeCommandEncoderRef, index: u64, bytes: &[u8]) -
 ///
 /// Unified memory means the pages are already where the GPU can read them, and
 /// `newBufferWithBytesNoCopy` will take them as they are — but only if the
-/// pointer and length are page-aligned, which the global allocator does not
-/// promise. When they are, this is free; when they are not, it costs a copy,
-/// and [`no_copy_fraction`] reports how often each happened.
+/// pointer is page-aligned, which the global allocator does not promise. The
+/// length does not matter; see `sp1_metal_core::nocopy` for why, and for the
+/// measurement that cost this project a great deal before it was made. When
+/// the pointer is aligned this is free; when it is not, it costs a copy, and
+/// `sp1_metal_core::stats::PhaseTotals::residency` reports how often each
+/// happened.
 fn upload(bytes: &[u8]) -> Buffer {
     let device = &context().device;
     let aligned = sp1_metal_probes::nocopy::takeable(bytes.as_ptr());

@@ -103,16 +103,16 @@ fn upload(device: &Device, words: &[u32]) -> Buffer {
     }
     if bytes > 0 && crate::nocopy::takeable(words.as_ptr().cast()) {
         crate::stats::record_input(crate::stats::Input::Wrapped, bytes, 0);
-        // SAFETY: the buffer borrows `words` for the dispatch, which is awaited
-        // before this returns.
-        return unsafe {
-            device.new_buffer_with_bytes_no_copy(
-                words.as_ptr().cast(),
-                bytes as u64,
-                MTLResourceOptions::StorageModeShared,
-                None,
-            )
-        };
+        // The binding does not mark this unsafe, but the obligation is real:
+        // the buffer borrows `words` and the borrow must outlive the *wait*,
+        // not merely the call. Every caller here awaits the dispatch before
+        // returning.
+        return device.new_buffer_with_bytes_no_copy(
+            words.as_ptr().cast(),
+            bytes as u64,
+            MTLResourceOptions::StorageModeShared,
+            None,
+        );
     }
     // A copy is the host reading these words; see `nocopy::read_only`.
     crate::queue::drain();

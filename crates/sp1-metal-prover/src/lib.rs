@@ -9,5 +9,7 @@
 
 pub use sp1_hypercube::metal::{MetalRoundOps, STATS};
 
+/// The base field the kernels are written for.
 pub type F = slop_koala_bear::KoalaBear;
+/// Its degree-4 extension, which is what a sumcheck round carries.
 pub type EF = slop_algebra::extension::BinomialExtensionField<F, 4>;

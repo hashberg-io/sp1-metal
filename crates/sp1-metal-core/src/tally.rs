@@ -55,11 +55,20 @@ pub struct Span {
 }
 
 impl Span {
+    /// Starts measuring, under the counter `name`.
+    ///
+    /// Nothing is recorded until [`Span::stop`] is called, so a span that is
+    /// dropped instead costs nothing and reports nothing.
     #[must_use]
     pub fn start(name: &'static str) -> Self {
         Self { name, started: Instant::now() }
     }
 
+    /// Stops measuring and records the elapsed time against `cells`.
+    ///
+    /// `cells` is whatever unit of work makes the counter comparable with its
+    /// neighbours -- field elements, rows, dispatches -- and may be zero for a
+    /// span that is only ever read as a time.
     pub fn stop(self, cells: usize) {
         record(self.name, cells, self.started.elapsed().as_nanos() as u64);
     }
