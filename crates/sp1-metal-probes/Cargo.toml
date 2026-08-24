@@ -2,6 +2,9 @@
 name = "sp1-metal-probes"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Per-kernel parity and throughput probes for an SP1 Metal proving backend on Apple Silicon."
 publish = false
 
@@ -13,11 +16,16 @@ serde.workspace = true
 serde_json.workspace = true
 slop-algebra.workspace = true
 slop-alloc.workspace = true
+slop-challenger.workspace = true
+slop-commit.workspace = true
 slop-dft.workspace = true
+slop-merkle-tree.workspace = true
 slop-koala-bear.workspace = true
 slop-multilinear.workspace = true
+slop-sumcheck.workspace = true
 slop-symmetric.workspace = true
 slop-tensor.workspace = true
+sp1-metal-core.workspace = true
 
 [[bin]]
 name = "probes"

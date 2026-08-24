@@ -27,11 +27,27 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    Sumcheck and BaseFold rounds halve every round and each round's challenge comes from the previous round's output, so the tail of a fold is a sequence of ever-smaller kernels each paying a full host round trip; the probe also runs the same rounds batched into one submission, which is the ceiling a GPU-side challenger would unlock.
 8. `probes encode` — the Reed-Solomon encode inside a BaseFold commitment, which is a radix-2 DFT at the FRI blowup and is most of what `commit traces` spends its time on.
    It times slop's own CPU encoder, and separately runs one radix-2 butterfly stage — the DFT's inner loop — GPU against packed CPU.
-   A DFT is a sequence of those stages, so the stage ratio is the floor the encode gets when neither side keeps a block resident across stages; a blocked implementation moves both sides toward their compute rooflines, and the encode's true factor lies between.
-   A full Metal encode matching slop's bit-reversed convention is still missing.
+   A DFT is a sequence of those stages, so the stage ratio is the floor the encode gets when neither side keeps a block resident across stages.
+   It also runs a complete Metal encode and a packed CPU one, both parity-checked against slop's output element for element at a shape with and a shape without the tiled tail.
+   Both are decimation-in-frequency: slop asks for bit-reversed rows, and that is what a Gentleman-Sande transform produces from natural-order input, so no permutation is needed at all; at a blowup of two the first stage's partners are the zero padding, so it degenerates to a spread.
 9. `probes gkr` — one sumcheck round of a logup GKR layer, in the shape `sp1_hypercube::logup_gkr` computes it: over each pair of consecutive entries, a numerator term `eq·(den_0·num_1 + den_1·num_0)` and a denominator term `eq·(den_0·den_1)` at each of two evaluation points, all in the degree-4 extension.
    This is the prover's largest phase, and the round's arithmetic intensity — five extension multiplies per row against eighty bytes read — puts both the GPU and the CPU on the compute side of their rooflines.
-10. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+10. `probes challenger` — the duplex sponge SP1 derives every Fiat-Shamir challenge from, running on the GPU, and a complete BaseFold-shaped fold with the challenger in the loop: reduce the working set to the round message, observe it, sample the fold challenge, fold.
+   It times that fold four ways — challenger on the host or on the device, one fold at a time or several in flight — because the round-trip cost `probes launch` measures is a latency, and a prover with many folds available need not pay it once per fold.
+   Parity is against slop's own `DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>`: a scripted observe/sample sequence that crosses the sponge's rate boundary in both directions, and then the challenges and final value of the whole fold, for both the host-driven and device-driven paths.
+11. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+
+## The acceptance study
+
+Separate from the probes, and the thing that says whether any of it matters: `tools/scaling.py` over a table of paired proofs, each run twice through the same binary — once with `SP1_METAL_MIN_ENTRIES` set high enough that every layer stays on the CPU, once with the GPU path as configured. Running the same binary both ways is what makes the ratio mean something: it holds the build, the machine and the workload fixed and varies only where the arithmetic runs.
+
+The study varies three things separately, because "a bigger workload" conflates two different experiments:
+
+- **Shard size** (`SHARD_SIZE`, default `1 << 24` cycles) at fixed total work. Larger shards mean fewer of them and bigger GKR layers in each, which is what the kernels are sensitive to.
+- **Total work** at fixed shard size. This adds shards of the same size rather than making them bigger, so it isolates whatever comes from having more proofs in flight.
+- **The computation itself**, across guests with different chip mixes — arithmetic, memory and bitwise — since a layer's width is the chip's interaction count.
+
+`sp1-profile-host --execute` reports the cycle count without proving, which is how a workload is placed on those axes before spending minutes on it.
 
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.

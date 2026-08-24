@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Streamed elementwise field multiplication, base and degree-4 extension,
 //! parity-checked against slop's field types.
 

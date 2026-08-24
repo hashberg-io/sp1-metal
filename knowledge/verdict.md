@@ -1,32 +1,44 @@
 # Verdict
 
-The question this project set out to answer was whether an SP1 Metal backend is worth building for Apple Silicon, against the bar [desiderata](desiderata.md) D7 sets: 5× end to end versus the CPU prover.
+The question this project set out to answer was whether an SP1 Metal backend is worth building for Apple Silicon, against the bar [desiderata](desiderata.md) D7 sets: 5x end to end versus the same machine's CPU prover.
 
-**It is not, on this hardware.** A complete port of every GPU-able phase predicts **3.3×** on an M4 Max, with a plausible range of 2.2× to 4.7×. The evidence is in [measurements.md](measurements.md); the suite that produced it is described in [probes.md](probes.md).
+**The backend was built, and it works.** Four phases of a shard proof run on the GPU — the logup GKR round, the zerocheck reduction, the trace commitment and its encode, and the jagged PCS opening — and a real proof verifies. On an M4 Max, core shard proving measures **5.556x** against the same binary with every switch forced off: 10.85 s against 60.25 s, fib at n=2,000,000 and a 4 MiB shard size. Across shard sizes from 1 MiB to 16 MiB, three workload shapes and four workload sizes, the envelope is **3.71x to 5.63x**. The ladder is [`results/scaling-quiet.tsv`](../results/scaling-quiet.tsv) and [`tools/quickstart.sh`](../tools/quickstart.sh) reproduces a row of it.
 
-Two things outrank that verdict, and both were found while establishing it.
+**D7 is nonetheless not met, and 5.556x is not D7's quantity.** D7 asks for wall-clock over execute to *compressed* proof on the snark-lifter's classical-128 lift. What is measured above is *core* shard proving on a synthetic workload. In this project's own recorded profile the four accelerated phases are 94.5% of prover thread-time; the remaining 5.5% — recursion, trace generation, setup, execution — is essentially untouched. Compressing 94.5% by 5.556x and leaving the rest alone puts an end-to-end figure near **4.5x**, or 4.7x if recursion keeps the 2.54x measured for it. Below the bar, and unmeasured besides.
 
-## Why it falls short
+So the honest summary is that **the earlier recommendation was wrong and its measurements were not.**
 
-Not for want of kernels. The zerocheck and GKR kernels run within a few percent of the machine's measured field-multiply roofline; there is nothing left in them to extract. The limit is the machine. On an M4 Max the GPU is **3.21×** the CPU on register-resident KoalaBear multiplies and **1.44×** on streaming, because unified memory means the twelve NEON performance cores already saturate two thirds of the pool the GPU draws from. Every compute-bound phase is capped near the first number, every memory-bound phase near the second, and the prover is a mixture of the two.
+## What the earlier verdict said, and how it stands
 
-The phase profile of a real proof — the ProofofSeed snark-lifter's compressed proof at n=8, 1007 s wall — is GKR 46.8%, PCS opening 19.0%, zerocheck 15.0%, commit 13.7%. The kernels measured against packed CPU baselines give 6.40×, 1.15–3.09×, 4.48× and 1.97–5.13× respectively. Amdahl does the rest.
+It predicted that a complete port would reach 3.3x against a *packed* CPU baseline and 6.5x against the prover as it ships, and it recommended not building on the strength of the first number.
 
-## The two findings that matter more
+- The recommendation was wrong. A partial port — four phases, not every GPU-able one — reached 5.56x against the shipped prover.
+- The prediction against that same baseline was 6.5x, so the model was **optimistic by about 15%**, not pessimistic. It was not beaten; it was undershot by a smaller port.
+- The packed-CPU reading of 3.3x has not been refuted, because **the CPU prover is still scalar.** Nothing in this work changed that, so the comparison the earlier document called the honest one between two pieces of silicon remains unmade.
 
-**The CPU prover is not using this machine's vector units.** SP1 Hypercube does its field arithmetic on scalar values; packing reaches the prover only where Plonky3 puts it, inside the Merkle tree and the DFT. Running the same algorithms packed measures 3.26× on the GKR round and 2.31–4.65× on the folds, across roughly 80% of prover time. That is a smaller, safer piece of work than a GPU backend with much of the same payoff, and until it is done any GPU ratio quoted against the prover as it ships is charging the accelerator for work the CPU declined to do.
+That last point is the one to carry forward. It is set out below and it is unchanged.
 
-**The workload is GPU-shaped; this GPU is the problem.** Only 3.3% of the proof is host-resident, so the ceiling for an accelerator is about 31×, and shard proving is embarrassingly parallel with a queue that never drains. On a machine with a discrete GPU the same proof projects to roughly 90 seconds against 1007 — about 10× — using SP1's own CUDA prover rather than anything written here. A six-GPU box would keep four or five cards busy on one proof and scale near-linearly across a batch; the absence of GPU peer-to-peer does not matter, because shard proofs are independent and only small proof objects cross between cards.
+## Why the machine still caps this
 
-That projection is a projection. Everything in [measurements.md](measurements.md) is measured on the machine it describes; the NVIDIA figures are scaled from published bandwidth and shader counts and have not been run.
+Not for want of kernels. The zerocheck and GKR kernels run within a few percent of the machine's measured field-multiply roofline. The limit is the machine: on an M4 Max the GPU is **3.21x** the CPU on register-resident KoalaBear multiplies and **1.44x** on streaming, because unified memory means the twelve NEON performance cores already saturate two thirds of the pool the GPU draws from.
+
+The built backend now sits against a second limit that the earlier model did not anticipate. It is bound by its own dependency structure rather than by either silicon ratio: the device is busy about 48% of the time and the CPU uses about 5 of 16 cores, and neither more shard concurrency nor deferred submission moves it. Five rounds of levers took it from 3.74x to 5.56x, and the last three moved almost nothing; [next-levers.md](next-levers.md) records every one, including eight measured negative results kept behind switches so that no question gets asked twice.
+
+## The finding that still outranks the verdict
+
+**The CPU prover is not using this machine's vector units.** SP1 Hypercube does its field arithmetic on scalar values; packing reaches the prover only where Plonky3 puts it, inside the Merkle tree and the DFT. Running the same algorithms packed measures 3.26x on the GKR round and 2.31–4.65x on the folds, across roughly 80% of prover time.
+
+That is a smaller, safer piece of work than a GPU backend with much of the same payoff, and it is why the 5.556x above is quoted as what it is — a ratio against the prover as it ships, on a machine whose CPU prover has declined to use its own SIMD. Both readings are true and they measure different things. This repository now contains four CPU fixes found while chasing the GPU, none of which contain any Metal, which is a small down payment on that observation and no more.
 
 ## What would change the verdict
 
-- **Pack the CPU prover first.** It moves the baseline, and the honest comparison cannot be made until it has moved.
-- **A full Metal Reed-Solomon encode.** The commit phase is 13.7% and its factor spans 1.97× to 5.13× because only the DFT's butterfly stage is measured, not a blocked implementation. This is the suite's largest remaining gap.
-- **A GPU-side challenger.** At 87 µs per command-buffer round trip, sumcheck and BaseFold tails are latency-bound; batching the rounds of one fold into a single submission measured 4.5× faster. This is a design constraint on any Metal backend, not an optimisation to add later.
-- **Different Apple silicon.** The verdict is a statement about a compute ratio of 3.2× and a bandwidth ratio of 1.4×. A part with a larger GPU against the same CPU would move both; nothing about the proof system needs to change.
+- **Measure D7 as written.** Execute to compressed proof, on the canonical workload, wall-clock. Nothing here has done that, and the arithmetic above says it would land below the bar.
+- **Pack the CPU prover.** It moves the baseline, and the honest silicon-to-silicon comparison cannot be made until it has moved.
+- **Accelerate what is left.** The 5.5% outside the four phases becomes the ceiling once the phases themselves are done: at 5.56x on 94.5%, Amdahl caps the whole proof near 18x no matter what happens next to the GPU code.
+- **Different Apple silicon.** The compute ratio of 3.2x and the bandwidth ratio of 1.4x are what bound the kernels. A part with a larger GPU against the same CPU would move both, and nothing about the proof system would need to change.
 
 ## What exists
 
-The probe suite is the durable output. It is nine probes, each parity-checked against slop 6.4.0 and refusal-tested, a span profiler for the SP1 CPU prover, a phase model, and the discipline that made the numbers trustworthy: always measure against packed CPU baselines, never scalar ones and never the shipped loops. The Metal kernels for the hot primitives — Poseidon2, zerocheck, GKR, folds, fix-last-variable, NTT butterfly — exist and are correct, and would be the starting point for a backend if the hardware case ever changes.
+A working Metal backend for SP1 Hypercube 6.4.0, as five vendored crates plus a leaf crate of shared machinery, every GPU path behind a default-off cargo feature and a runtime switch, five of them able to run both paths and compare on every call of a real proof. [`USING.md`](../USING.md) is how to put it in your own program; [backend.md](backend.md) is how it works.
+
+The probe suite that preceded it also stands: nine probes parity-checked against slop 6.4.0, a span profiler, a phase model, and the discipline that made the numbers trustworthy — measure against packed CPU baselines, never scalar ones, and check what a number measures before concluding from it. That discipline is the reason this document can say which of its own earlier claims were wrong and which were not.

@@ -1,10 +1,15 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+pub mod backend;
+pub mod challenger;
 pub mod encode;
 pub mod fieldops;
 pub mod gkr;
 pub mod fold;
 pub mod imul;
 pub mod launch;
+pub mod merkle;
 pub mod poseidon2;
+pub mod sumcheck;
 pub mod triad;
 pub mod zerocheck;
 

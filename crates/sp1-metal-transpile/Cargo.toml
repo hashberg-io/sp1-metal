@@ -1,0 +1,36 @@
+[package]
+name = "sp1-metal-transpile"
+version = "0.1.0"
+edition = "2021"
+authors = ["Hashberg Ltd"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashberg-io/sp1-metal"
+description = "Turns SP1 chips' symbolic AIR constraints into Metal, and measures what the result costs."
+publish = false
+
+# Deliberately outside the workspace: sp1-core-machine pulls a very large
+# dependency tree, and only the transpiler needs it.
+
+[dependencies]
+metal = "0.29"
+rand = "0.8"
+serde_json = "1"
+slop-air = "=6.4.0"
+slop-algebra = "=6.4.0"
+slop-koala-bear = "=6.4.0"
+slop-matrix = "=6.4.0"
+slop-uni-stark = "=6.4.0"
+sp1-core-machine = "=6.4.0"
+sp1-hypercube = "=6.4.0"
+sp1-primitives = "=6.4.0"
+
+[profile.release]
+lto = "thin"
+
+# The GKR prover cannot be reached from outside sp1-hypercube, so this
+# dependency graph resolves that crate to the fork in crates/vendor. Patching
+# rather than depending by path matters: sp1-core-machine depends on
+# sp1-hypercube too, and both must resolve to the same copy for the types to
+# unify.
+[patch.crates-io]
+sp1-hypercube = { path = "../vendor/sp1-hypercube" }

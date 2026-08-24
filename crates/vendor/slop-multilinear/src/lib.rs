@@ -1,0 +1,28 @@
+// Modified from slop-multilinear 6.4.0 by the sp1-metal project; see CHANGES.md.
+#![allow(clippy::disallowed_types)]
+mod base;
+mod eval;
+mod fold;
+mod lagrange;
+mod mle;
+mod padded;
+mod pcs;
+mod point;
+mod restrict;
+mod virtual_geq;
+
+/// Where the folding time goes, and eventually where it runs. Off unless the
+/// `metal` feature is on.
+#[cfg(feature = "metal")]
+pub mod metal;
+
+pub use base::*;
+pub use eval::*;
+pub use fold::*;
+pub use lagrange::*;
+pub use mle::*;
+pub use padded::*;
+pub use pcs::*;
+pub use point::*;
+pub use restrict::*;
+pub use virtual_geq::*;

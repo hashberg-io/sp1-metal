@@ -1,18 +1,38 @@
 [workspace]
 resolver = "2"
-members = ["crates/sp1-metal-probes"]
-exclude = ["crates/sp1-profile-host"]
+members = ["crates/sp1-metal-core", "crates/sp1-metal-probes", "crates/sp1-metal-kernelbench"]
+exclude = [
+    "crates/sp1-profile-host",
+    "crates/sp1-metal-transpile",
+    "crates/sp1-metal-prover",
+    # The vendored crates are their own workspaces. Without this they are
+    # neither members nor excluded, and cargo refuses to build any of them in
+    # place -- "believes it's in a workspace when it's not".
+    "crates/vendor/sp1-hypercube",
+    "crates/vendor/slop-dft",
+    "crates/vendor/slop-jagged",
+    "crates/vendor/slop-multilinear",
+    "crates/vendor/slop-basefold-prover",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+authors = ["Hashberg Ltd"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashberg-io/sp1-metal"
 
 [workspace.dependencies]
 slop-algebra = "=6.4.0"
 slop-alloc = "=6.4.0"
+slop-challenger = "=6.4.0"
+slop-commit = "=6.4.0"
 slop-dft = "=6.4.0"
+sp1-metal-core = { path = "crates/sp1-metal-core" }
+slop-merkle-tree = "=6.4.0"
 slop-koala-bear = "=6.4.0"
 slop-multilinear = "=6.4.0"
+slop-sumcheck = "=6.4.0"
 slop-symmetric = "=6.4.0"
 slop-tensor = "=6.4.0"
 metal = "0.29"

@@ -2,14 +2,51 @@
 name = "sp1-profile-host"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hashberg Ltd"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashberg-io/sp1-metal"
 description = "Minimal SP1 CPU-prover host that emits span timings for tools/span_profile.py."
 publish = false
 
 # Deliberately outside the workspace: sp1-sdk pulls a very large dependency
 # tree, and this host is only built for profiling runs.
 
+[features]
+# Turns on the fork's Metal GKR round for the whole dependency graph: cargo
+# unifies features, so naming it here reaches sp1-sdk's copy of the crate too.
+metal = [
+    "sp1-hypercube/metal",
+    "slop-dft/metal",
+    "slop-multilinear/metal",
+    "slop-basefold-prover/metal",
+]
+# A general-purpose allocator in place of the system one. Off, and staying off:
+# it made the acceptance workload 19.72 seconds against 13.33, with 14.3 million
+# page reclaims against 3.39 and 83 GB of peak resident memory against 32. Kept
+# so that "would a different allocator help?" stays answered.
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
+sp1-hypercube = "=6.4.0"
+# Named only so that the feature above can reach it: the encode lives one level
+# below the basefold prover, which is where this host's traces are committed.
+slop-dft = "=6.4.0"
+slop-multilinear = "=6.4.0"
+slop-jagged = "=6.4.0"
+slop-basefold-prover = "=6.4.0"
+sp1-metal-core = { path = "../sp1-metal-core" }
+
 anyhow = "1"
 bincode = "1.3.3"
 sp1-sdk = "=6.4.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+mimalloc = { version = "0.1.52", optional = true }
+
+# Prove through the fork in crates/vendor, not the published crate, so that
+# what this host measures is what this project builds.
+[patch.crates-io]
+sp1-hypercube = { path = "../vendor/sp1-hypercube" }
+slop-jagged = { path = "../vendor/slop-jagged" }
+slop-multilinear = { path = "../vendor/slop-multilinear" }
+slop-basefold-prover = { path = "../vendor/slop-basefold-prover" }
+slop-dft = { path = "../vendor/slop-dft" }

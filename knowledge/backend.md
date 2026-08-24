@@ -1,0 +1,664 @@
+# Building the backend
+
+The record of executing steps 5 onward of [backend-plan.md](backend-plan.md), after the three spikes and the go/no-go recorded in [spikes.md](spikes.md).
+
+## 5. `MetalBackend`
+
+slop's device seam is one small unsafe trait, `Backend`, over `Allocator + DeviceMemory + Clone + Debug + Send + Sync + 'static`, and everything above it — `Buffer`, `Mle`, `Point`, `Tensor`, `Evaluations` — carries the backend as a type parameter defaulting to `CpuBackend`.
+`crates/sp1-metal-probes/src/backend.rs` implements it.
+
+On unified memory the implementation is unusually thin, and this is the one place Apple's architecture is an advantage rather than the constraint the rest of the project keeps hitting.
+An `MTLResourceStorageModeShared` buffer is coherent between CPU and GPU and exposes a host pointer, so an allocation *is* a Metal buffer and a Metal buffer *is* host memory.
+`allocate` creates a shared buffer and hands back its `contents()` pointer, registering the mapping in an address-keyed table; `deallocate` drops the buffer; and all three copy directions in `DeviceMemory` are the same `memcpy`, because there are no two places for the data to be.
+`buffer_for` runs the table backwards: given any pointer slop hands out, it finds the `MTLBuffer` behind it and the offset within it, which is the whole of "uploading" a buffer to the GPU.
+
+**Verified end to end.** The parity check allocates a `slop_alloc::Buffer<u32, MetalBackend>` through slop's own API, fills it through its host pointer, binds it to a Metal kernel by pointer lookup, folds it on the GPU, reads the result back through the pointer, and compares against slop's `fold_mle`.
+It also asserts that the allocations reached the backend and that none leak.
+The refusal test recorded allocation lengths as zero, which makes the pointer lookup fail to resolve; the check failed with exactly that, and was restored.
+
+**What the seam costs.**
+
+| on 268 MB | |
+|---|---|
+| making it visible to a kernel | **0 ns** (a table lookup, below timer resolution) |
+| the kernel itself (a base-field fold) | 1.17 ms |
+| the staging copy a separate-memory backend would pay first | 3.69 ms at 73 GB/s |
+
+So on this architecture the transfer a CUDA backend must perform before it can start would cost **3.17x the kernel's own runtime** for a bandwidth-shaped kernel, and here it does not exist.
+That is a conservative statement of the advantage: 73 GB/s is a single-threaded host `memcpy`, and a real host-to-device transfer over PCIe would be slower still.
+
+It does not rescue the verdict — 3.17x of nothing is still nothing when the kernel itself is only 1.4x the CPU — but it is the reason the integration work in the remaining steps is small where a CUDA port's would be large.
+
+## 6. The PCS: commit done, opening not
+
+`MultilinearPcsProver` is a small trait with two halves — `commit_multilinear` and `prove_trusted_evaluation` — and it is a real type parameter of `ShardProver`, so replacing it needs no fork.
+The commit half is built and matches slop exactly. The opening half is not, and is the larger job.
+
+### The Merkle tree, and a detail that would have broken everything
+
+slop commits a tensor by hashing each row of the row-major matrix into a digest with `PaddingFreeSponge<KoalaPerm, 16, 8, 8>` and compressing pairs up the tree with `TruncatedPermutation<KoalaPerm, 2, 8, 16>`.
+Both are the width-16 Poseidon2 permutation the suite already parity-checks, so both are one kernel, and neither needs the host between layers: the whole tree is a single submission.
+
+Building it against slop's own `Poseidon2KoalaBear16Prover` surfaced something a from-scratch implementation would have got wrong.
+**The commitment is not the Merkle root.**
+slop finishes with `compress([root, hash([log_height, total_width])])`, binding the shape of the committed matrix into the commitment, so a backend that returned the bare root would produce commitments the verifier rejects — and would pass every internal consistency check while doing it.
+Parity now covers five shapes, including widths that are not multiples of the sponge's rate; swapping the order of a node's two children fails it.
+
+| Merkle tree over 2^21 rows of width 64, 18.9 M permutations | | |
+|---|---|---|
+| slop's own commitment | 5577 ms | 3.4 M perm/s |
+| Metal | 36.6 ms | 516 M perm/s |
+
+The ratio of 152x is **not** a hardware ratio and should not be quoted as one.
+slop's commitment reaches 3.4 M permutations per second against the **38.5 M** the same machine's packed CPU permutation reaches in the `poseidon2` probe, so most of that factor is CPU headroom of the same kind the encode spike found.
+The hardware ratio for this work is the `poseidon2` probe's 15.7x; the kernel's own 516 M perm/s against that probe's 605 M is the tree paying for reading the codeword.
+
+### The sumcheck seam
+
+The three traits in `slop_sumcheck::backend` are the designed extension point for a device backend, and the zerocheck path is wired through them on the CPU side.
+They are now implemented for `MetalBackend` over a `MetalMle` whose values live in a `slop_alloc::Buffer<_, MetalBackend>`.
+
+**slop's own `reduce_sumcheck_to_evaluation` then runs unmodified and produces the identical proof** — the same univariate messages, the same point, the same final evaluation — whether it folds slop's CPU `Mle` or a `MetalMle`. Reading the odd-indexed sum instead of the even one fails it at the first round.
+
+| sumcheck over 2^22 extension values, 22 rounds | | |
+|---|---|---|
+| slop `Mle` on `CpuBackend` | 12.00 ms | 546 us/round |
+| `MetalMle` on `MetalBackend` | 5.09 ms | 231 us/round |
+| | | **2.36x** |
+
+Getting there took three fixes and one correction, all of which are lessons for the rest of the port.
+The backend's allocator needed a **reuse pool**: a sumcheck asks for the same handful of buffer sizes every round, and mapping fresh pages each time cost more than the round's arithmetic.
+The reduction's scratch buffers needed to be allocated **once** rather than per round.
+And the fold needed to stop blocking: command buffers on one queue run in order, so the next round's reduction is already sequenced behind the fold and the host learns nothing by waiting — but a host *read* of the folded values does have to wait, which is a real synchronisation obligation and briefly a real bug.
+The correction was to the measurement: an early version timed the polynomial's construction along with the proof, which on the Metal side meant converting four million extension elements into Montgomery form, and understated the result.
+
+2.36x against a scalar CPU baseline is modest, and the reason is the one the challenger spike found.
+The driver observes each round's message into a **host** challenger and samples the next alpha there, so every round is a blocking round trip no matter how fast the kernels are — twenty-two of them here, in upstream's own control flow rather than in a probe.
+The prover recovers this not by changing the driver but by having many sumchecks in flight at once, which is exactly what the challenger spike measured and what shard concurrency provides.
+
+### What is not done
+
+`prove_trusted_evaluation` — the jagged sumcheck, the stacking, BaseFold's folding rounds, the FRI query openings and their Merkle paths — is not implemented.
+That is the larger half of the PCS phase's 19%, and with it steps 7 through 9 remain open.
+
+## 7. GKR, through a fork
+
+The plan's structural claim was that GKR sits behind concrete CPU types and needs a vendored fork.
+It is stronger than a reading of the types: `GkrProverImpl::prove_gkr_circuit` is public and would give a reference to check against, but it takes a `LogupGkrCpuCircuit` whose `layers` field is **private, with no public constructor**, so the circuit cannot be built, driven or parity-checked from outside the crate.
+Attempting it fails to compile.
+
+So `crates/vendor/sp1-hypercube` is upstream 6.4.0 with a recorded set of changes, and consumers reach it through `[patch.crates-io]` — which matters, because `sp1-core-machine` depends on `sp1-hypercube` too and both must resolve to the same copy for the types to unify.
+
+### The seam
+
+A GKR round's message is built from three sums over the layer, and everything else about a round — layer transitions, padding and eq adjustments, interpolating the message from its evaluations — is the same wherever those sums are computed.
+`LogupRoundOps` names exactly that boundary, with `CpuRoundOps` holding the code that was inline, moved verbatim.
+The fold went behind it too, at layer granularity rather than per polynomial, because a layer has one polynomial per chip and there are of the order of a hundred chips.
+`DefaultRoundOps` selects the implementation, so turning the `metal` feature on moves the phase to the GPU **without a type changing anywhere downstream, sp1-sdk included**.
+
+The crate's own GKR tests pass unmodified beyond the new struct field, which is what establishes the CPU path is untouched.
+
+### What it measures, in isolation
+
+On a shard-sized layer — 2^16 rows, 108 interactions across 8 chips — against the same layer on the CPU:
+
+| | | |
+|---|---|---|
+| round reduction | 12.0x | |
+| fold | 3.7x | after batching; 1.8x before |
+| **whole round** | **9.06x** | 6.0x before batching, 4.3x with the fold left on the CPU |
+
+Feeding 9.06x into the model puts a complete port at **8.15x** end to end.
+
+Parity covers both halves — the reduction against the CPU one for base and extension layers, the fold against slop's own `fix_last_variable` — across several chip mixes and both even and odd row counts, the odd case being where the last row pair is half padding.
+Squaring one denominator, or dropping the odd-row guard, each fails exactly the test that covers it.
+
+Writing those tests found a real bug rather than a test artefact: the scratch buffer for per-threadgroup partials was a single shared allocation, which two concurrent reductions race on. SP1 proves shards concurrently, so it would have corrupted proofs under load. It is a checkout pool now.
+
+### What it does in the real prover: not yet a win
+
+Wired into an actual proof, the picture changes, and this is the honest result.
+A synthetic layer is a handful of chips all of the same size; a real one is about a hundred chips whose sizes span orders of magnitude, and the cost of *preparing* a dispatch — creating Metal buffer objects, which is a call into the kernel — is paid per chip regardless of how little that chip has in it.
+
+Three rounds of fixes each moved it a long way and none was enough:
+
+- **Batching.** One command buffer per layer instead of one per chip, and one per layer's folds instead of one per polynomial. Worth 6.0x to 9.06x on the synthetic layer.
+- **A size threshold.** Layers below a few thousand entries stay on the CPU, since below that the dispatch costs more than the arithmetic saves. Overridable with `SP1_METAL_MIN_ENTRIES`, which the tests set to zero so small shapes still reach the kernels.
+- **Inline arguments.** The small per-chip slices — a chip's eq values, a fold's padding — go into the command buffer directly rather than into freshly created buffers.
+
+- **A per-chip decision.** The threshold was being applied to the layer, so a layer that cleared it still dispatched its ninety small chips. Each chip and each polynomial now decides for itself, with the small ones summed on the CPU and added to what the kernels return. That is exact because the sums are additive, and a test builds a layer whose chips straddle the threshold to check it.
+
+The lesson is the one the challenger spike ended on, now at prover scale: the arithmetic was never the problem. Every gain here came from submitting less often, and every setback from a fixed cost paid per dispatch rather than per unit of work.
+
+- **A parallel fallback.** The per-chip CPU path was a serial loop where upstream's reduction is rayon-parallel, so every chip below the threshold was computed about ten times slower than if the seam had never been touched. This one was isolated by disabling the kernels entirely and finding the Metal build *still* slow, which is a diagnostic worth remembering.
+- **A command buffer taken only when there is a dispatch for it.** The reduction took one up front and returned without committing it whenever every chip fell to the CPU. An uncommitted command buffer holds a slot in its queue, and a queue with no free slots blocks the next request for one, so a proof stalled after the first few dozen such rounds.
+
+### Where it stands
+
+The pieces are in place and correct: the seam, both kernels, both halves of the round, the per-chip decision, and parity at every level including layers whose chips straddle the threshold.
+In isolation the round is **9.06x**.
+
+### A measurement that was not measuring the prover
+
+Several rounds of investigation here chased a phantom, and the record keeps them because the mistake is an easy one to repeat.
+
+The integration appeared to hang, then to be merely slow, then to be killed. The exit status was **137** — SIGKILL — and the eventual cause was not the prover at all: the runs were invoking a copy of the binary in `/tmp`, made with `cp` from `target/release` while a `cargo build` was concurrently rewriting that file. On Apple Silicon a binary whose ad-hoc signature does not match its contents is killed by the kernel at exec, before `main`. The copy would not even print a usage error; the same binary run from `target/release` works.
+
+So every "the Metal prover is slow" result from that stretch measured a corrupted file. Two lessons, in order of how much time each would have saved:
+
+- **Check the exit status before theorising about performance.** 137 is not slow, and it was there from the first attempt.
+- **Never benchmark a copy.** Run the artefact where the build system put it, or the thing under test is not the thing you built.
+
+Real defects were found and fixed along the way and all of them stand — the fixes below are each backed by an isolated measurement, not by the integration runs. But no conclusion about integrated performance should be drawn from that stretch, and none is drawn here.
+
+### The stall, and what it turned out to be
+
+Run from `target/release`, the Metal-enabled prover used to **stall** — not run slowly, stop. A sample of the live process showed 36 threads, the main thread and sixteen tokio workers and the rayon pool, every one parked for the whole sampling window with no frame anywhere in `sp1_hypercube`, in this crate, or in Metal.
+
+**The cause was an index, and it is fixed.** Upstream increments `interaction_offset` outside its `if let Some(inner)`, so a chip that contributes nothing still consumes its share of `eq_interaction`. This crate's loop skipped the increment when it skipped the chip, which misaligns the eq slice for every chip after the first empty one and eventually indexes past the end. A hand-built layer never exercises it, because its chips all have rows. A real one does.
+
+With that fixed, the workload that had been hanging **proves and verifies in 15.17 s**, at the same threshold that stalled before.
+
+Finding it took reading the CPU code against the kernel line by line rather than another experiment, after the threshold bisect had narrowed the failure to the dispatching path and the harness had ruled out size as the trigger. The parked-threads signature was a panic in a `spawn_blocking` task after all — swallowed, leaving the pipeline waiting on a sender that would never send.
+
+### End to end
+
+The same binary, back to back, on a core proof of a fibonacci guest:
+
+| core proof, fibonacci guest | every layer on the CPU | the GPU path | |
+|---|---|---|---|
+| 200,000 iterations | 15.70 s, 15.83 s | 15.01 s, 15.23 s | 1.04x |
+| 2,000,000 iterations | 64.69 s | 53.59 s | **1.21x** |
+
+Both prove and verify at both sizes. **The Metal GKR round runs inside a real SP1 proof and the proof is accepted**, which is the thing steps 6 and 7 existed to establish.
+
+The gain grows with the workload, which is the shape to expect and worth more than either number on its own: the smaller proof's layers mostly fall below the dispatch threshold and GKR is a small share of it, while the larger one produces layers big enough for the kernels to earn their dispatch. Neither is D7's workload, and neither is evidence for the model's 8.15x — that projection is about a compressed proof of a real lift, where GKR is 46.8% and the layers are shard-sized. What these do establish is that the port works end to end and that its benefit scales in the direction the model assumes.
+
+Both runs shared the machine with an unrelated build, so the absolute times are not clean; they were taken back to back under the same conditions, so the ratio is.
+
+Repeating the larger measurement with zerocheck's column fold also on Metal gives 53.10 s against 64.23 s — **the same 1.21x**. The fold is correct and costs nothing, but it buys nothing measurable either while zerocheck's *reduction* is still on the CPU: the phase is 15% of the proof and the fold is a fraction of that. It is kept because it is right and because it stops being idle work the moment the reduction moves, not because it showed a gain.
+
+It is specifically the GPU path. The **same binary**, with `SP1_METAL_MIN_ENTRIES` set high enough that every layer falls to the CPU, proves and verifies the same workload in **15.82 s** — indistinguishable from the build without the feature. So the fork, the feature, the seam, the runtime field dispatch and the CPU fallback are all correct and cost nothing measurable; what stalls is the part that dispatches to Metal.
+
+That is a much smaller place to look than "somewhere in the integration", and the threshold makes it bisectable at runtime without rebuilding. At a threshold of 4,194,304 entries, where no layer in this workload reaches the GPU, the proof completes in 15.78 s; lower it and the stall returns.
+
+Size alone is not the trigger. The harness in `crates/sp1-metal-prover` puts layers of seven million entries through the same kernels without trouble, and the parity tests cover mixed chip sizes and odd row counts. What the threshold gates is whether a *real* layer ever reaches the kernel, and real layers differ from constructed ones in ways the tests do not reach: `Padding::Generic` rather than a constant, chips whose `inner` is `None`, an `eq_row` shorter than the row pairs it is zipped against. The next test to write is one built from a layer the prover actually produced, not one assembled by hand.
+
+What the diagnosis so far does establish is where to look. Every cause found was about *when work is submitted and what is held while it waits*, not about arithmetic — the kernels have been at their measured rates throughout.
+
+Under `RUST_LOGGER=flat RUST_LOG=debug` the CPU build emits 211 span lines and finishes while the Metal build emits none, which looked like evidence of a stall and was not: the process was being killed before its buffered output was flushed. Silence from a killed process says nothing about progress, and the exit status says everything.
+
+## 8. Zerocheck: the seam is easy, the kernel needs a build step
+
+Read rather than assumed, because the first guess at this was wrong in both directions.
+
+**The seam is cleaner than GKR's.** `zerocheck_sum_as_poly_in_last_variable` and `zerocheck_fix_last_variable` are already free functions in `prover/zerocheck/`, and the three `slop_sumcheck` backend impls just delegate to them. Factoring them behind a `ZerocheckOps` trait with a defaulted marker parameter is the same edit that worked for GKR, and smaller.
+
+**The kernel behind it is the work, and it needs an offline build step.** The reduction's inner call is `increment_y_values`, which evaluates the chip's constraints through `air.eval(&mut ConstraintSumcheckFolder)` — a Rust function, per chip, at three interpolation points. There is no data-only formulation to port: a Metal zerocheck *is* the transpiler's generated kernels.
+
+Two things make that a build step rather than a runtime one:
+
+- **The transpiler cannot live in the fork.** It needs `sp1-core-machine` to enumerate chips and read their symbolic constraints, and `sp1-core-machine` depends on `sp1-hypercube`. Putting it inside would close a dependency cycle. The kernels have to be generated into a file the fork includes.
+- **Compile time forces it anyway.** The spike measured eight minutes for the largest chip's kernel and 102 MB of generated Metal across all 119. That cannot happen at prover startup; it wants a Metal binary archive built ahead of time.
+
+**The fold half is done.** `zerocheck_fix_last_variable` is `PaddedMle::fix_last_variable` on the main and preprocessed columns and refers to no AIR, so the GKR round's kernels serve it directly, under the same `metal` feature and the same size threshold. It is measured at no gain and no cost on the workloads available here, for the reason given under the end-to-end numbers.
+
+So what remains of step 8 is the reduction: generate three-point constraint kernels offline for the chips a workload uses, compile them into an archive, add the `ZerocheckOps` seam, and parity-check against `zerocheck_sum_as_poly_in_last_variable`. Each piece is understood; together they are days, not hours, and none of that part is started.
+
+## 9. Acceptance
+
+The run D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again, which is not this project's to start.
+The harness for it is ready: `crates/sp1-profile-host` builds against the fork, takes `--features metal` to turn the GPU path on, proves and verifies, and now accepts `--stdin-u32` so a small guest can drive it. A fibonacci core proof through it is the standing smoke test — 18.2 s on the CPU path, and the number to beat.
+
+### The scaling law, measured
+
+The proof-of-seed pair is gone, so acceptance is a set of canonical non-trivial computations instead, run in pairs through the *same* binary with `SP1_METAL_MIN_ENTRIES` switching the Metal path on and off, so nothing but the path under test differs.
+Three guests: `fib` at 9 cycles per iteration, `mem` at 21.7, `bits` at 14.
+
+Holding work fixed at two million fibonacci iterations and sweeping the shard size across a sixteen-fold range moves the ratio from 1.211x to 1.256x — about +0.009x per doubling, which is flat.
+Holding shard size fixed and sweeping total work moves it from 1.068x at 250k iterations to 1.246x at 2M — about +0.056x per doubling, six times the shard-size slope.
+The two other guests land inside that envelope at their sizes: `mem` 1.078x, `bits` 1.153x.
+
+So the speedup tracks how much of a run is GKR at all, which grows with the number of shards, and not the size of the individual layers.
+An earlier reading of this project's numbers had it the other way around — that bigger layers were the driver — and the shard-size axis is what refutes it.
+
+## 10. What the GPU is actually doing
+
+The end-to-end numbers above say the Metal path wins a little. They do not say why it wins so little, and guessing at that produced two wrong answers in a row before the machine was asked directly.
+
+**Instruments.** Metal reports `GPUStartTime` and `GPUEndTime` per command buffer, which is execution alone with no dispatch latency or CPU time in it, and needs no privileges — unlike `powermetrics`, which wants a password this session does not have. Against that sits a streaming kernel over the same data, which measures what this machine can really do rather than what the spec sheet claims: 531 GB/s observed against 546 quoted. A second reference kernel does extension multiplies with no memory traffic at all, giving an arithmetic ceiling to compare against. `crates/sp1-metal-probes` is too slow to iterate a kernel in, because the fork it feeds takes eight minutes to build; the reference harness reads its shaders from disk at run time and so turns the loop over in seconds.
+
+**The kernel was arithmetic-bound, not memory-bound.** The round reduction reached 155 GB/s, 29% of the observed ceiling — but the streaming kernel moves the same 64 bytes per element 2.8x faster, so the shortfall was never bandwidth. Three changes, each checked bit-for-bit against the old kernel at six chip widths:
+
+- Reading in order. One thread per row pair put neighbouring lanes `2*width` elements apart, so each lane pulled its own cache line for 16 bytes of it — 12% of every line fetched. One cell per thread fixes that for one extra multiply, since the eq weights factor out of the interaction sum linearly.
+- Multiplying less. `W` is `monty(3)` and Montgomery form is linear, so multiplying by `W` is tripling; reduction is linear too, so two products can share one `REDC` while their sum stays under `P*2^32`; and Karatsuba takes 16 base products to 9. Peak throughput: 20.0 to 39.5 G ext_mul/s.
+- Bounding the grid. One thread per cell would have handed back 200,000 per-threadgroup partials on a wide chip, moving work back onto the CPU that the kernel had just taken off it.
+
+Together: 1.9x to 2.35x on GPU time, and the isolated round reduction from 6.14 ms to 3.89 ms, 13.7x to 23.1x against the CPU.
+
+**And it barely mattered.** On a two-million-iteration proof the GPU is busy **0.65 seconds out of 51** — 1.3%. That is the whole explanation for a GPU that looks idle on a meter: it is idle. Doubling the speed of 1.3% of a proof is worth 0.6%, so the kernel work, though real, was the wrong lever, and only the instrument said so.
+
+**The copy costs twelve times the compute.** Feeding those 0.65 seconds takes **179 GB of uploads costing 8.18 thread-seconds**, because `newBufferWithBytesNoCopy` wants a page-aligned pointer *and* length and chip buffers have neither, so 89% of uploads are memcpys. The rate, 21.7 GB/s, is not memcpy speed: a fresh `MTLBuffer` has cold pages and faults them in as it copies, while copying into a buffer that has been written before runs at 91.2 GB/s, and allocating the buffer costs nothing either way. Reusing staging buffers takes uploading to 5.76 thread-seconds; the rest of the gap is four threads sharing memory bandwidth.
+
+**Where this leaves the target.** The paired figure is now 63.71 s against 50.45 s, 1.263x. Of the Metal path's remaining cost almost none is arithmetic, so even making the whole path free would reach about 1.3x. The profile says why: GKR is 47% of the thread-seconds but the port covers only the round reduction and the fold within it, and PCS at 19%, commit at 14% and zerocheck at 15% have never been touched at all. D7's 5x is a coverage problem, not a tuning problem, and no further work on this kernel changes that.
+
+## 11. Committing the traces, which was the largest thing of all
+
+Asking where a proof's time goes, rather than assuming, turned up something the earlier phase profile had understated. `commit traces` was 13.7% of the old profile; measured directly with a counter around the call it is **48.7 of a 52.2 second proof's thread-seconds** — more than the GKR rounds, the zerocheck and the openings together.
+
+Almost all of it is one Merkle tree, and the probe suite already had kernels for it, checked against slop's own committer and running at 152x. What was missing was not a kernel but the shape the prover actually calls with.
+
+**The seam needs no fork.** `BasefoldProver` takes its committer as a type parameter, `P: ComputeTcsOpenings<GC, CpuBackend>`, so the whole diff is aliasing `SP1MerkleTreeProver` to a wrapper. The encoder beside it is a concrete `Arc<Radix2DitParallel>` and could not be swapped this way — which does not matter here, though not for the reason first given: the 1.02x quoted from the encode probe is 429.8 GB/s against a packed CPU's 422.0 for **one butterfly stage**, and the same probe's full Metal encode runs at 0.517 ns per input cell against slop's 6.78. See section 18.
+
+**Three details decide whether the commitment matches**, and a commitment that differs is worse than one that is slow:
+
+- `first_digest_layer` pads the leaf layer to a power of two with *zero* digests, for rows past the matrix height.
+- A leaf absorbs every tensor's row in order, so tensors arriving as separate buffers are gathered into one interleaved buffer first.
+- Every layer is kept, because those layers are the prover data that opening proofs walk.
+
+Openings stay on the CPU: walking digest layers and copying rows are not worth a dispatch, and delegating them keeps the prover data exactly the type upstream builds. The final `compress([root, hash([log_height, total_width])])` is two permutations and is left to slop's own hasher, which removes any chance of publishing a different commitment.
+
+Parity is checked digest by digest against slop for one tensor, several tensors, a height that is not a power of two, a single row, and a row wide enough to absorb in several chunks.
+
+**Result.** Committing takes 4.1 thread-seconds instead of 36.8. A two-million iteration fibonacci proof goes from **66.50 s to 35.57 s — 1.87x** — and verifies. `SP1_METAL_MERKLE=0` forces the CPU committer through the same binary, which is how the pair is taken.
+
+The profile afterwards, 89.5 thread-seconds over a 35.6 second wall: gkr 41.8%, zerocheck 24.3%, pcs 19.0%, commit 10.3%. What is left of commit is mostly the encode, which is not worth taking. Of the GKR share, the GPU itself accounts for 1.2 seconds and uploading for 5.5, so the copy still costs more than the arithmetic — the difference now is that it buys a phase worth having.
+
+## 12. Where it stands, measured again
+
+The acceptance study re-run after the commitment moved to the GPU, same three axes and the same paired method, with both switches set together so the CPU arm really is one:
+
+| axis | setting | CPU | Metal | |
+|---|---|---|---|---|
+| shard size | 1 MiB … 16 MiB, fib n=2M | 65.6 → 64.8 s | 35.9 → 35.3 s | 1.825 → 1.833 |
+| work | fib n=250k … 2M, 4 MiB shards | 17.4 → 67.5 s | 11.5 → 36.6 s | 1.509 → 1.843 |
+| guest | mem n=400k / bits n=1M | 38.8 / 55.8 s | 25.8 / 32.7 s | 1.507 / 1.707 |
+
+The shape of the law is unchanged and the level has moved: flat in shard size across a sixteen-fold range, climbing with total work, and every point between **1.40x and 1.93x** where the same study gave 1.07x to 1.26x before.
+
+Building the circuit layers went to the GPU as well, taking that span from 11.0 to 9.0 thread-seconds and the proof from a mean of 35.61 to 34.68 seconds. That is much less than the thread-seconds suggest, and the reason is worth writing down: at 86 thread-seconds over a 35 second wall the proof averages 2.4 of its 4 threads, so work removed from a stretch that is already parallel does not shorten the critical path. Thread-seconds are the right unit for deciding *what* to port and the wrong unit for predicting what it will be worth.
+
+**What is left, and what it would cost.**
+
+- **Zerocheck, 21.9 thread-seconds (25.6%)** — now the largest single phase. Still needs the reduction's per-chip kernels generated offline, for the reasons under section 8. The transpiler spike is done; the build step around it is not.
+- **The PCS opening, 18.4 thread-seconds (21.4%)** — and this one carries a decision. `prove_trusted_evaluations` takes `Rounds<Evaluations<GC::EF>>`, which is `CpuBackend`, and `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself, so the jagged sumcheck's data is CPU-backed by construction rather than by choice. Reaching it means forking `slop-jagged`, which gives up exactly the property that made the commit half attractive: that it ships against unmodified upstream and survives version bumps.
+- **The encode, about 5 thread-seconds** — read at the time as 1.02x against a packed CPU and set aside; that was the per-stage ratio, not the encode's, and section 18 corrects it. The concrete `Arc<Radix2DitParallel>` in the encoder still means it cannot be taken forklessly.
+- **The uploads** — still larger than everything the GPU computes, and now partly dealt with. The round reduction and the fold read the same four MLEs per chip one after the other and each was uploading them for itself. Keying buffers on the data pointer fixes that, and is sound rather than fragile because the entry also holds an `Arc` to the MLE: while it lives the allocation cannot be freed, so its address cannot have been reused. Uploading fell from 220.71 GB in 17023 to 163.45 GB in 12771, and from 6.85 to 5.02 thread-seconds. Not half, because the chips the reduction leaves on the CPU are still uploaded once by the fold, and building the layers reads different data again.
+
+**Where the paired figure stands: 64.14 s on the CPU against 33.83 s on Metal, 1.90x**, from 1.246x when this began. Every switch — `SP1_METAL_MIN_ENTRIES`, `SP1_METAL_MERKLE`, `SP1_METAL_TRANSITION`, `SP1_METAL_UPLOAD_CACHE` — takes its own pair through the same binary, so each of these claims can be re-checked without a rebuild.
+
+## 13. Zerocheck, and two assumptions that were wrong
+
+Section 8 said the reduction needed a transpiler that could not live in the fork, and kernels compiled ahead of time into an archive. Both were wrong, and finding out cost less than working around them would have.
+
+**Nothing needs enumerating.** The obstacle was stated as a dependency cycle: a transpiler needs `sp1-core-machine` to enumerate chips, and that depends on `sp1-hypercube`. But the round prover is *handed* the AIR — `ZerocheckCpuProver` holds an `Arc<A>` — and this crate already calls `get_symbolic_constraints` on AIRs in `chip.rs`. So the constraints are read from the AIR in hand, turned into a kernel, and compiled the first time a chip is seen. No new dependency, no cycle, no archive.
+
+**Compile time is bimodal, and the spike measured the wrong end of it.** Of 119 chips the median has 451 constraint DAG nodes and 74 have fewer than 3000, together 25,299 nodes. The other 45 are the elliptic-curve precompiles and hold the remaining 2.68 million; `Bls12381DoubleAssign` alone is 178,163 nodes and 6.9 MB of generated Metal, which is what eight minutes was measuring. The core chips compile in 15.5 seconds between them, once, and Metal caches compiled functions on disk so the next process does not pay again. Chips past a node bound stay on the CPU, so a workload that calls a precompile degrades rather than stalls.
+
+**What is generated.** Only the constraint evaluation is chip-specific. The interpolation to the three points, the interaction adjustment and the reduction are the same for every chip, so the body is generated once per point and dropped into a fixed wrapper. Columns are read interpolated straight from the two rows of a pair rather than staged into a per-thread array — a wide chip's row is tens of kilobytes, which no thread has. Values are typed per node, so a subexpression of constants stays in the base field: an extension multiply is nine base multiplies and a base-by-extension one is four. Both column types are emitted, so the first round — the one with the most rows — moved as well.
+
+**How it is checked.** Twice, independently. Before any of it was wired up, the generated reduction was compared against `increment_y_values` itself, pair by pair, for sixty-two chips, agreeing on all three points; that is the code the CPU path runs, not a second reading of the specification. And then the proof verifies.
+
+Zerocheck fell from 21.9 to 10.7 thread-seconds and the proof from 33.8 to 27.03 seconds: **63.33 s on the CPU against 27.03 s on Metal, 2.34x.**
+
+## 14. Acceptance
+
+The same three axes, the same paired method, every switch set together so the CPU arm is one. Measured four times as work landed; the final run:
+
+| axis | setting | CPU | Metal | |
+|---|---|---|---|---|
+| shard size | 1 MiB … 16 MiB, fib n=2M | 62.3 → 62.4 s | 24.4 → 24.7 s | 2.550 → 2.529 |
+| work | fib n=250k … 2M, 4 MiB shards | 16.9 → 62.7 s | 10.9 → 24.3 s | 1.548 → 2.582 |
+| guest | mem n=400k / bits n=1M | 35.6 / 53.0 s | 20.9 / 22.8 s | 1.706 / 2.327 |
+
+The law kept its shape through every measurement of it, and only the level moved:
+
+| | shard-size slope | work slope | envelope |
+|---|---|---|---|
+| before this work | +0.009x | +0.056x | 1.07 – 1.26x |
+| after the commitment moved | +0.009x | +0.056x | 1.40 – 1.93x |
+| after zerocheck | +0.001x | +0.246x | 1.51 – 2.29x |
+| after the PCS opening | +0.001x | +0.325x | **1.55 – 2.58x** |
+
+**Flat in shard size** across a sixteen-fold range, every time. **Climbing with total work**, and the climb has steepened four-fold, because what is left on the critical path is increasingly fixed cost rather than per-shard work — a small proof pays a few seconds compiling constraint kernels that a large one amortises away.
+
+## 15. The PCS opening, and a wrong conclusion corrected
+
+The first attempt at this phase came out *slower* than the CPU, and the conclusion drawn from it — that the work is memory-bound and so cannot win on unified memory — was wrong. It is worth recording both, because the wrong version is the more tempting one.
+
+**What the first attempt did.** `slop-jagged` was vendored and its round's three reductions given a kernel. The reductions are cheap; the phase did not move; alternating runs gave 27.60 s against 27.44 s, which is noise. The reasoning offered for that was that the fold beside it is one extension multiply per sixteen bytes written, hence memory-bound, hence hopeless.
+
+**Why that was wrong.** The GKR fold is exactly as memory-bound and measures 3.7x. The difference is not the arithmetic intensity but whether anything is copied: the GKR fold borrows its input where it lies and writes through a buffer that borrows the pages of the `Vec` being filled, so the GPU's bandwidth is applied to memory the CPU already owns. The first jagged attempt uploaded both arrays through `newBufferWithBytes` every round — the cold-page path measured at 21.7 GB/s — and never ported the fold at all, which is where the time was.
+
+**What it does now.** Both halves run on the GPU with nothing copied in either direction: inputs are taken as they lie when page-aligned, and the fold writes straight into the allocation that will back the next round's MLE. Measured over three alternating pairs: **24.53 s against 27.29 s**, consistently, and the proof verifies.
+
+So the rule is not "memory-bound work cannot win" but something narrower and more useful:
+
+- **Compute-bound work wins large however it is fed.** Merkle hashing (152x in isolation), constraint evaluation (zerocheck 21.9 to 10.7 thread-seconds), the logup round's arithmetic (23x).
+- **Memory-bound work wins only if nothing is copied.** The GKR fold at 3.7x and the jagged fold at 10% of a whole proof do it with no-copy buffers at both ends; the same fold uploaded conventionally loses to the CPU outright. This is the single most load-bearing implementation detail in the backend.
+- **And some of it looked as though it were not worth taking either way**: the Reed-Solomon encode measures 1.02x against a packed CPU *for one butterfly stage*, which reads as "the CPU is already at memory speed and there is no arithmetic to win back". Section 18 shows that reading was wrong about the encode as a whole.
+
+The paired figure is now **63.07 s against 24.53 s, 2.57x.**
+
+## 16. Residency, and a page-alignment rule that was never real
+
+The plan in `resident-plan.md` was written against three numbers: the GPU busy 4.3% of the proof, 163 GB uploaded to keep it that busy, and peak memory 24% *above* the CPU path rather than below it. Its thesis was that the pipeline is a sequence of host-resident values with GPU stages between them, and should be the reverse.
+
+The first thing built was the instrument the plan asked for, and it corrected all three numbers before a line of the re-architecture was written.
+
+**The counters could not see most of the backend.** They lived inside the GKR module and only ever recorded its own dispatches, so the zerocheck, the Merkle commitment and the jagged sumcheck contributed nothing to any figure the profiling host printed. They also added kernel *outputs* to the upload total, so a write counted as a read. Moved below the fork and split by phase, they say a proof reads 494 GB and writes 110 GB, not 163 GB of "uploads".
+
+**"GPU busy" was measuring the wrong thing twice over.** It summed each command buffer's execution interval, and with four shards proving at once a sum counts one device four times. The union of those intervals is the utilisation, and it was 22%, not 4.3%.
+
+### The rule that cost 155 GB of memcpy
+
+Every place the backend handed a slice to Metal asked two questions before deciding it could avoid a copy: is the pointer page-aligned, and is the length a whole number of pages. Instrumenting the two separately showed the pointer passes 98.4% of the time and the length 9.5%.
+
+Only the first is a real requirement. `newBufferWithBytesNoCopy` wires the pages spanning `[ptr, ptr + len)`; when the pointer starts a page, every page in that range holds at least one byte of the caller's own allocation and is therefore already mapped, so rounding up to a page boundary cannot reach unmapped memory. The length may be anything. A test in `sp1-metal-probes::nocopy` runs a kernel through such a buffer and checks it wrote the caller's `Vec`.
+
+The invented second question was expensive precisely because field arrays satisfy the first and fail the second: they are large enough that the allocator gives them their own mapping, and their length is a row count times an interaction count, which is a page multiple only by accident. It turned 155 GB per proof into memcpy — 96 GB in, 59 GB copied back out of staging buffers that existed only because of it.
+
+### What removing it did
+
+| | before | after |
+|---|---:|---:|
+| copying, thread-seconds | 8.74 | **0.04** |
+| bytes read that were copied | 96 GB | 0 |
+| bytes written that were copied back | 59 GB | 0.2 GB |
+| peak resident memory | 72.4 GB, +24% vs CPU | **44.9 GB, −22% vs CPU** |
+| wall, paired | 24.6 s vs 64.4 s, 2.60x | **18.5 s vs 62.9 s, 3.40x** |
+| thread-seconds, Metal arm | 65.4 | 53.1 |
+| `generate GKR circuit` | 1.22x | 1.90x |
+
+The memory result is the one worth dwelling on. A `StorageModeShared` buffer is process pages, so a value staged for the GPU existed twice: once in the `Vec` that owned it and once in the buffer that read it. The staging buffers *were* the extra 24%. Removing them took peak memory below the CPU path, which is the plan's target met outright and by a route it did not anticipate.
+
+Two smaller changes followed from the same instrument. The Merkle kernels now write their digest layers into the vectors the commitment hands back rather than into device buffers copied out afterwards, which was the last 9 GB. And each proving thread got its own command queue, since a queue runs its buffers in commit order and one shared queue made four independent shards take turns: blocked time fell from 7.3 thread-seconds to 5.8, though the wall did not move, because the waiting already overlapped other threads' work.
+
+### Why stages 2 to 4 of the plan should not be built
+
+Those stages exist to remove the cost of moving data between host and device. That cost is now 0.04 thread-seconds out of 53. Making `Mle` live in `MetalBackend` would remove buffer-object creation, measured at 0.03 thread-seconds, and nothing else — and it would cost the vendoring of `slop-multilinear`, because while `MetalBackend` satisfies `Backend` and `MleBaseBackend` is four shape methods away, every operation the layer code actually calls — `inner`, `num_polynomials`, `fix_last_variable`, `From<RowMajorMatrix>`, `partial_lagrange` — is implemented for `CpuBackend` alone.
+
+The plan named an abandon condition for the opposite outcome, stage 1 failing to move the numbers. This is the mirror image: stage 1 moved them so far, by a cheaper route, that the rest has nothing left to win.
+
+What remains is not data movement. Of 53 thread-seconds on the Metal arm, about 6 are the GPU running, 6 are blocked waiting on it, and the rest is CPU arithmetic that has never been ported. Going faster from here means porting more work, not moving less data.
+
+### Acceptance, re-run
+
+The same three axes and the same paired method, every switch set together so the CPU arm really is one:
+
+| axis | point | CPU | Metal | |
+|---|---|---:|---:|---:|
+| shard size | 1 MiB | 62.37 s | 19.37 s | 3.220x |
+| | 2 MiB | 63.40 s | 19.59 s | 3.236x |
+| | 4 MiB | 63.50 s | 18.55 s | **3.423x** |
+| | 8 MiB | 62.65 s | 18.78 s | 3.336x |
+| | 16 MiB | 62.65 s | 19.03 s | 3.332x |
+| work | fib n=250k | 17.08 s | 9.39 s | 1.820x |
+| | fib n=500k | 24.64 s | 12.30 s | 2.003x |
+| | fib n=1M | 39.12 s | 16.99 s | 2.302x |
+| | fib n=2M | 63.19 s | 19.82 s | 3.187x |
+| guest | mem n=400k | 36.05 s | 16.85 s | 2.139x |
+| | bits n=1M | 53.11 s | 18.52 s | 2.868x |
+
+The law holds and has moved up again: **flat in shard size** across a sixteen-fold range, **climbing with total work**. The envelope was 1.07 – 1.26x before any of this, 1.55 – 2.58x after the PCS opening, and is now **1.82 – 3.42x**.
+
+The climb with work has steepened once more, and for the same reason as before: what is left on the critical path is increasingly fixed cost, so a small proof pays a few seconds of constraint-kernel compilation that a large one amortises away. The floor rose most — 1.07x to 1.82x at the smallest size — because copying was a per-byte cost that small proofs could not amortise either.
+
+## 17. Three ports, chosen by a sampling profile
+
+`cpu-plan.md` ranked what was left on the CPU by what it would take off one shard's sequential path, and named a measurement that would say to stop for each. All three were built.
+
+### The GKR circuit's first layer
+
+Every cell of that layer is one affine form over a trace row plus a few extension multiplies, with no dependence between cells: an interaction's denominator is `alpha + beta_0 * kind + sum_j beta_j * v_j`, each `v_j` a form over the row's preprocessed and main columns, and its numerator is one more such form, negated for a receive.
+
+The forms are fixed per chip, which invites the zerocheck's treatment — generate a kernel for each. This does the opposite: the forms go up as a **table one kernel walks**, so every chip in the proof shares one pipeline and nothing is compiled at run time. The tables are tens of interactions of tens of terms against a height in the millions, so building them per shard costs nothing measurable.
+
+**22.7 of 122 user-CPU-seconds**, and `generate GKR circuit` from about 1.5 to about 1.0 thread-seconds per shard.
+
+### The jagged polynomial's guts, and its assist sumcheck
+
+The profile taken after the first layer moved put **14.5 thread-seconds in `partial_jagged_little_polynomial_evaluation`** and 6.2 in the evaluation sumcheck beside it — so the plan had named the smaller half. Both moved.
+
+The guts are one extension multiply per cell of the stacked area, the product of a column's eq weight and a row's, or zero in the final padding range. A GPU thread starts at an arbitrary index, so it finds its column by binary search rather than by upstream's sequential walk; taking the last range beginning at or before the index skips columns of size zero, which is what the walk does by advancing past them. **11.2 user-CPU-seconds.**
+
+The assist sumcheck runs a four-state branching program per column, twice a round, over about twenty layers. The transition rule is the part worth being careful about, so the kernel does not restate it: the host builds a 4x16 table by calling upstream's own `transition_function` for every combination. The eq weights have to come out in the order `partial_lagrange` produces them, since upstream pairs them positionally with its enumeration of bit states. **7.7 user-CPU-seconds.**
+
+### A layer's small chips, in one dispatch
+
+A layer holds a long tail of chips too small to be worth a dispatch each — and §16's threshold sweep had already shown that giving them one anyway is a wash. Batching works because a layer's chips all add into the same three sums, so nothing has to be kept apart. Their arrays are copied side by side, which is the one place this backend copies on purpose, and a cell finds its chip by binary search over an offset table.
+
+That made the gate in front of the whole layer wrong. It asked whether the chips big enough for their own dispatch accounted for most of the layer, because everything else was summed on the CPU. With the tail batched every chip is covered, so the only question left is whether the layer is worth a round trip — and the answer holds much further down: the count of layers handed back to upstream falls from **661 to 126** at 64 entries, flattening below that.
+
+**Across three paired runs: 17.87 s to 16.91 s, user CPU 80.8 to 76.0, and system time 64.5 to 50.2** — the last because a layer that stays on the CPU allocates, and these no longer do.
+
+### Where it stands
+
+| | before these three | after |
+|---|---:|---:|
+| wall, paired | 18.5 s vs 62.9 s — 3.40x | **17.0 s vs 63.6 s — 3.74x** |
+| user CPU seconds | 122.1 | **76.0** |
+| system CPU seconds | 64.8 | **50.2** |
+| peak resident memory | 44.9 GB | 47.1 GB (CPU path: 59.9 GB) |
+| device busy, union of intervals | 22.9% | **27.5%** |
+| GKR layers handed back to upstream | 661 | 126 |
+
+Every kernel is checked against upstream's own code rather than against an invented case: `SP1_METAL_FIRST_LAYER=check`, `SP1_METAL_JAGGED_VALUES=check`, `SP1_METAL_JAGGED_ASSIST=check` and `SP1_METAL_BATCH=check` each run both paths on every chip, column or layer of a real proof and compare. All four pass at n = 2,000,000.
+
+### Acceptance
+
+| axis | point | CPU | Metal | |
+|---|---|---:|---:|---:|
+| shard size | 1 MiB | 64.33 s | 17.17 s | 3.746x |
+| | 2 MiB | 64.95 s | 17.01 s | **3.819x** |
+| | 4 MiB | 64.04 s | 17.19 s | 3.726x |
+| | 8 MiB | 64.48 s | 17.07 s | 3.777x |
+| | 16 MiB | 64.60 s | 17.32 s | 3.730x |
+| work | fib n=250k | 17.18 s | 7.85 s | 2.189x |
+| | fib n=500k | 24.75 s | 10.69 s | 2.315x |
+| | fib n=1M | 40.30 s | 15.01 s | 2.684x |
+| | fib n=2M | 64.54 s | 16.67 s | **3.872x** |
+| guest | mem n=400k | 37.21 s | 14.77 s | 2.519x |
+| | bits n=1M | 54.04 s | 15.62 s | 3.460x |
+
+Flat in shard size across a sixteen-fold range, climbing with total work, and the envelope moves from 1.82 – 3.42x to **2.19 – 3.87x**.
+
+### One bug worth recording
+
+Two of these kernels hung the machine on their first run, and both times for the same reason: a Metal buffer created with `newBufferWithBytesNoCopy` over a **local** that had gone out of scope before the dispatch was submitted. The buffer keeps no reference to what it borrows. The first case died with the function that built the tables; the second was a descriptor array staged for a command buffer encoded later in the caller. Reading freed pages gave the kernel a zero width, and a division by zero on the GPU does not fault — it hangs.
+
+The rule this leaves: **a no-copy buffer borrows, so the thing it borrows must outlive the wait, not the call that made it.** Where that cannot be arranged, stage through the arena, whose buffers live until the next layer.
+
+## 18. Six levers, worked end to end
+
+`next-levers.md` ranked six things to try after 3.74x, each with the measurement that would say to stop. All six were worked. Three moved the number, one had already been spent by another, and two were wrong about what they were — which is the part worth keeping.
+
+**3.74x to 4.49x**, and peak resident memory from 47.1 GB to 32.2.
+
+### The encode, and a seam in the other direction
+
+The list said this needed `slop-basefold-prover` vendored, because `CpuDftEncoder` holds a concrete `Arc<Radix2DitParallel>` and there is nothing above it to substitute. True, and pointing the wrong way. `Radix2DitParallel`'s only relevant property is that it implements `Dft`, and that impl is forty lines of `slop-dft`: four dependencies, one consumer in the whole prover. Replacing the body of one trait method reaches every encode a proof performs.
+
+**When a concrete type blocks substitution from above, look at what the concrete type is standing on.** A fork is cheapest at the narrowest point of the graph, not at the point where the problem was noticed.
+
+The kernel then refused every call, because the probe suite had been written against `LOG_BLOWUP = 1` and the core prover's `CORE_LOG_BLOWUP` is 2 — the codeword is four times the trace, not twice. That makes three separate mislabellings of the same probe: a ratio whose denominator was one butterfly stage, quoted twice, and now a shape the prover never asks for. The spread kernel takes the blowup as a parameter and runs its top stages together, reading the trace once and never touching the padding.
+
+`commit traces` fell from 3.99 to 1.47 seconds a shard, which was the stop condition, and **peak resident memory from 47.1 GB to 27.8** — upstream builds each codeword in a fresh allocation, and this writes into the tensor that will hold it through a buffer that borrows its pages.
+
+A trap that is silent in the worst way: a tensor from `Tensor::with_sizes_in` has the capacity but a **length of zero**, because upstream fills it by extending. A kernel writing into one must set that length itself, or the codeword is correct in memory and every reader sees an empty slice.
+
+### Folding, which was not folding
+
+Every fold funnels through `mle_fix_last_variable`, so the counter went there rather than at the five call sites that sampling could not separate. Folding cost **6.4 thread-seconds, not the 28.5 the profile had said**, and 4.5 of those were 98,610 calls averaging thirty-nine cells, running at 1176 ns/cell against 1.72 for the calls carrying the work.
+
+That is also why two sampling profiles blamed rayon and could not name a caller: **rayon really was where the time went.** Sumcheck halves its polynomial each round, so its last rounds are a handful of rows, there are a great many of them, and each was handed to a work-stealing pool. Small folds now run inline; large ones use `par_chunks` rather than `chunks(..).par_bridge()`, which pulls a sequential iterator through a mutex and cannot split.
+
+Folding is now 2.2 thread-seconds, of which 1.6 is a billion cells of real arithmetic. There is nothing left here worth a kernel.
+
+### The dense PCS proof, which was not FRI
+
+Almost none of `Dense PCS evaluation proof` was the FRI rounds — those commit through the Merkle kernels and `fold_even_odd` was already parallel. It was `FriCpuProver::batch`, which combines every MLE of a shard into one polynomial before FRI begins and did it on one thread. Every row of the accumulator is independent; it was sequential because it was written as a fold. **5.4 to 3.1 thread-seconds.**
+
+### The two that did not move
+
+**System time** had already been spent by the encode: 50 of 126 CPU-seconds became 17 of 62, because the item's own diagnosis — that it tracks the memory footprint — is what made it fall. What is left is 3.39 million page reclaims against 175 GB the kernels write, so two thirds of the writes land on pages already faulted once. Building the host against mimalloc tests the churn hypothesis directly and is **decisively worse**: 19.72 s against 13.33, 14.3 million reclaims against 3.39, 83 GB peak against 32.
+
+**Dispatch blocking** proposed chaining a layer's round reduction and its fold, "though the second only needs the first's data, not its result". It needs the result: the challenger absorbs the round message and samples `alpha` between them. And `fix_layer` already folds a whole layer in one dispatch, so the round trips are already two per round. The 5.3 thread-seconds of blocking are real but they are queueing behind three other proving threads, not host round trips.
+
+### What that leaves
+
+The list ruled out making the existing kernels faster, and gave its reason: *"The device is busy 27.5% of the proof; a kernel that is twice as fast buys nothing while the CPU is the constraint."*
+
+**That precondition has flipped.** The device is now busy 44% of the proof and 100% of several seconds of it, and the blocking under item 4 is the CPU waiting on it. Coverage first, then scheduling, then tuning was the right order — and tuning is now where the order arrives. The encode is the obvious first target: it makes about eighteen passes over a codeword four times the size of the trace, one butterfly stage per pass, where a radix-4 stage would halve that.
+
+### Acceptance
+
+| axis | point | CPU | Metal | | was |
+|---|---|---:|---:|---:|---:|
+| shard size | 1 MiB | 60.68 s | 13.46 s | 4.507x | 3.746x |
+| | 2 MiB | 62.23 s | 13.86 s | 4.489x | 3.819x |
+| | 4 MiB | 62.96 s | 13.58 s | **4.637x** | 3.726x |
+| | 8 MiB | 62.25 s | 13.66 s | 4.558x | 3.777x |
+| | 16 MiB | 62.25 s | 13.47 s | 4.621x | 3.730x |
+| work | fib n=250k | 15.41 s | 5.25 s | 2.933x | 2.189x |
+| | fib n=500k | 22.93 s | 7.38 s | 3.106x | 2.315x |
+| | fib n=1M | 37.22 s | 11.01 s | 3.382x | 2.684x |
+| | fib n=2M | 62.85 s | 13.86 s | 4.535x | 3.872x |
+| guest | mem n=400k | 34.64 s | 10.72 s | 3.231x | 2.519x |
+| | bits n=1M | 52.08 s | 12.47 s | 4.175x | 3.460x |
+
+Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.19 – 3.87x to **2.93 – 4.64x**. The CPU arm is a second or two faster than it was, because two of the six changes are CPU-side and the same binary runs both arms — the ratio is against the better CPU, not the one that was there before.
+
+### The floor, measured
+
+Proving a guest that runs a thousand steps takes **3.09 seconds**, of which `setup` is 1.0 thread-seconds and **zerocheck is 2.2 on a shard with nothing in it** — SP1 pads every shard to a fixed shape, so the smallest possible proof still runs a full-shape one. The floor is not startup plus tail; it is one padded shard.
+
+Of the 13.68 seconds at n = 2,000,000, about 3.1 are that floor. The part that scales with work is 10.6 against roughly 58 on the CPU, so the backend is worth **about 5.5x on what it can touch**, and the number the project reports is that diluted by a constant it does not control.
+
+## 19. Six more levers, and a floor that was not one
+
+`next-levers.md`'s second list ranked six things to try after 4.49x, written from a proof where the GPU had become the thing being waited on: four proving threads asking for 10.09 GPU-seconds inside a 13.6 second proof, getting a 6.78 second union, and spending 8.4 thread-seconds waiting.
+
+**4.49x to 5.38x**, and the floor from 3.09 seconds to 1.86.
+
+### The one that went as predicted
+
+The encode was the largest consumer of GPU time in the proof as soon as it was ported — committing costs 4.91 GPU-seconds with it on and 1.86 with it off. A radix-4 butterfly does two decimation-in-frequency stages for one pass at the same multiply count: the second stage's twiddle on the odd half collapses to a fourth root of unity, because the stride times the half-block is exactly a quarter of the codeword whatever the stage, and that root is already in the twiddle table. Eighteen passes became ten and the estimate held to the tenth of a second.
+
+### The two where counting beat guessing again
+
+Zerocheck was described as having "nearly five thread-seconds somewhere else". Four buckets partitioning the span put the setup loop, the sumcheck driver and the opening assembly at **a millisecond between them** — 92% of it is the round reduction, and a third of *that* was building the eq weights: **1,606 tables against 1,258 dispatches**. Every chip of a shard folds the same point, so the hundred-odd chips of a round each built the same table, used it once and dropped it. Upstream's own TODO says as much. Remembering the last one is enough, because the driver walks a round in order on one thread.
+
+`generate GKR circuit` was suspected of losing time to the chips its two loops decline as too small for a round trip. Those chips are **0.16% of the cells**. The time was around the dispatch: four folds per chip at alpha zero and alpha one, computed as `alpha * (y - x) + x` when at either end of the interpolation the fold is a *choice* — `x` at zero, `y` at one — and two output arrays filled before being entirely overwritten.
+
+### The one that was three passes
+
+Laying the jagged sumcheck's base polynomials end to end transposed each component into a fresh allocation, appended those into a running buffer, and transposed the result — and that last transpose is of a one-row matrix, so it permutes nothing and copies everything. On one thread. Done in one parallel pass instead: **2.19 to 0.42 thread-seconds.**
+
+### Two negative results worth as much as the positive ones
+
+**The zerocheck node bound is a cliff, not a margin.** Exactly one core chip is caught by it — `Global`, at 22,794 nodes against 16,384 — and letting it through costs **1,814 seconds of kernel compilation**, taking the proof from 12.0 seconds to 463.6. The other sixty-one kernels compile in 0.04 seconds between them. What `Global` needs is the first layer's treatment, its constraints as a table one kernel walks, not a larger number.
+
+**The dispatch waiting is contention.** With one shard proving, a GKR dispatch blocks 0.34 ms; with four, 1.60. A round trip costs a third of a millisecond and the rest is three other threads asking for the same device — so it is not separately actionable, it shrinks when GPU seconds shrink.
+
+### The floor was not a floor
+
+The previous section measured a trivial proof at 3.09 seconds and concluded the floor was one padded shard, since a guest running a thousand steps still paid 2.2 thread-seconds of zerocheck.
+
+**It is now 1.86 seconds, and that zerocheck is 0.8** — because the eq table it was rebuilding a hundred times a round is now built once, which is as true of an empty shard as of a full one. What looked like an irreducible per-shard cost was the same inefficiency, measured where nothing else was happening to hide it.
+
+The lesson is not about zerocheck: **a floor measured on a small workload is only a floor if the work inside it has been looked at.** Of the 11.16 seconds at n = 2,000,000, about 1.9 are floor and 9.3 scale against roughly 58 on the CPU — about **6.2x on the part a backend can touch**, and an absolute ceiling of 32x rather than 20.
+
+### Acceptance
+
+| axis | point | CPU | Metal | | was |
+|---|---|---:|---:|---:|---:|
+| shard size | 1 MiB | 59.64 s | 10.95 s | **5.449x** | 4.507x |
+| | 2 MiB | 61.12 s | 11.46 s | 5.333x | 4.489x |
+| | 4 MiB | 60.34 s | 11.11 s | 5.431x | 4.637x |
+| | 8 MiB | 60.22 s | 11.28 s | 5.339x | 4.558x |
+| | 16 MiB | 60.06 s | 11.20 s | 5.363x | 4.621x |
+| work | fib n=250k | 14.02 s | 3.72 s | 3.766x | 2.933x |
+| | fib n=500k | 20.77 s | 5.54 s | 3.747x | 3.106x |
+| | fib n=1M | 35.45 s | 8.41 s | 4.216x | 3.382x |
+| | fib n=2M | 60.27 s | 11.14 s | 5.411x | 4.535x |
+| guest | mem n=400k | 31.67 s | 8.19 s | 3.868x | 3.231x |
+| | bits n=1M | 49.94 s | 9.75 s | 5.122x | 4.175x |
+
+Still flat in shard size across a sixteen-fold range, still climbing with total work, and the envelope moves from 2.93 - 4.64x to **3.75 - 5.45x**. The floor rose most again, 2.93x to 3.77x, which is the same thing the floor measurement says: what looked like an irreducible per-shard cost was work nobody had looked at.
+
+## 20. What it costs to lend the device memory
+
+This backend's whole design is that unified memory means an aligned allocation can be handed to a kernel exactly as it lies — `newBufferWithBytesNoCopy`, no copy, no staging. Removing a false page-alignment rule on that basis was worth 155 GB of memcpy a proof, and every port since has been written to borrow rather than copy.
+
+Nobody had ever measured what borrowing costs.
+
+### The measurement
+
+The jagged sumcheck waits four to six times its own GPU time, and the first guess was queueing — it is the phase whose dispatches interleave with everything else, and the waiting grows with shard count. It is not. **With a single shard and nothing to contend with, a fold still blocks 2.2 ms for a 0.5 ms kernel**, while the assist dispatch beside it — same size, same queue, same round — blocks 0.21, which is the bare round trip.
+
+The difference is what the two hand the device: the fold borrows a large fresh allocation, the assist writes into a small buffer that already exists.
+
+Dispatching the same fold **twice over the same buffers** settles it. The fold reads its input and writes its output, so running it again writes the same answer, which makes the experiment free:
+
+| | GPU seconds | waiting |
+|---|---:|---:|
+| first dispatch | 0.027 | **0.134** |
+| the same one again | 0.027 | **0.011** |
+
+Identical kernel, identical GPU time, twelve times less waiting. **Nine tenths of what a fold blocks for is the first use of its buffers**, paid between commit and the kernel starting.
+
+### What it is not
+
+Touching every page from the host first — a byte per page, so the allocation is fully resident before Metal is given it — changes nothing. The pages were already the host's; what costs is establishing the *device's* access to them, which is its own page tables and nothing the CPU can pre-warm.
+
+Creating the buffer object is free: measured at 0.000 seconds over 52 calls. The cost is not in `newBufferWithBytesNoCopy`, it is in committing a command buffer that references the result.
+
+### What follows
+
+It is proportional to size, which is why it had stayed hidden. GKR's per-chip buffers are small and its dispatches block 0.6 ms — near the 0.34 ms round-trip floor, with little mapping in it. The jagged sumcheck's single huge array blocks 2.2 ms, the first layer's 21, a layer transition's 21.
+
+So the lever is **not to map the same allocation twice**, and there are two places that were:
+
+- A sumcheck round reduces its arrays and then folds the same ones. Keeping the first mapping until the fold has used it is sound for exactly the reason its life is short — both users borrow the same live slice, within one round. The jagged sumcheck fell from 2.44 to 2.19 thread-seconds and the proof from 11.04 to 10.70 seconds, **5.39x to 5.63x**.
+- The encode writes a codeword and the Merkle kernels hash it immediately, and each mapped it separately. A hand-off in the crate below both takes the commit phase's inputs from 0% resident to 65%.
+
+The rule the hand-off rests on is worth stating on its own, because it is the same rule the two hangs of §17 broke from the other side: **a buffer may be kept for a second use only while the allocation it borrows is still borrowed by the first.** The consumer removes the entry, so a pointer can never be matched after the memory behind it has gone.
+
+### Which phases have any room left
+
+Buffer traffic against GPU seconds, at n = 2,000,000, on an M4 Max whose memory tops out near 410 GB/s:
+
+| phase | GPU s | bytes moved | rate |
+|---|---:|---:|---:|
+| gkr | 1.43 | 408 GB | **271 GB/s** |
+| pcs | 0.88 | 185 GB | **221 GB/s** |
+| commit | 3.57 | 73 GB of buffers, but ten passes inside the encode | at the limit |
+| zerocheck | 3.19 | 18 GB | **6 GB/s** |
+
+Medians of three on a quiet machine. An earlier reading of this table put `gkr` at 352 GB/s, which was taken while the machine was loaded and is too high; the conclusion it supports is unchanged, and `zerocheck` reads 6 GB/s in every run.
+
+`gkr` is at the machine's bandwidth and there is nothing in it to win. `pcs` is over half of it. The encode makes about ten passes over a codeword four times the trace, so its real traffic is an order of magnitude above what the buffer figures show, which puts it at the limit too; the other half of `commit` is Poseidon2, which is arithmetic.
+
+**`zerocheck` is the one phase with room**: two orders of magnitude below bandwidth means it is compute-bound, and what it computes is the constraint DAG three times per row pair. Reducing that is transpiler work — hoisting the subexpressions that do not depend on the folded variable, since the values at the three points are affine in the point — not kernel tuning. It is also the last place on the device where any arithmetic is being spent that the protocol does not strictly require.
+
+That is what makes the ceiling near. Three of the four phases are already moving memory as fast as the machine can, so the 5.96 seconds of device time is close to a floor, and the ~10x it implies is not a soft limit.
+
+### Past four shards
+
+The acceptance ladder stops at n = 2,000,000, which is exactly four shards against four permits — the one point where the concurrency cap has nothing to bind on. So it had never measured the case a prover would actually meet.
+
+| | shards | CPU | Metal | |
+|---|---:|---:|---:|---:|
+| fib n=2M | 4 | 60.25 s | 10.85 s | 5.556x |
+| fib n=4M | 6 | 112.41 s | 19.95 s | 5.634x |
+
+**The advantage neither falls nor clearly improves at six shards, and the measurement cannot resolve the difference.** That is the honest reading, and it took three attempts to arrive at:
+
+- a single pair said **4.80x**, which read as the backend losing its advantage at scale;
+- three runs and two pairs said **5.69x**, which read as it improving;
+- eight runs on a quiet machine give **18.12, 19.41, 19.49, 19.79, 20.10, 20.29, 21.85, 22.70** — a 25% spread against a CPU arm that varies by 0.9%.
+
+Two things are worth taking from that. **The Metal arm is far noisier than the CPU arm at six shards**, which is what six shards over four permits looks like: the tail is two shards deep and how well it overlaps the first four finishing is scheduling, not work. And **the slow readings cluster immediately after the CPU-arm runs**, which is a hundred seconds of sixteen-core load leaving the machine in a state the next run inherits — so even an idle machine is not a quiet one for a minute or so afterwards.
+
+n = 8,000,000 is not measurable here. The CPU arm's peak resident memory goes from 58 GB at four shards to 98 at six on a 128 GB machine, so the next doubling would swap. That bounds the ladder rather than the backend: the Metal arm peaks at 47 GB where the CPU arm peaks at 98.

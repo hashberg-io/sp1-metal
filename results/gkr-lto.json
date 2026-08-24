@@ -1,0 +1,81 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "cpu_packed": {
+      "gbytes_per_s_best": 48.951671022862875,
+      "giga_base_muls_per_s_best": 48.951671022862875,
+      "lanes": 4,
+      "mega_rows_per_s_best": 611.895887785786,
+      "note": "packed (NEON) lanes, deinterleaved once up front, rayon on all cores",
+      "times": {
+        "all_s": [
+          0.013709208,
+          0.013850458,
+          0.014340709,
+          0.013999959,
+          0.014854,
+          0.014840292,
+          0.014033167,
+          0.01419225,
+          0.014600125,
+          0.014032958
+        ],
+        "best_s": 0.013709208,
+        "mean_s": 0.0142453126
+      }
+    },
+    "cpu_scalar": {
+      "giga_base_muls_per_s_best": 13.784960466524975,
+      "mega_rows_per_s_best": 172.3120058315622,
+      "note": "scalar extension elements over rayon, as sp1-hypercube writes it",
+      "times": {
+        "all_s": [
+          0.059509666,
+          0.054429084,
+          0.053242042,
+          0.051922708,
+          0.049871334,
+          0.048971834,
+          0.048682667,
+          0.049704291,
+          0.049797042,
+          0.04892775
+        ],
+        "best_s": 0.048682667,
+        "mean_s": 0.05150584180000001
+      }
+    },
+    "gbytes_per_s_best": 296.44460994853324,
+    "giga_base_muls_per_s_best": 296.44460994853324,
+    "gpu_over_cpu_packed": 6.055862930809426,
+    "mega_rows_per_s_best": 3705.5576243566657,
+    "packed_over_scalar_cpu": 3.5510925941163047,
+    "params": {
+      "n_rows": 8388608,
+      "pairs": 4194304,
+      "reps": 10
+    },
+    "probe": "gkr",
+    "times": {
+      "all_s": [
+        0.004375333,
+        0.002846833,
+        0.0022785,
+        0.00227775,
+        0.00227475,
+        0.00227575,
+        0.002272167,
+        0.002276208,
+        0.002270125,
+        0.002263791
+      ],
+      "best_s": 0.002263791,
+      "mean_s": 0.0025411207000000002
+    }
+  }
+}

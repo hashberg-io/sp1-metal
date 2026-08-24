@@ -1,0 +1,82 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "cpu": {
+      "giga_base_muls_per_s_best": 6.68120729095839,
+      "mega_rows_per_s_best": 8.52194807520203,
+      "note": "same formula in slop field types over rayon on all cores",
+      "times": {
+        "all_s": [
+          0.502113541,
+          0.495695917,
+          0.501248291,
+          0.492176667,
+          0.497512792,
+          0.537466792,
+          0.5505005,
+          0.528094292,
+          0.49266975,
+          0.530654834
+        ],
+        "best_s": 0.492176667,
+        "mean_s": 0.5128133376
+      }
+    },
+    "cpu_packed": {
+      "giga_base_muls_per_s_best": 71.14879571378148,
+      "lanes": 4,
+      "mega_rows_per_s_best": 90.7510149410478,
+      "note": "packed (NEON) lanes, cache-tiled, rayon on all cores",
+      "tile_rows": 1024,
+      "times": {
+        "all_s": [
+          0.049341208,
+          0.048598375,
+          0.049739625,
+          0.049948709,
+          0.049384625,
+          0.049206625,
+          0.048573709,
+          0.049386875,
+          0.050603042,
+          0.046217709
+        ],
+        "best_s": 0.046217709,
+        "mean_s": 0.0491000502
+      }
+    },
+    "giga_base_muls_per_s_best": 328.9773611955231,
+    "gpu_over_cpu": 49.23920885387358,
+    "gpu_over_cpu_packed": 4.623793809791785,
+    "mega_rows_per_s_best": 419.6139811167386,
+    "params": {
+      "cols": 64,
+      "n_rows": 4194304,
+      "reps": 10,
+      "terms": 128
+    },
+    "probe": "zerocheck",
+    "times": {
+      "all_s": [
+        0.010099667,
+        0.009995625,
+        0.010095042,
+        0.010090042,
+        0.010013375,
+        0.010001125,
+        0.010066709,
+        0.010177958,
+        0.010032083,
+        0.010144708
+      ],
+      "best_s": 0.009995625,
+      "mean_s": 0.0100716334
+    },
+    "trace_gbytes_per_s_best": 107.42117916588509
+  }
+}

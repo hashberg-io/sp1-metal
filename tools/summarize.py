@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Turn a probe results file into the two things a decision needs: a table of
 GPU-versus-CPU ratios, and a per-phase speedup vector to feed to fit_model.py.
 

@@ -1,0 +1,77 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "copy_as_fraction_of_kernel": 3.1650261884348647,
+    "kernel": {
+      "milliseconds": 1.165209,
+      "times": {
+        "all_s": [
+          0.001731834,
+          0.001737083,
+          0.001727958,
+          0.001746334,
+          0.001726709,
+          0.00149025,
+          0.001204375,
+          0.001172542,
+          0.001165209,
+          0.001183458
+        ],
+        "best_s": 0.001165209,
+        "mean_s": 0.0014885752000000003
+      }
+    },
+    "make_visible_to_kernel": {
+      "nanoseconds": 0.0,
+      "note": "resolving the MTLBuffer behind a slop pointer; the whole of the upload",
+      "times": {
+        "all_s": [
+          8.4e-8,
+          4.1e-8,
+          4.2e-8,
+          4.2e-8,
+          4.1e-8,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          4.2e-8
+        ],
+        "best_s": 0.0,
+        "mean_s": 2.9199999999999997e-8
+      }
+    },
+    "params": {
+      "bytes": 268435456.0,
+      "n": 67108864,
+      "reps": 10
+    },
+    "probe": "backend",
+    "staging_copy_avoided": {
+      "gbytes_per_s": 72.78782467175915,
+      "milliseconds": 3.687917,
+      "note": "the host-to-device copy a backend with separate device memory would pay first",
+      "times": {
+        "all_s": [
+          0.003710416,
+          0.003687917,
+          0.003823041,
+          0.003697333,
+          0.003825,
+          0.003770166,
+          0.003730417,
+          0.003725666,
+          0.003695167,
+          0.003721625
+        ],
+        "best_s": 0.003687917,
+        "mean_s": 0.0037386748
+      }
+    }
+  }
+}

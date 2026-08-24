@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! BaseFold fold and sumcheck fix-last-variable, parity-checked against
 //! slop-multilinear's `fold_mle` and `mle_fix_last_variable_constant_padding`.
 //! These are the canonical bandwidth-bound prover primitives.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The vocabulary the packed CPU baselines are written in.
 //!
 //! The SP1 CPU prover does its field arithmetic through the packed field types

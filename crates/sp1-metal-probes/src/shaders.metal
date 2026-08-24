@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 #include <metal_stdlib>
 using namespace metal;
 
@@ -74,6 +75,166 @@ inline uint4 ext_mul(uint4 a, uint4 b) {
         kb_add(kb_mul(a.z, b.y), kb_mul(a.w, b.x)));
     return uint4(c0, c1, c2, c3);
 }
+
+// ---------------------------------------------------------------------------
+// A cheaper extension multiply.
+//
+// Two facts about this field make the schoolbook version wasteful.
+//
+// W is monty(3), and Montgomery form is linear, so multiplying by W is
+// tripling: three multiplies become two additions.
+//
+// Montgomery reduction is also linear, so REDC(ab) + REDC(cd) = REDC(ab + cd)
+// as long as the 64-bit sum stays below P * 2^32. Two products of reduced
+// inputs reach at most 2*(P-1)^2 = 9.079e18 against a bound of 9.152e18, so
+// every pair of products can share a single reduction.
+//
+// Together these take the multiply from 19 kb_mul (76 integer multiplies) to
+// 52 integer multiplies, with the same result bit for bit.
+// ---------------------------------------------------------------------------
+
+struct kb_wide {
+    uint hi;
+    uint lo;
+};
+
+inline kb_wide kb_wmul(uint a, uint b) {
+    kb_wide r;
+    r.lo = a * b;
+    r.hi = mulhi(a, b);
+    return r;
+}
+
+inline kb_wide kb_wadd(kb_wide a, kb_wide b) {
+    kb_wide r;
+    r.lo = a.lo + b.lo;
+    r.hi = a.hi + b.hi + ((r.lo < a.lo) ? 1u : 0u);
+    return r;
+}
+
+/// a*b + c*d, with one Montgomery reduction instead of two.
+inline uint kb_mul2(uint a, uint b, uint c, uint d) {
+    kb_wide t = kb_wadd(kb_wmul(a, b), kb_wmul(c, d));
+    return kb_redc(t.hi, t.lo);
+}
+
+/// Multiplication by W = monty(3).
+inline uint kb_triple(uint x) {
+    return kb_add(kb_add(x, x), x);
+}
+
+inline uint4 ext_mul_fast(uint4 a, uint4 b) {
+    uint c0 = kb_add(
+        kb_mul(a.x, b.x),
+        kb_triple(kb_add(kb_mul2(a.y, b.w, a.z, b.z), kb_mul(a.w, b.y))));
+    uint c1 = kb_add(
+        kb_mul2(a.x, b.y, a.y, b.x),
+        kb_triple(kb_mul2(a.z, b.w, a.w, b.z)));
+    uint c2 = kb_add(
+        kb_add(kb_mul2(a.x, b.z, a.y, b.y), kb_mul(a.z, b.x)),
+        kb_triple(kb_mul(a.w, b.w)));
+    uint c3 = kb_add(kb_mul2(a.x, b.w, a.y, b.z), kb_mul2(a.z, b.y, a.w, b.x));
+    return uint4(c0, c1, c2, c3);
+}
+
+// ---------------------------------------------------------------------------
+// Karatsuba over the same extension.
+//
+// Splitting a = A0 + A1 x^2 and b = B0 + B1 x^2 turns the quartic product into
+// three products of linear factors, and each of those is itself a Karatsuba,
+// so 16 base multiplies become 9. Reassembly uses x^4 = W:
+//
+//   a*b = P0 + M x^2 + P1 x^4,   M = P2 - P0 - P1,  P2 = (A0+A1)(B0+B1)
+//
+// which gives c0 = p00 + W(m2 + p10), c1 = p01 + W p11,
+//             c2 = p02 + m0 + W p12,  c3 = m1.
+// ---------------------------------------------------------------------------
+
+struct kb_deg2 {
+    uint r0;
+    uint r1;
+    uint r2;
+};
+
+/// (c0 + c1 x)(d0 + d1 x) as a quadratic, in three multiplies.
+inline kb_deg2 kb_kmul2(uint c0, uint c1, uint d0, uint d1) {
+    kb_deg2 r;
+    r.r0 = kb_mul(c0, d0);
+    r.r2 = kb_mul(c1, d1);
+    r.r1 = kb_sub(kb_mul(kb_add(c0, c1), kb_add(d0, d1)), kb_add(r.r0, r.r2));
+    return r;
+}
+
+inline uint4 ext_mul_kara(uint4 a, uint4 b) {
+    kb_deg2 p0 = kb_kmul2(a.x, a.y, b.x, b.y);
+    kb_deg2 p1 = kb_kmul2(a.z, a.w, b.z, b.w);
+    kb_deg2 p2 = kb_kmul2(
+        kb_add(a.x, a.z), kb_add(a.y, a.w), kb_add(b.x, b.z), kb_add(b.y, b.w));
+    uint m0 = kb_sub(p2.r0, kb_add(p0.r0, p1.r0));
+    uint m1 = kb_sub(p2.r1, kb_add(p0.r1, p1.r1));
+    uint m2 = kb_sub(p2.r2, kb_add(p0.r2, p1.r2));
+    return uint4(
+        kb_add(p0.r0, kb_triple(kb_add(m2, p1.r0))),
+        kb_add(p0.r1, kb_triple(p1.r1)),
+        kb_add(kb_add(p0.r2, m0), kb_triple(p1.r2)),
+        m1);
+}
+
+// Mixed base/extension arithmetic, for generated constraint code where a
+// constant-only subexpression stays in the base field while anything touching a
+// trace column does not.
+inline uint4 ext_add_base(uint4 a, uint b) {
+    a.x = kb_add(a.x, b);
+    return a;
+}
+
+inline uint4 ext_sub_base(uint4 a, uint b) {
+    a.x = kb_sub(a.x, b);
+    return a;
+}
+
+inline uint4 base_sub_ext(uint a, uint4 b) {
+    uint4 r = uint4(kb_sub(a, b.x), kb_neg(b.y), kb_neg(b.z), kb_neg(b.w));
+    return r;
+}
+
+inline uint4 ext_neg(uint4 a) {
+    return uint4(kb_neg(a.x), kb_neg(a.y), kb_neg(a.z), kb_neg(a.w));
+}
+
+// A column's value with the last variable set to 2 or 4, read straight from the
+// two rows of a pair rather than staged into an array: a wide chip's row would
+// not fit in registers. When the pair has no odd row the partner is zero, which
+// is what the CPU does with a short final chunk.
+inline uint4 zc_at_2(device const uint4* m, uint b0, uint b1, uint i, bool has1) {
+    uint4 a = m[b0 + i];
+    uint4 s = has1 ? ext_sub(m[b1 + i], a) : ext_neg(a);
+    return ext_add(a, ext_add(s, s));
+}
+
+inline uint4 zc_at_4(device const uint4* m, uint b0, uint b1, uint i, bool has1) {
+    uint4 a = m[b0 + i];
+    uint4 s = has1 ? ext_sub(m[b1 + i], a) : ext_neg(a);
+    uint4 s2 = ext_add(s, s);
+    return ext_add(a, ext_add(s2, s2));
+}
+
+// The same interpolation where the columns are still base-field elements, as
+// they are in the zerocheck's first round.
+inline uint zc_at_2_base(device const uint* m, uint b0, uint b1, uint i, bool has1) {
+    uint a = m[b0 + i];
+    uint s = has1 ? kb_sub(m[b1 + i], a) : kb_neg(a);
+    return kb_add(a, kb_add(s, s));
+}
+
+inline uint zc_at_4_base(device const uint* m, uint b0, uint b1, uint i, bool has1) {
+    uint a = m[b0 + i];
+    uint s = has1 ? kb_sub(m[b1 + i], a) : kb_neg(a);
+    uint s2 = kb_add(s, s);
+    return kb_add(a, kb_add(s2, s2));
+}
+
+// ---- end of shared field arithmetic ----
 
 // ---------------------------------------------------------------------------
 // Probe: streaming bandwidth (STREAM triad, integer lanes).
@@ -304,6 +465,19 @@ inline void p2_internal(thread uint* s, uint rc) {
     s[0] = new0;
 }
 
+inline void p2_permute(thread uint* s, constant uint* rc) {
+    p2_external(s);
+    for (uint r = 0; r < 4; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+    for (uint r = 0; r < 20; r++) {
+        p2_internal(s, rc[128u + r]);
+    }
+    for (uint r = 4; r < 8; r++) {
+        p2_full_round(s, rc + r * 16u);
+    }
+}
+
 kernel void poseidon2_16(device const uint* in [[buffer(0)]],
                          device uint* out [[buffer(1)]],
                          constant uint* rc [[buffer(2)]],
@@ -316,16 +490,7 @@ kernel void poseidon2_16(device const uint* in [[buffer(0)]],
     for (uint i = 0; i < 16; i++) {
         s[i] = in[gid * 16u + i];
     }
-    p2_external(s);
-    for (uint r = 0; r < 4; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
-    for (uint r = 0; r < 20; r++) {
-        p2_internal(s, rc[128u + r]);
-    }
-    for (uint r = 4; r < 8; r++) {
-        p2_full_round(s, rc + r * 16u);
-    }
+    p2_permute(s, rc);
     for (uint i = 0; i < 16; i++) {
         out[gid * 16u + i] = s[i];
     }
@@ -344,6 +509,48 @@ struct ZcParams {
     uint num_cols;
     uint num_terms;
 };
+
+// The same round with the trace laid out the way a real one is.
+//
+// `zc_round` reads `trace[col * n + row]`, so consecutive threads read
+// consecutive addresses. A shard's trace is row-major -- `main[row * width +
+// col]` -- and a thread reads a whole row, so consecutive threads start
+// `width` elements apart. Nothing else differs between the two, which is what
+// makes the pair a measurement of the layout rather than of anything else.
+kernel void zc_round_rowmajor(device const uint* trace [[buffer(0)]],
+                              device const uint4* eq [[buffer(1)]],
+                              device const uint4* alpha_pows [[buffer(2)]],
+                              device const uint4* term_cols [[buffer(3)]],
+                              constant ZcParams& p [[buffer(4)]],
+                              device uint4* partials [[buffer(5)]],
+                              uint gid [[thread_position_in_grid]],
+                              uint tid [[thread_index_in_threadgroup]],
+                              uint tgid [[threadgroup_position_in_grid]]) {
+    threadgroup uint4 shared[256];
+    uint4 acc = uint4(0u);
+    if (gid < p.n) {
+        uint base = gid * p.num_cols;
+        for (uint t = 0; t < p.num_terms; t++) {
+            uint4 cols = term_cols[t];
+            uint m = kb_mul(
+                kb_mul(trace[base + cols.x], trace[base + cols.y]),
+                trace[base + cols.z]);
+            acc = ext_add(acc, ext_mul_base(alpha_pows[t], m));
+        }
+        acc = ext_mul(acc, eq[gid]);
+    }
+    shared[tid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            shared[tid] = ext_add(shared[tid], shared[tid + stride]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        partials[tgid] = shared[0];
+    }
+}
 
 kernel void zc_round(device const uint* trace [[buffer(0)]],
                      device const uint4* eq [[buffer(1)]],
@@ -461,4 +668,321 @@ kernel void gkr_round(device const uint4* num_0 [[buffer(0)]],
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: the GPU-side challenger.
+//
+// Every Fiat-Shamir challenge in SP1 comes from a duplex sponge over the same
+// width-16 Poseidon2 permutation above: SP1GlobalContext is
+// KoalaBearDegree4Duplex, whose Challenger is p3's
+// DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>. Because each sumcheck round's
+// challenge is derived from the previous round's output, a challenger that
+// lives on the host forces one command-buffer round trip per round, and the
+// launch probe measured that at 87 us against a 1.6 us marginal dispatch.
+// Running the sponge on the device instead lets every round of a fold be
+// encoded into a single submission.
+//
+// The state machine mirrors p3 exactly, including the details that matter for
+// parity: observing clears the output buffer, a full input buffer duplexes
+// immediately, sampling duplexes if there is pending input or no output left,
+// and samples are *popped from the end* of the output buffer.
+// ---------------------------------------------------------------------------
+
+struct Challenger {
+    uint sponge[16];
+    uint input_buf[8];
+    uint output_buf[8];
+    uint input_len;
+    uint output_len;
+};
+
+inline void chal_duplex(thread Challenger* c, constant uint* rc) {
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = c->sponge[i];
+    }
+    // Overwrite the first `input_len` elements with the buffered input.
+    for (uint i = 0; i < c->input_len; i++) {
+        s[i] = c->input_buf[i];
+    }
+    c->input_len = 0u;
+    p2_permute(s, rc);
+    for (uint i = 0; i < 16; i++) {
+        c->sponge[i] = s[i];
+    }
+    for (uint i = 0; i < 8; i++) {
+        c->output_buf[i] = s[i];
+    }
+    c->output_len = 8u;
+}
+
+inline void chal_observe(thread Challenger* c, constant uint* rc, uint v) {
+    c->output_len = 0u;
+    c->input_buf[c->input_len] = v;
+    c->input_len += 1u;
+    if (c->input_len == 8u) {
+        chal_duplex(c, rc);
+    }
+}
+
+inline uint chal_sample_base(thread Challenger* c, constant uint* rc) {
+    if (c->input_len != 0u || c->output_len == 0u) {
+        chal_duplex(c, rc);
+    }
+    c->output_len -= 1u;
+    return c->output_buf[c->output_len];
+}
+
+inline void chal_observe_ext(thread Challenger* c, constant uint* rc, uint4 v) {
+    chal_observe(c, rc, v.x);
+    chal_observe(c, rc, v.y);
+    chal_observe(c, rc, v.z);
+    chal_observe(c, rc, v.w);
+}
+
+inline uint4 chal_sample_ext(thread Challenger* c, constant uint* rc) {
+    uint c0 = chal_sample_base(c, rc);
+    uint c1 = chal_sample_base(c, rc);
+    uint c2 = chal_sample_base(c, rc);
+    uint c3 = chal_sample_base(c, rc);
+    return uint4(c0, c1, c2, c3);
+}
+
+kernel void chal_init(device Challenger* c [[buffer(0)]]) {
+    for (uint i = 0; i < 16; i++) {
+        c->sponge[i] = 0u;
+    }
+    c->input_len = 0u;
+    c->output_len = 0u;
+}
+
+// Observe `n_obs` base elements, then sample `n_samp` extension elements.
+// One thread: the sponge is inherently sequential.
+kernel void chal_observe_sample(device Challenger* state [[buffer(0)]],
+                                device const uint* vals [[buffer(1)]],
+                                device uint4* out [[buffer(2)]],
+                                constant uint& n_obs [[buffer(3)]],
+                                constant uint& n_samp [[buffer(4)]],
+                                constant uint* rc [[buffer(5)]]) {
+    Challenger c = *state;
+    for (uint i = 0; i < n_obs; i++) {
+        chal_observe(&c, rc, vals[i]);
+    }
+    for (uint i = 0; i < n_samp; i++) {
+        out[i] = chal_sample_ext(&c, rc);
+    }
+    *state = c;
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: a BaseFold round with Fiat-Shamir in the loop.
+//
+// One round of the fold slop's `fold_mle` performs, in the shape the prover
+// runs it: sum the even and odd entries to form the round message, observe both
+// into the challenger, sample the fold challenge, then fold. Splitting the
+// reduction from the challenger keeps one kernel usable by both the host-driven
+// and the device-driven paths, so the two differ only in where the challenge
+// comes from.
+// ---------------------------------------------------------------------------
+
+// Per-threadgroup partial sums of the even and odd entries.
+kernel void sc_partials(device const uint4* in [[buffer(0)]],
+                        device uint4* partials [[buffer(1)]],
+                        constant uint& n_pairs [[buffer(2)]],
+                        uint gid [[thread_position_in_grid]],
+                        uint tid [[thread_position_in_threadgroup]],
+                        uint tgid [[threadgroup_position_in_grid]]) {
+    threadgroup uint4 sh_even[256];
+    threadgroup uint4 sh_odd[256];
+    uint4 e = uint4(0u, 0u, 0u, 0u);
+    uint4 o = uint4(0u, 0u, 0u, 0u);
+    if (gid < n_pairs) {
+        e = in[2u * gid];
+        o = in[2u * gid + 1u];
+    }
+    sh_even[tid] = e;
+    sh_odd[tid] = o;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            sh_even[tid] = ext_add(sh_even[tid], sh_even[tid + s]);
+            sh_odd[tid] = ext_add(sh_odd[tid], sh_odd[tid + s]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        partials[2u * tgid] = sh_even[0];
+        partials[2u * tgid + 1u] = sh_odd[0];
+    }
+}
+
+// Reduce the per-threadgroup partials to the two-element round message.
+// One threadgroup.
+kernel void sc_reduce(device const uint4* partials [[buffer(0)]],
+                      device uint4* msg [[buffer(1)]],
+                      constant uint& n_partials [[buffer(2)]],
+                      uint tid [[thread_position_in_threadgroup]]) {
+    threadgroup uint4 sh_even[256];
+    threadgroup uint4 sh_odd[256];
+    uint4 e = uint4(0u, 0u, 0u, 0u);
+    uint4 o = uint4(0u, 0u, 0u, 0u);
+    for (uint i = tid; i < n_partials; i += 256u) {
+        e = ext_add(e, partials[2u * i]);
+        o = ext_add(o, partials[2u * i + 1u]);
+    }
+    sh_even[tid] = e;
+    sh_odd[tid] = o;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            sh_even[tid] = ext_add(sh_even[tid], sh_even[tid + s]);
+            sh_odd[tid] = ext_add(sh_odd[tid], sh_odd[tid + s]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) {
+        msg[0] = sh_even[0];
+        msg[1] = sh_odd[0];
+    }
+}
+
+// Observe the round message and sample the fold challenge, on the device.
+// This is the dispatch that removes the host from the round loop.
+kernel void sc_challenge(device const uint4* msg [[buffer(0)]],
+                         device Challenger* state [[buffer(1)]],
+                         device uint4* beta [[buffer(2)]],
+                         constant uint* rc [[buffer(3)]]) {
+    Challenger c = *state;
+    chal_observe_ext(&c, rc, msg[0]);
+    chal_observe_ext(&c, rc, msg[1]);
+    beta[0] = chal_sample_ext(&c, rc);
+    *state = c;
+}
+
+// `fold_ext` with the challenge read from device memory rather than baked into
+// the command buffer, so the fold can be encoded before the challenge exists.
+kernel void fold_ext_dev(device const uint4* in [[buffer(0)]],
+                         device uint4* out [[buffer(1)]],
+                         device const uint4* beta [[buffer(2)]],
+                         uint gid [[thread_position_in_grid]]) {
+    out[gid] = ext_add(in[2u * gid], ext_mul(beta[0], in[2u * gid + 1u]));
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: the Reed-Solomon encode inside a BaseFold commitment.
+//
+// Its kernels are not here. They ship in the vendored `slop-dft`, which is
+// where the prover reaches them, and this library concatenates that file so
+// that the probe's parity check tests the source that runs in a proof rather
+// than a copy of it. See `crates/vendor/slop-dft/src/shaders.metal`.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Step 6: the Merkle tree over a committed codeword.
+//
+// slop commits a tensor by hashing each row of the row-major matrix into a
+// digest with `PaddingFreeSponge<KoalaPerm, 16, 8, 8>` and then compressing
+// pairs of digests up the tree with `TruncatedPermutation<KoalaPerm, 2, 8, 16>`.
+// Both are the same width-16 Poseidon2 permutation, so both are one kernel each
+// and neither needs the host between layers: the whole tree is a single
+// submission, which is the lesson the challenger spike ended on.
+// ---------------------------------------------------------------------------
+
+// One digest per row. Overwrite-mode sponge: absorb the row eight elements at a
+// time into the first eight lanes, permuting after each chunk, including a
+// short final chunk.
+kernel void merkle_leaves(device const uint* rows [[buffer(0)]],
+                          device uint* digests [[buffer(1)]],
+                          constant uint& width [[buffer(2)]],
+                          constant uint& n_rows [[buffer(3)]],
+                          constant uint* rc [[buffer(4)]],
+                          uint gid [[thread_position_in_grid]]) {
+    if (gid >= n_rows) {
+        return;
+    }
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = 0u;
+    }
+    device const uint* row = rows + gid * width;
+    for (uint base = 0; base < width; base += 8u) {
+        uint take = min(8u, width - base);
+        for (uint i = 0; i < take; i++) {
+            s[i] = row[base + i];
+        }
+        p2_permute(s, rc);
+    }
+    for (uint i = 0; i < 8; i++) {
+        digests[gid * 8u + i] = s[i];
+    }
+}
+
+// One layer of the tree: a parent is the first eight lanes of the permutation
+// applied to its two children laid end to end.
+kernel void merkle_compress(device const uint* children [[buffer(0)]],
+                            device uint* parents [[buffer(1)]],
+                            constant uint& n_parents [[buffer(2)]],
+                            constant uint* rc [[buffer(3)]],
+                            uint gid [[thread_position_in_grid]]) {
+    if (gid >= n_parents) {
+        return;
+    }
+    uint s[16];
+    for (uint i = 0; i < 8; i++) {
+        s[i] = children[(2u * gid) * 8u + i];
+        s[8u + i] = children[(2u * gid + 1u) * 8u + i];
+    }
+    p2_permute(s, rc);
+    for (uint i = 0; i < 8; i++) {
+        parents[gid * 8u + i] = s[i];
+    }
+}
+
+// The commitment is not the Merkle root. slop binds the shape into it:
+// `compress([root, hash([log_height, total_width])])`, so a commitment carries
+// the dimensions it was made over. A backend that returned the bare root would
+// produce commitments the verifier rejects.
+kernel void merkle_finalize(device const uint* root [[buffer(0)]],
+                            device uint* out [[buffer(1)]],
+                            constant uint& log_height [[buffer(2)]],
+                            constant uint& total_width [[buffer(3)]],
+                            constant uint* rc [[buffer(4)]]) {
+    uint s[16];
+    for (uint i = 0; i < 16; i++) {
+        s[i] = 0u;
+    }
+    s[0] = log_height;
+    s[1] = total_width;
+    p2_permute(s, rc);
+    uint h[8];
+    for (uint i = 0; i < 8; i++) {
+        h[i] = s[i];
+    }
+    for (uint i = 0; i < 8; i++) {
+        s[i] = root[i];
+        s[8u + i] = h[i];
+    }
+    p2_permute(s, rc);
+    for (uint i = 0; i < 8; i++) {
+        out[i] = s[i];
+    }
+}
+
+// Gathers one tensor's columns into the interleaved row-major layout the leaf
+// hash reads. slop hashes the concatenation of every tensor's row, and the
+// tensors arrive as separate buffers.
+kernel void merkle_gather(device const uint* src [[buffer(0)]],
+                          device uint* dst [[buffer(1)]],
+                          constant uint& src_width [[buffer(2)]],
+                          constant uint& dst_width [[buffer(3)]],
+                          constant uint& col_offset [[buffer(4)]],
+                          constant uint& n [[buffer(5)]],
+                          uint gid [[thread_position_in_grid]]) {
+    if (gid >= n) {
+        return;
+    }
+    uint r = gid / src_width;
+    uint c = gid - r * src_width;
+    dst[r * dst_width + col_offset + c] = src[gid];
 }

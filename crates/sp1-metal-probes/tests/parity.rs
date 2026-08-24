@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! GPU-vs-CPU parity at small sizes. Every Metal primitive is compared
 //! against the slop CPU implementation on shared random vectors; these run in
 //! milliseconds and are the CI gate for kernel correctness.
@@ -45,11 +46,31 @@ fn fold_tail_round_trip_parity() {
 }
 
 #[test]
-fn ntt_butterfly_stage_parity() {
+fn reed_solomon_encode_parity() {
     probes::encode::check(&gpu()).unwrap();
 }
 
 #[test]
 fn gkr_round_parity() {
     probes::gkr::check(&gpu()).unwrap();
+}
+
+#[test]
+fn duplex_challenger_parity() {
+    probes::challenger::check(&gpu()).unwrap();
+}
+
+#[test]
+fn slop_buffer_on_metal_backend_parity() {
+    probes::backend::check(&gpu()).unwrap();
+}
+
+#[test]
+fn merkle_commitment_parity() {
+    probes::merkle::check(&gpu()).unwrap();
+}
+
+#[test]
+fn sumcheck_driver_on_metal_parity() {
+    probes::sumcheck::check(&gpu()).unwrap();
 }

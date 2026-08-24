@@ -1,0 +1,57 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "giga_base_muls_per_s_best": 328.2480688188753,
+    "mega_rows_per_s_best": 418.6837612485654,
+    "params": {
+      "cols": 64,
+      "n_rows": 4194304,
+      "reps": 10,
+      "terms": 128
+    },
+    "probe": "zerocheck",
+    "row_major": {
+      "column_major_over_row_major": 3.514490908363116,
+      "giga_base_muls_per_s_best": 93.39846861967207,
+      "note": "identical kernel and data, trace read as main[row * cols + col] rather than main[col * n + row]",
+      "times": {
+        "all_s": [
+          0.035255458,
+          0.035219125,
+          0.035207583,
+          0.035333333,
+          0.035246334,
+          0.035211875,
+          0.035275167,
+          0.035295417,
+          0.035209875,
+          0.035221333
+        ],
+        "best_s": 0.035207583,
+        "mean_s": 0.03524755
+      }
+    },
+    "times": {
+      "all_s": [
+        0.010110958,
+        0.010057834,
+        0.010045875,
+        0.0100585,
+        0.010026542,
+        0.01004075,
+        0.010058375,
+        0.010017833,
+        0.010034542,
+        0.010055292
+      ],
+      "best_s": 0.010017833,
+      "mean_s": 0.010050650099999999
+    },
+    "trace_gbytes_per_s_best": 107.18304287963275
+  }
+}

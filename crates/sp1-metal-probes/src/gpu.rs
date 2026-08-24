@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -8,7 +9,19 @@ use metal::{
     Library, MTLResourceOptions, MTLSize,
 };
 
-pub const SHADER_SRC: &str = include_str!("shaders.metal");
+/// The probe suite's own kernels.
+const PROBE_SRC: &str = include_str!("shaders.metal");
+
+/// The encode kernels, included from the vendored crate that ships them by path
+/// rather than by depending on it: that crate sits below this one, and the
+/// point of reading its file is that the parity check tests the source a proof
+/// runs, not a copy.
+const DFT_SRC: &str = include_str!("../../vendor/slop-dft/src/shaders.metal");
+
+/// The whole library: everything the probes compile against.
+pub fn shader_src() -> String {
+    format!("{PROBE_SRC}\n{DFT_SRC}")
+}
 pub const THREADGROUP_SIZE: u64 = 256;
 
 pub struct Gpu {
@@ -29,7 +42,7 @@ impl Gpu {
         let device = Device::system_default().ok_or("no Metal device found")?;
         let queue = device.new_command_queue();
         let library = device
-            .new_library_with_source(SHADER_SRC, &CompileOptions::new())
+            .new_library_with_source(&shader_src(), &CompileOptions::new())
             .map_err(|e| format!("shader compilation failed: {e}"))?;
         Ok(Self { device, queue, library, pipelines: RefCell::new(HashMap::new()) })
     }
@@ -142,6 +155,19 @@ pub fn set_bytes<T: Copy>(enc: &ComputeCommandEncoderRef, index: u64, value: &T)
 pub fn dispatch_1d(enc: &ComputeCommandEncoderRef, n: u64) {
     let tg = THREADGROUP_SIZE.min(n.max(1));
     enc.dispatch_threads(MTLSize::new(n, 1, 1), MTLSize::new(tg, 1, 1));
+}
+
+/// Dispatches a grid with the column index fastest, so consecutive threads read
+/// consecutive columns of the same row.
+pub fn dispatch_2d(enc: &ComputeCommandEncoderRef, cols: u64, rows: u64) {
+    let tw = THREADGROUP_SIZE.min(cols.max(1));
+    let th = (THREADGROUP_SIZE / tw).max(1).min(rows.max(1));
+    enc.dispatch_threads(MTLSize::new(cols, rows, 1), MTLSize::new(tw, th, 1));
+}
+
+/// Dispatches `x` by `y` threadgroups of `THREADGROUP_SIZE` threads each.
+pub fn dispatch_groups_2d(enc: &ComputeCommandEncoderRef, x: u64, y: u64) {
+    enc.dispatch_thread_groups(MTLSize::new(x, y, 1), MTLSize::new(THREADGROUP_SIZE, 1, 1));
 }
 
 pub fn dispatch_groups(enc: &ComputeCommandEncoderRef, groups: u64) {

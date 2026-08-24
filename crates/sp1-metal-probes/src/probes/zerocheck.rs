@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Synthetic zerocheck first round: evaluates T random degree-3 monomials per
 //! row of a column-major base-field trace, combines them with powers of a
 //! random extension-field alpha, weights by eq(row), and reduces to a single
@@ -130,6 +131,7 @@ fn cpu_packed(data: &ZcData, packed: &ZcPacked, n: usize) -> EF {
     sum_lanes(&total)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_gpu(
     gpu: &Gpu,
     data: &ZcData,
@@ -137,6 +139,7 @@ fn run_gpu(
     cols: usize,
     terms: usize,
     reps: usize,
+    kernel: &str,
 ) -> Result<(EF, crate::gpu::BenchTimes), String> {
     let groups = n.div_ceil(THREADGROUP_SIZE as usize);
     let buf_trace = gpu.buffer_from(&monty_vec_of_f(&data.trace));
@@ -144,7 +147,7 @@ fn run_gpu(
     let buf_alpha = gpu.buffer_from(&monty4_vec_of_ef(&data.alpha_pows));
     let buf_terms = gpu.buffer_from(&data.term_cols);
     let buf_partials = gpu.buffer_empty::<[u32; 4]>(groups);
-    let pso = gpu.pipeline("zc_round")?;
+    let pso = gpu.pipeline(kernel)?;
     let params = ZcParams { n: n as u32, num_cols: cols as u32, num_terms: terms as u32 };
     let times = gpu.bench_encoded(reps, 1, |enc| {
         enc.set_compute_pipeline_state(&pso);
@@ -169,7 +172,7 @@ pub fn check(gpu: &Gpu) -> Result<(), String> {
     let (n, cols, terms) = (4096usize, 8usize, 8usize);
     let data = gen_data(&mut rng, n, cols, terms);
     let expected = cpu_reference(&data, n);
-    let (got, _) = run_gpu(gpu, &data, n, cols, terms, 1)?;
+    let (got, _) = run_gpu(gpu, &data, n, cols, terms, 1, "zc_round")?;
     if got != expected {
         return Err(format!("zc_round mismatch: got {got:?}, expected {expected:?}"));
     }
@@ -193,7 +196,10 @@ pub fn bench(
 ) -> Result<Value, String> {
     let mut rng = StdRng::seed_from_u64(42);
     let data = gen_data(&mut rng, n, cols, terms);
-    let (_, times) = run_gpu(gpu, &data, n, cols, terms, reps)?;
+    let (_, times) = run_gpu(gpu, &data, n, cols, terms, reps, "zc_round")?;
+    // The same arithmetic over the same data with the trace read the way a real
+    // shard's is. Only the layout differs.
+    let (_, times_rm) = run_gpu(gpu, &data, n, cols, terms, reps, "zc_round_rowmajor")?;
     let base_muls_per_row = (terms * (2 + 4)) as f64 + 16.0;
     let mut result = json!({
         "probe": "zerocheck",
@@ -201,6 +207,12 @@ pub fn bench(
         "times": times_json(&times),
         "mega_rows_per_s_best": n as f64 / times.best / 1e6,
         "giga_base_muls_per_s_best": n as f64 * base_muls_per_row / times.best / 1e9,
+        "row_major": {
+            "times": times_json(&times_rm),
+            "giga_base_muls_per_s_best": n as f64 * base_muls_per_row / times_rm.best / 1e9,
+            "column_major_over_row_major": times_rm.best / times.best,
+            "note": "identical kernel and data, trace read as main[row * cols + col] rather than main[col * n + row]",
+        },
         "trace_gbytes_per_s_best": (cols * n * 4) as f64 / times.best / 1e9,
     });
     if with_cpu {

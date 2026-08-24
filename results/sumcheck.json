@@ -1,0 +1,49 @@
+{
+  "host": {
+    "device": "Apple M4 Max",
+    "max_threads_per_threadgroup": 1024,
+    "recommended_max_working_set_bytes": 115448725504,
+    "unified_memory": true
+  },
+  "result": {
+    "driver_on_cpu": {
+      "milliseconds": 12.004042,
+      "note": "slop's own Mle on CpuBackend, scalar as the prover runs it",
+      "per_round_us": 545.6382727272727,
+      "times": {
+        "all_s": [
+          0.012420125,
+          0.012019958,
+          0.012304542,
+          0.012317625,
+          0.012004042
+        ],
+        "best_s": 0.012004042,
+        "mean_s": 0.0122132584
+      }
+    },
+    "driver_on_metal": {
+      "milliseconds": 5.091417,
+      "per_round_us": 231.42804545454544,
+      "times": {
+        "all_s": [
+          0.005419584,
+          0.005212042,
+          0.005091417,
+          0.005246875,
+          0.005127708
+        ],
+        "best_s": 0.005091417,
+        "mean_s": 0.0052195252
+      }
+    },
+    "metal_over_cpu": 2.3577015985922976,
+    "note": "the driver keeps the challenger on the host, so every round is a round trip",
+    "params": {
+      "n": 4194304,
+      "reps": 5,
+      "rounds": 22
+    },
+    "probe": "sumcheck"
+  }
+}

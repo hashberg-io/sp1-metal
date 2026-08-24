@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! One sumcheck round of a logup GKR layer — the largest single phase of a
 //! shard proof, and the one the rest of the suite prices worst.
 //!
