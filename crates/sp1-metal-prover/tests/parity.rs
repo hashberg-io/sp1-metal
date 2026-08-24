@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The Metal GKR round reduction against the CPU one it replaces.
 //!
 //! Both are called on the same polynomial, so the only difference between the
@@ -314,8 +315,19 @@ fn check_transition(rows: usize, width: usize) {
         (draw(&mut rng, n), draw(&mut rng, n), draw(&mut rng, n), draw(&mut rng, n));
     let out_rows = rows.div_ceil(2);
     let want = transition_reference(&n0, &d0, &n1, &d1, width, rows, out_rows);
-    let got = sp1_hypercube::metal::transition_chip(&n0, &d0, &n1, &d1, width, rows, out_rows)
-        .expect("the GPU path should be taken with the threshold lifted");
+    let got = sp1_hypercube::metal::transition_layer(&[(
+        &n0[..],
+        &d0[..],
+        &n1[..],
+        &d1[..],
+        width,
+        rows,
+        out_rows,
+    )])
+    .into_iter()
+    .next()
+    .flatten()
+    .expect("the GPU path should be taken with the threshold lifted");
     assert_eq!(got.0, want.0, "numerator 0, rows {rows} width {width}");
     assert_eq!(got.1, want.1, "denominator 0, rows {rows} width {width}");
     assert_eq!(got.2, want.2, "numerator 1, rows {rows} width {width}");

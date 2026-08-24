@@ -1240,12 +1240,11 @@ dependencies = [
 [[package]]
 name = "slop-basefold-prover"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9322a50315808f06a40271123e6e587750fa2e17715a110b067575afd22ccbb"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "rand",
+ "rayon",
  "serde",
  "slop-algebra",
  "slop-alloc",
@@ -1306,15 +1305,16 @@ dependencies = [
 [[package]]
 name = "slop-dft"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb7f508dd516fa67da538d2efd61fafc70164786953b032d0ce7558288ec8df1"
 dependencies = [
+ "metal",
  "p3-dft",
+ "p3-koala-bear",
  "serde",
  "slop-algebra",
  "slop-alloc",
  "slop-matrix",
  "slop-tensor",
+ "sp1-metal-core",
 ]
 
 [[package]]
@@ -1370,8 +1370,11 @@ dependencies = [
  "slop-symmetric",
  "slop-tensor",
  "slop-utils",
+ "sp1-metal-core",
+ "sp1-metal-probes",
  "thiserror",
  "tracing",
+ "transpose",
 ]
 
 [[package]]
@@ -1427,8 +1430,6 @@ dependencies = [
 [[package]]
 name = "slop-multilinear"
 version = "6.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffdacfe81725b672b35204e5a6a7a6a4d8468950eed71bef6e0c8f31431ca128"
 dependencies = [
  "derive-where",
  "futures",
@@ -1650,6 +1651,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-metal-core"
+version = "0.1.0"
+dependencies = [
+ "metal",
+]
+
+[[package]]
 name = "sp1-metal-probes"
 version = "0.1.0"
 dependencies = [
@@ -1669,6 +1677,7 @@ dependencies = [
  "slop-sumcheck",
  "slop-symmetric",
  "slop-tensor",
+ "sp1-metal-core",
 ]
 
 [[package]]
@@ -1680,6 +1689,7 @@ dependencies = [
  "serde_json",
  "slop-algebra",
  "slop-alloc",
+ "slop-dft",
  "slop-koala-bear",
  "slop-multilinear",
  "slop-sumcheck",
