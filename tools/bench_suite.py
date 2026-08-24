@@ -23,6 +23,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import time
 
@@ -193,12 +194,25 @@ def run_once(name: str, n: int, arm: str, shard_size: int, mode: str,
     cmd = ["/usr/bin/time", "-l", "nice", "-n", "5", str(HOST),
            "--elf", str(elf_path(name)), "--stdin-u32", str(n), "--mode", mode]
     t0 = time.time()
+    # Its own process group, so a timeout kills the prover too. subprocess's
+    # own timeout kills only the direct child -- `/usr/bin/time` -- and leaves
+    # the host running, which is how a hung run survived being timed out and
+    # sat at 0% CPU for seventeen minutes holding its memory.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, env=env, start_new_session=True)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
-        out = p.stdout + p.stderr
-        rc = p.returncode
+        out = proc.communicate(timeout=timeout)[0]
+        rc = proc.returncode
     except subprocess.TimeoutExpired:
-        return {"verified": False, "error": "timeout", "elapsed_s": time.time() - t0}
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        return {"verified": False, "error": "timeout", "elapsed_s": round(time.time() - t0, 1)}
 
     row = parse(out)
     row["returncode"] = rc
