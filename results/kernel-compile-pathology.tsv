@@ -1,0 +1,24 @@
+# Zerocheck kernel compilation, measured 2026-08-24 on an M4 Max, machine idle.
+#
+# The zerocheck kernel is generated per chip from that chip's constraint DAG and
+# compiled the first time the chip is seen. `SP1_METAL_ZEROCHECK_MAX_NODES`
+# (default 16384) is meant to keep chips too large to compile off the GPU.
+#
+# It does not work: node count does not predict compile cost. Chips in the
+# 7,000-13,000 node band cost about ten minutes to compile, while Global:true at
+# 15,196 nodes compiles without trouble in every workload measured here.
+#
+# macOS caches the compiled shader against its source, so the cost is one-time
+# per program per machine -- but it lands on a user's first proof, which appears
+# to hang. Compiling the offending chips buys nothing measurable: keccak's warm
+# wall is 2.77 s with them and 2.79-2.85 s without.
+guest	chip_introduced	nodes	cold_s	warm_s	note
+keccak	KeccakPermuteControl:true	8234	582	6	both variants compile on the first proof
+keccak	KeccakPermuteControl:false	12351	582	6	same run
+divrem	DivRem:true	7624	557	9	same band, same behaviour
+divrem	DivRem:false	11436	557	9	same run
+sha256	ShaCompress:true	4472	8	8	below the band, compiles fine
+sha256	ShaCompress:false	6708	8	8	below the band, compiles fine
+fib	Global:true	15196	11	11	ABOVE the band and compiles fine
+secp256k1	Secp256k1DoubleAssign:true	167376	6	6	over the bound, never compiled, falls back
+secp256k1	Secp256k1DoubleAssign:false	251064	6	6	over the bound, never compiled, falls back

@@ -1,0 +1,19 @@
+# The secp256k1 cliff, measured 2026-08-24 on an M4 Max, one job at a time.
+#
+# secp256k1's Secp256k1DoubleAssign chip is 167,376 and 251,064 constraint nodes,
+# far over the zerocheck node bound, so it never gets a GPU kernel.
+#
+# Between n=1000 and n=1500 the Metal arm falls off a cliff while the CPU arm
+# does not move and the shard count does not change. This is a defect in the
+# Metal path, not a cost of the workload: at n=1500 the CPU arm proves in 7.79 s
+# and the Metal arm does not finish in 900.
+#
+# An earlier reading of this cliff was contaminated -- the diagnostic ran
+# alongside a stuck 21-minute process -- and was re-measured cleanly.
+guest	n	arm	wall_s	shards	note
+secp256k1	500	gpu	2.298	3	cold
+secp256k1	500	gpu	2.180	3	warm
+secp256k1	1000	cpu	7.731	3
+secp256k1	1000	gpu	2.146	3	3.60x, the expected regime
+secp256k1	1500	cpu	7.793	3	CPU arm is flat across the cliff
+secp256k1	1500	gpu	>900	?	killed at 900 s; >115x SLOWER than the CPU arm

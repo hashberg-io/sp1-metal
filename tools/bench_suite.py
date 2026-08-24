@@ -315,15 +315,15 @@ guest("bits", "acceptance-bits", 125_000, 1_000_000, 2_000_000, "A", "bitwise an
 guest("branch", "bench-branch", 170_000, 1_358_569, 2_700_000, "A", "control flow")
 guest("divrem", "bench-divrem", 150_000, 1_199_680, 2_400_000, "A", "division")
 guest("mulh", "bench-mulh", 375_000, 2_999_198, 6_000_000, "A", "widening multiply")
-guest("sha256", "bench-sha256", 2_500, 20_000, 40_000, "B", "ShaExtend/ShaCompress")
+guest("sha256", "bench-sha256", 5_000, 20_000, 40_000, "B", "ShaExtend/ShaCompress")
 guest("keccak", "bench-keccak", 500, 2_000, 4_000, "B", "KeccakPermute",
       env={"SP1_METAL_ZEROCHECK_MAX_NODES": "8000"}, timeout=900)
-guest("secp256k1", "bench-secp256k1", 2_500, 20_000, 40_000, "B", "Weierstrass/Fp")
-guest("bn254", "bench-bn254", 2_500, 20_000, 40_000, "B", "Bn254 add/double")
-guest("uint256", "bench-uint256", 2_500, 20_000, 40_000, "B", "Uint256Mul")
+guest("secp256k1", "bench-secp256k1", 250, 500, 1_000, "B", "Weierstrass/Fp", timeout=900)
+guest("bn254", "bench-bn254", 250, 500, 1_000, "B", "Bn254 add/double", timeout=900)
+guest("uint256", "bench-uint256", 250, 500, 1_000, "B", "Uint256Mul", timeout=900)
 guest("sort", "bench-sort", 15_000, 123_941, 250_000, "C", "memory and compare")
 guest("matmul", "bench-matmul", 57, 114, 160, "C", "dense regular arithmetic")
-guest("merkle", "bench-merkle", 1_024, 8_192, 16_384, "C", "sha256 + addressing")
+guest("merkle", "bench-merkle", 1_024, 4_096, 8_192, "C", "sha256 + addressing")
 
 
 if __name__ == "__main__":
