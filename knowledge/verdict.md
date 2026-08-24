@@ -10,11 +10,11 @@ So the honest summary is that **the earlier recommendation was wrong and its mea
 
 ## What the earlier verdict said, and how it stands
 
-It predicted that a complete port would reach 3.3x against a *packed* CPU baseline and 6.5x against the prover as it ships, and it recommended not building on the strength of the first number.
+It predicted 3.3x against a *packed* CPU baseline, and it recommended not building on the strength of that number. Against the prover as it ships it predicted much more: after the spikes refit it, [backend-plan.md](backend-plan.md) put a complete port at **8.8x** integrated naively and **10.7x** with the CPU work pipelined against the GPU's, both computed by [`tools/fit_model.py`](../tools/fit_model.py) over a real profile.
 
-- The recommendation was wrong. A partial port — four phases, not every GPU-able one — reached 5.56x against the shipped prover.
-- The prediction against that same baseline was 6.5x, so the model was **optimistic by about 15%**, not pessimistic. It was not beaten; it was undershot by a smaller port.
-- The packed-CPU reading of 3.3x has not been refuted, because **the CPU prover is still scalar.** Nothing in this work changed that, so the comparison the earlier document called the honest one between two pieces of silicon remains unmade.
+- **The recommendation was wrong.** A partial port — four phases, not every GPU-able one — reached 5.56x on core shard proving against the prover as it ships.
+- **The model was optimistic, not pessimistic, by roughly a factor of two.** It priced each phase by its kernel's throughput ratio and assumed the rest would follow. The built backend is bound by something the model had no term for: its own dependency structure, with the device busy about 48% of the time and the CPU using about 5 of 16 cores. [next-levers.md](next-levers.md) is five rounds of trying to close that gap, and the last three rounds moved almost nothing.
+- **The packed-CPU reading of 3.3x has not been refuted**, because the CPU prover is still scalar. Nothing in this work changed that, so the comparison the earlier document called the honest one between two pieces of silicon remains unmade.
 
 That last point is the one to carry forward. It is set out below and it is unchanged.
 

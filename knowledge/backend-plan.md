@@ -1,10 +1,14 @@
-# Building the backend
+# Plan for building the backend
+
+> **Status: executed.** The port described here was built; [backend.md](backend.md) is what building it found.
+> This document opens by quoting a verdict that has since been overturned — see [verdict.md](verdict.md) — and its projection proved optimistic by roughly a factor of two.
+> Kept because the gap between the plan and the outcome is the useful part.
 
 [verdict.md](verdict.md) concluded that a Metal backend is not worth building on this hardware, on the strength of a predicted 3.3× against a bar of 5×.
 That prediction measured the GPU against a *packed* CPU baseline, because that is the fair comparison between two pieces of silicon.
 [D7](desiderata.md) does not ask for the fair comparison. It asks for 5× "the same machine's CPU prover", and the prover on this machine is scalar.
 
-Against the prover that actually ships, a complete port predicts **10.7×**, and every corner of the sensitivity band stays above 6.
+Against the prover that actually ships, a complete port predicts **10.7×** with the CPU work pipelined against the GPU's, or 8.8× if it is integrated naively and everything runs in sequence; both come from [`tools/fit_model.py`](../tools/fit_model.py) over a real profile, and every corner of the sensitivity band stays above 6.
 This document is the plan if that is the bar you want to clear: what the number rests on, where the code seam is, what is not yet known, and in what order to find out.
 
 The three unknowns below have since been measured; [spikes.md](spikes.md) has the results and the go/no-go, and the numbers here are the refit ones.
@@ -45,7 +49,7 @@ It is still a bet, and it belongs at the top of the risk register rather than bu
 
 ## There is no partial path
 
-Compressing one phase at a time, against the shipped prover:
+Compressing one phase at a time, against the shipped prover, serially — so these are the naive-integration figures, not the pipelined ones quoted above:
 
 | after porting | end to end |
 |---|---|
@@ -163,5 +167,5 @@ The Metal kernels for Poseidon2, the GKR round, the zerocheck round, both folds,
 
 - **A discrete GPU is a better answer to the same question.** D7's own stretch goal is to come within 5× of a single RTX 4090, and the projection in [measurements.md](measurements.md) puts a discrete card at roughly 10× using SP1's existing CUDA prover. If the goal is faster proofs rather than a Metal backend, that hardware wins without any of this work.
 - **Upstream may do the factoring first.** If `sp1-hypercube` puts GKR behind a backend trait in a later release, step 5 stops being a fork and the project gets materially cheaper. Check before starting.
-- **Upstream may pack the CPU prover.** That is the assumption the whole plan rests on, and it would take the projection from 6.5× back to 3.7×.
+- **Upstream may pack the CPU prover.** That is the assumption the whole plan rests on, and it would take the projection from 10.7× back to 3.9×, the packed column of the table above.
 - **Maintenance.** A vendored fork of the hottest files in a fast-moving repository, pinned to `=6.4.0`, is a standing cost that does not appear anywhere in the three-to-four-month figure.

@@ -1,0 +1,19 @@
+# The fifth round of levers: the zerocheck constraint arithmetic.
+# Machine idle, fib n=2,000,000 at a 4 MiB shard size, measured 2026-08-24 on an M4 Max.
+# Both switches change generated shader source, so the first run after a flip pays a
+# full shader recompile -- one such run took 108 s wall against ~11 s -- and is
+# discarded rather than recorded. Every row below had a warm cache.
+# The ZC_LAYOUT=on arm has two rows rather than three because its third run was the
+# cold one; the arms overlap so completely that a third would not settle anything.
+switch	arm	zerocheck_gpu_s	wall_s
+SP1_METAL_ZC_ILP	off	2.815	10.681968834
+SP1_METAL_ZC_ILP	off	2.913	11.019109292
+SP1_METAL_ZC_ILP	off	3.238	10.845084583
+SP1_METAL_ZC_ILP	on	2.847	10.976571542
+SP1_METAL_ZC_ILP	on	2.831	10.801565250
+SP1_METAL_ZC_ILP	on	2.475	10.893337625
+SP1_METAL_ZC_LAYOUT	off	2.086	10.557043375
+SP1_METAL_ZC_LAYOUT	off	2.822	10.850161459
+SP1_METAL_ZC_LAYOUT	off	2.874	10.901400542
+SP1_METAL_ZC_LAYOUT	on	3.261	10.613981167
+SP1_METAL_ZC_LAYOUT	on	2.256	10.944387250

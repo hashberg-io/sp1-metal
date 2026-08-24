@@ -1,5 +1,7 @@
 # Spike results
 
+> **Status: historical record.** The three unknowns were answered and the backend was built. The refit recorded here moved the complete-port projection from 6.5x to 8.2x, which is why 6.5x appears in older documents.
+
 [backend-plan.md](backend-plan.md) names three unknowns that can each sink a Metal backend, and says to answer them before writing any of it.
 This is what they found, in the order the plan runs them.
 Method and hardware are as in [measurements.md](measurements.md): M4 Max, best-of-ten, machine otherwise idle, every kernel parity-checked against slop 6.4.0.

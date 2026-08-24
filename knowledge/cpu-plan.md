@@ -1,5 +1,8 @@
 # What the CPU still does, and what is worth moving
 
+> **Status: executed.** The three ports it ranks were done and took the backend from 3.40x to 3.74x, close to this document's own estimate and for the reason it gives.
+> What to do next was then ranked in [next-levers.md](next-levers.md).
+
 A profile of the Metal prover's residual CPU work, and a plan built on it.
 Everything here is measured on the acceptance workload — fibonacci n = 2,000,000, about 18M cycles, `SHARD_SIZE` 4 MiB, four shards — against the same binary with every Metal switch off.
 

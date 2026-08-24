@@ -1,4 +1,4 @@
-# What to try next, in order
+# Five rounds of levers, in the order they were tried
 
 Written 2026-08-23, against the state after the three ports of `cpu-plan.md`: **17.0 s against a 63.6 s CPU arm, 3.74x**, 76 user and 50 system CPU-seconds, the device busy 27.5% of the proof.
 Every figure below is measured on the acceptance workload — fibonacci n = 2,000,000, `SHARD_SIZE` 4 MiB, four shards — with the same binary switched.
@@ -605,3 +605,15 @@ n = 8,000,000 is not measurable here — the CPU arm goes from 58 GB of peak res
 The acceptance envelope is **3.71x - 5.63x**, from 3.75x - 5.45x. What moved it was 0.79 thread-seconds of buffer mapping; the other four items produced measurements rather than seconds.
 
 **Three of the four phases now move memory at a fair fraction of what the machine can, and the wall clock has stopped responding to work being removed from it.** What is left is one item: **the constraint arithmetic in zerocheck**, the only place on the device still spending work the protocol does not require, and transpiler work rather than kernel tuning.
+
+## The fifth round: that last item, taken
+
+The item above was taken, and it is written up as [backend.md §21](backend.md#21-the-zerocheck-constraint-arithmetic-and-a-round-that-bought-knowledge-instead-of-seconds).
+
+Two things were built: the three constraint bodies are now emitted line-interleaved so the scheduler has independent chains to overlap (`SP1_METAL_ZC_ILP`, on), and a column-major trace layout with its transpose kernels (`SP1_METAL_ZC_LAYOUT`, off).
+
+**Neither is separable from run-to-run noise in a real proof, and the wall clock did not move.** Zerocheck's own GPU time varies by about a third between runs; the medians differ by 3%. The measurements are in [`results/zerocheck-arithmetic.tsv`](../results/zerocheck-arithmetic.tsv).
+
+The column-major layout is the more instructive half. The probe measured it at **3.51×** — same kernel, same data, layout the only variable — and it delivered nothing, because the probe reads three random columns of sixty-four where a real constraint DAG reads most of the row. A synthetic probe can measure a worse thing than the one it stands in for, and nothing inside the probe reveals it.
+
+So: **five rounds, and the last three moved almost nothing.** That is the finding, not a failure to find levers. The wall clock stopped responding to work being taken off the device two rounds before this one; this round took more work off the device and it stayed unmoved. What binds this system is its dependency structure — device busy under half the time, about five of sixteen cores in use — and no amount of kernel arithmetic reaches that.

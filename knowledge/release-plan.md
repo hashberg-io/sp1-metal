@@ -1,5 +1,7 @@
 # Release plan
 
+> **Status: executed.** Items 1 to 6 are done and v0.1.0 is tagged. Pushing is the only step outstanding.
+
 This plans a public release of sp1-metal from one repository at a tag, so that people can clone it, verify what it claims, and use it in their own SP1 host programs.
 It does not plan a crates.io publication or an upstream contribution; both are ruled out below, the first by construction and the second by choice.
 

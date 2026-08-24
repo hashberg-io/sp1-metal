@@ -1,5 +1,8 @@
 # Keeping the data on the device
 
+> **Status: stage 1 executed, stages 2 to 4 deliberately not built.** Stage 1 took the backend from 2.60x to 3.40x, and the cause turned out to be one page-alignment rule that was never real.
+> The closing section explains why the rest of the plan should not be built; it is the most useful part of the document.
+
 A plan for the next stage of the Metal backend, written against measurements rather than intentions.
 Every number below comes from one paired run of the acceptance workload — fibonacci n = 2,000,000, about 18M cycles, `SHARD_SIZE` 4 MiB, five shards, four proving threads — with each switch set together so the CPU arm really is one.
 

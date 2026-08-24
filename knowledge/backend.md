@@ -1,4 +1,4 @@
-# Building the backend
+# Building the backend, as it happened
 
 The record of executing steps 5 onward of [backend-plan.md](backend-plan.md), after the three spikes and the go/no-go recorded in [spikes.md](spikes.md).
 
@@ -662,3 +662,37 @@ The acceptance ladder stops at n = 2,000,000, which is exactly four shards again
 Two things are worth taking from that. **The Metal arm is far noisier than the CPU arm at six shards**, which is what six shards over four permits looks like: the tail is two shards deep and how well it overlaps the first four finishing is scheduling, not work. And **the slow readings cluster immediately after the CPU-arm runs**, which is a hundred seconds of sixteen-core load leaving the machine in a state the next run inherits — so even an idle machine is not a quiet one for a minute or so afterwards.
 
 n = 8,000,000 is not measurable here. The CPU arm's peak resident memory goes from 58 GB at four shards to 98 at six on a 128 GB machine, so the next doubling would swap. That bounds the ladder rather than the backend: the Metal arm peaks at 47 GB where the CPU arm peaks at 98.
+
+## 21. The zerocheck constraint arithmetic, and a round that bought knowledge instead of seconds
+
+The fourth list closed by naming one item as all that was left: the constraint arithmetic in zerocheck, *"the only place on the device still spending work the protocol does not require"*.
+It is the natural last lever, because the zerocheck kernel is generated per chip from that chip's constraint DAG and had never been looked at as arithmetic — only as a dispatch.
+
+Two things were built.
+
+**Interleaving.** The generated kernel evaluates three constraint bodies per thread — the polynomial at zero, at one, and at the halfway point. They were emitted one after another, so each body's dependency chain had to drain before the next began. They are now emitted line-interleaved, which gives the scheduler three independent chains to overlap. `SP1_METAL_ZC_ILP=0` restores the sequential form.
+
+**A column-major trace layout.** The kernel reads the trace as `main[row * cols + col]`; adjacent threads take adjacent rows, so each read strides by the row width. Reading `main[col * n + row]` instead would make those reads consecutive. The probe said this was worth a great deal — [`results/zerocheck-layout.json`](../results/zerocheck-layout.json) records **3.51×** on identical kernels and data, the layout being the only difference — so the transpose kernels were written and put behind `SP1_METAL_ZC_LAYOUT`.
+
+### What they were worth
+
+Nothing that survives contact with a real proof. Three runs an arm on an idle machine, shader cache warm on both sides, in [`results/zerocheck-arithmetic.tsv`](../results/zerocheck-arithmetic.tsv):
+
+| | zerocheck GPU-s, median | range | wall, median |
+|---|---|---|---|
+| interleaving off | 2.913 | 2.815 – 3.238 | 10.85 s |
+| interleaving on | 2.831 | 2.475 – 2.847 | 10.89 s |
+| column-major off | 2.822 | 2.086 – 2.874 | 10.85 s |
+| column-major on | 2.758 | 2.256 – 3.261 | 10.78 s |
+
+Zerocheck's own GPU time varies by about a third from run to run, so a 3% median difference is not a difference. **The wall clock is the same to within its own noise in all four arms.** Interleaving stays on because it is free and its median is the right side of zero; column-major stays off because it is a large amount of generated transpose code buying nothing measurable.
+
+### The probe promised 3.51× and delivered nothing, for a reason worth keeping
+
+The probe's row-major variant reads three randomly chosen columns out of sixty-four. A real chip's constraint DAG reads most of the row. Three scattered columns of a row-major trace is close to the worst case for coalescing and nothing like the access pattern the kernel actually has, so the probe measured a real effect on a workload that does not occur.
+
+**A synthetic probe can measure a worse thing than the one it stands in for**, and the failure is invisible from inside the probe — it was parity-checked, repeatable, and had a plausible mechanism. The only thing that catches it is running the real workload. This is the fifth time in this project that a number turned out to measure something other than what it was quoted for, and it is the reason the switch was kept rather than the code deleted: the question is now answered where the next person can find the answer.
+
+### Where that leaves the levers
+
+Five rounds, and the last three moved almost nothing between them. The wall clock stopped responding to work being removed from the device two rounds before this one, and this round removed work from the device and confirmed it again. The system is bound by its own dependency structure — the device is busy under half the time, the CPU uses about five of sixteen cores — and not by the arithmetic inside any kernel.
