@@ -2,6 +2,7 @@
 name = "sp1-metal-probes"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Per-kernel parity and throughput probes for an SP1 Metal proving backend on Apple Silicon."

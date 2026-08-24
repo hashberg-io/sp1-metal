@@ -2,6 +2,7 @@
 name = "sp1-metal-prover"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hashberg Ltd"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hashberg-io/sp1-metal"
 description = "A Metal implementation of the logup GKR round reduction, against the forked sp1-hypercube seam."

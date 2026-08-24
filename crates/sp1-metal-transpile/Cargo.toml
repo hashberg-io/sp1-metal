@@ -2,6 +2,7 @@
 name = "sp1-metal-transpile"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hashberg Ltd"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hashberg-io/sp1-metal"
 description = "Turns SP1 chips' symbolic AIR constraints into Metal, and measures what the result costs."

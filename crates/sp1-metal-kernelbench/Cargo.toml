@@ -2,6 +2,7 @@
 name = "sp1-metal-kernelbench"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Measures the fork's Metal kernels against this machine's own memory and arithmetic ceilings."
