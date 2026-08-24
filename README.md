@@ -37,7 +37,7 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`knowledge/desiderata.md`](knowledge/desiderata.md) — the requirements this work was to meet.
 - [`crates/vendor/`](crates/vendor) — the five forked SP1 crates. Each is an unmodified release plus a `CHANGES.md` listing every file that differs and why.
 - [`crates/sp1-metal-core`](crates/sp1-metal-core) — the shared machinery every dispatching crate needs. A deliberate leaf: it depends on `metal` and nothing else.
-- [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — 26 kernels, packed-CPU baselines and parity tests.
+- [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — 14 probes over 27 kernels, packed-CPU baselines and parity tests.
 - [`crates/sp1-profile-host`](crates/sp1-profile-host) — a minimal sp1-sdk host that replays a proof under span timing, and the worked example of how to depend on this.
 - [`guests/`](guests) — the three guest programs every measurement is taken against, sources and built ELFs.
 - [`results/`](results) — the measurements the documents cite.
