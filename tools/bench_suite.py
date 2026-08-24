@@ -81,17 +81,32 @@ def load_average() -> float:
     return os.getloadavg()[0]
 
 
-def wait_until_quiet(force: bool, threshold: float) -> None:
+def wait_until_quiet(force: bool, threshold: float) -> float:
+    """Block until the machine is idle enough to time a proof on.
+
+    A proof of our own leaves the load average high for about a minute after
+    it ends -- the average decays with a 60 s time constant, and this project
+    has a recorded measurement corrupted by exactly that. So the wait is real
+    and unavoidable; it is polled often enough not to overshoot, and the time
+    spent waiting is returned so it can be recorded rather than hidden.
+    """
     if force:
-        return
-    waited = 0
+        return 0.0
+    t0 = time.time()
+    announced = False
     while load_average() > threshold:
-        if waited == 0:
-            print(f"  ... machine busy (load {load_average():.2f}); waiting", flush=True)
-        time.sleep(30)
-        waited += 30
-        if waited > 3600:
-            raise SystemExit("machine did not go quiet within an hour; rerun with --force")
+        if not announced:
+            print(f"  ... waiting for the machine to settle (load {load_average():.1f})", flush=True)
+            announced = True
+        time.sleep(5)
+        # Deliberately patient rather than fatal. This machine runs its owner's
+        # own long jobs, and a suite that waits four hours for a quiet machine
+        # is worth more than one that finishes on a busy one: every wrong
+        # answer this project has recorded came from a contaminated pair.
+        if time.time() - t0 > 900 and int(time.time() - t0) % 900 < 5:
+            print(f"  ... still waiting ({(time.time()-t0)/60:.0f} min, load "
+                  f"{load_average():.1f})", flush=True)
+    return round(time.time() - t0, 1)
 
 
 NUM = r"([0-9]+\.?[0-9]*)"
@@ -201,7 +216,7 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
     # warm-up is run and discarded before the GPU arm is timed.
     warm_key = (name, config, mode)
     if "gpu" in arms and warm_key not in _WARMED:
-        wait_until_quiet(force, threshold=4.0)
+        wait_until_quiet(force, threshold=5.0)
         w = run_once(name, n, "gpu", shard_size, mode, extra_env,
                      timeout=GUESTS[name].get("timeout", 1800))
         w.update({"guest": name, "size": size_label, "n": n, "config": config,
@@ -214,13 +229,16 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
               f"{w.get('wall_s')}", flush=True)
     for rep in range(repeats):
         for arm in arms:
-            wait_until_quiet(force, threshold=4.0)
+            waited = wait_until_quiet(force, threshold=5.0)
+            load_before = load_average()
             r = run_once(name, n, arm, shard_size, mode, extra_env,
                          timeout=GUESTS[name].get("timeout", 1800))
+            r["load_before"] = round(load_before, 2)
             r.update({
                 "guest": name, "tier": GUESTS[name]["tier"], "stresses": GUESTS[name]["stresses"],
                 "size": size_label, "n": n, "shard_size": shard_size, "mode": mode,
                 "arm": arm, "repeat": rep, "config": config, "cycles": cyc,
+                "settle_wait_s": waited,
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             out_fh.write(json.dumps(r) + "\n")
