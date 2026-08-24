@@ -10,7 +10,7 @@ New, off by default. Without it this crate compiles to exactly what upstream pub
 - **`src/p3.rs`.** `Radix2DitParallel`'s `Dft` impl tries the GPU first and falls through to upstream's body for anything the kernels do not compute exactly.
   Under `SP1_METAL_ENCODE=check` it runs both and compares element for element.
 - **`src/lib.rs`.** Declares the module.
-- **`Cargo.toml`.** Declares the feature and its three optional dependencies.
+- **`Cargo.toml`** and **`Cargo.toml.orig`.** Declare the feature and its three optional dependencies. `Cargo.toml.orig` is cargo's copy of the pre-packaging manifest; it carries the same additions, because a reader who opens it should not be told something different from what builds.
 
 Nothing else is modified, and with the feature off `p3.rs` is upstream's file with two `#[cfg]` blocks that compile to nothing.
 

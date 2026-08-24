@@ -67,6 +67,10 @@ One dispatch computes them together, in one pass rather than three, and the inte
 The fold is memory-bound, so it is only worth moving when nothing is copied to move it: the GPU path is taken only for a single-polynomial component, where the input can be borrowed where it lies and the kernel writes into the allocation that will back the result.
 Everything else takes upstream's path.
 
+### The manifest
+
+`Cargo.toml` and `Cargo.toml.orig` declare the feature and its three optional dependencies. `Cargo.toml.orig` is cargo's copy of the pre-packaging manifest; it carries the same additions, because a reader who opens it should not be told something different from what builds.
+
 ### Timing spans
 
 `src/prover.rs`, `src/lib.rs`.

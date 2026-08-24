@@ -16,6 +16,6 @@ New, off by default. It adds counters, not kernels.
   Every fold in the prover funnels through `mle_fix_last_variable`, so one counter there attributes what five call sites and two sampling profiles could not.
 - **`src/restrict.rs`, `src/fold.rs`.** Two `#[cfg]`-gated timing blocks each.
 - **`src/lib.rs`.** Declares the module.
-- **`Cargo.toml`.** Declares the feature and its three optional dependencies.
+- **`Cargo.toml`** and **`Cargo.toml.orig`.** Declare the feature and its three optional dependencies. `Cargo.toml.orig` is cargo's copy of the pre-packaging manifest; it carries the same additions, because a reader who opens it should not be told something different from what builds.
 
 Every file that differs from the release is listed above, and each carries a notice at its top.

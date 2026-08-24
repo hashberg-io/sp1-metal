@@ -24,4 +24,4 @@ New, off by default: `metal = ["dep:sp1-metal-core"]`.
 `src/prover.rs` gains six `#[cfg]`-gated spans — the grind, the batching Lagrange table, the batch itself, the fold at zero, each commit round, and the query phase — reported to the counters shared with the rest of this project.
 They exist because the dense evaluation proof was the largest remaining block of CPU time and no existing number said which part of it.
 
-`Cargo.toml` declares the feature and its one optional dependency.
+`Cargo.toml` and `Cargo.toml.orig` declare the feature and its one optional dependency. `Cargo.toml.orig` is cargo's copy of the pre-packaging manifest; it carries the same additions, because a reader who opens it should not be told something different from what builds.
