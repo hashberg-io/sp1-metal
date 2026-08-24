@@ -3,6 +3,7 @@
 /crates/sp1-metal-transpile/target
 /crates/vendor/sp1-hypercube/target
 /crates/vendor/slop-*/target
+/crates/vendor/slop-*/Cargo.lock
 /crates/sp1-metal-prover/target
 /crates/sp1-metal-transpile/transpile.json
 __pycache__/
