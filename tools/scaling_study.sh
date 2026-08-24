@@ -8,14 +8,19 @@
 # two experiments: a bigger shard means bigger GKR layers and fewer of them,
 # while more work at a fixed shard size means more shards of the same size.
 #
-# Usage: tools/scaling_study.sh <guest-root> [out.tsv]
-# where <guest-root> holds the built guests (guest/, mem/, bits/), each an
-# `cargo prove build` tree.
+# Usage: tools/scaling_study.sh [guest-root] [out.tsv]
+# where <guest-root> holds the guests (fib/, mem/, bits/) and defaults to the
+# copies in this repository. A guest that has been rebuilt with `cargo prove
+# build` is preferred over the binary that ships beside its source, so that
+# rebuilding is how you check the shipped one.
 set -u
-GUESTS=${1:?guest root}
+GUESTS=${1:-guests}
 OUT=${2:-results/scaling.tsv}
 HOST=crates/sp1-profile-host/target/release/sp1-profile-host
-elf() { echo "$GUESTS/$1/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/acceptance-$2"; }
+elf() { # guest_dir elf_name
+  local built="$GUESTS/$1/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/acceptance-$2"
+  if [ -f "$built" ]; then echo "$built"; else echo "$GUESTS/$1/elf/acceptance-$2"; fi
+}
 
 # $5 = on|off for the whole Metal path
 run() { # guest_dir guest_name n shard_size on|off
@@ -47,10 +52,10 @@ mkdir -p "$(dirname "$OUT")"
 {
   printf 'axis\tguest\tn\tshard_size\tcpu_s\tgpu_s\tspeedup\n'
   for ss in 1048576 2097152 4194304 8388608 16777216; do
-    row shard_size guest guest fib 2000000 $ss
+    row shard_size fib guest fib 2000000 $ss
   done
   for n in 250000 500000 1000000 2000000; do
-    row work guest guest fib $n 4194304
+    row work fib guest fib $n 4194304
   done
   row guest mem mem mem 400000 4194304
   row guest bits bits bits 1000000 4194304
