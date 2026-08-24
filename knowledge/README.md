@@ -28,6 +28,12 @@ Each records its own result at the end; do not read the opening as a live statem
 | [resident-plan.md](resident-plan.md) | Stage 1 executed, 2.60x to 3.40x, and it was one false page-alignment rule. Stages 2 to 4 deliberately not built; the document says why. |
 | [release-plan.md](release-plan.md) | Executed. Items 1 to 6 and the v0.1.0 tag; the push is the only part left. |
 
+## Planned
+
+| document | what it is |
+|---|---|
+| [benchmark-plan.md](benchmark-plan.md) | A suite that measures the backend across the regimes it is sensitive to and checks correctness from the same runs. Not built; blocked on the SP1 guest toolchain. |
+
 ## Historical record
 
 | document | what it is |
