@@ -1,0 +1,190 @@
+proved and verified in 2.660685458s (mode: core)
+metal: dispatches 1424 on 3 threads | gpu 0.085s | blocked 0.311s | encode 0.000s | upload 0.006s for 1.68 GB in 1952 (1330 no-copy) | cpu fallback 0.000s | gpu is 3.2% of the 2.7s proof
+commit: 77 tensor commitments (77 on the GPU) over 115343348 rows in 1.208 thread-seconds
+
+phase       dispatch   gpu_s  wall_s |     in_GB  resident  wrapped   copied   copy_s | out_GB  resident   direct   staged   copy_s
+gkr            1424   0.085   0.311 |      2.88     30.6%    64.9%     4.5%    0.006 |   1.00      0.0%   100.0%     0.0%    0.000
+commit          100   1.217   1.598 |      6.99     63.5%    36.5%     0.0%    0.001 |  16.26      0.0%   100.0%     0.0%    0.000
+pcs             256   0.248   0.445 |      8.55      0.0%   100.0%     0.0%    0.001 |   3.85      0.0%    99.6%     0.4%    0.000
+TOTAL          1780   1.550   2.355 |     18.42     28.9%    70.4%     0.7%    0.008 |  21.11      0.0%    99.9%     0.1%    0.000
+residency 28.9% of 18.42 GB read | 21.11 GB written, 0.1% of it copied back | 0.009 thread-seconds copying
+
+fold width      calls           rows          cells   thread_s   ns/cell
+1                 468       13962396       13962396      0.056      4.04
+2-16              636         798136        5960080      0.034      5.71
+17+               394          53490        1717543      0.017      9.91
+tiny            47470         519566        2036687      0.048     23.47
+fold_mle           63        6291453        6291453      0.041      6.56
+at_zero            63        6291453        6291453      0.009      1.50
+TOTAL           49094       27916494       36259612      0.206      5.68
+
+zerocheck            calls          cells   thread_s
+setup                    3             48      0.000
+sumcheck                 3             48      1.362
+  round first           48    23202889728      0.253
+  round               1008    23202878664      0.974
+  fold first            48    23202889728      0.026
+  fold                1008    23202878664      0.108
+openings                 3             48      0.002
+  driver                                       0.001
+TOTAL                                          1.364
+
+round reduction       calls          cells   thread_s
+on the GPU                  0              0      0.000
+no pipeline               924    42605729874      0.154
+eq built                   66       12582909      0.141
+eq reused                 858      163577817      0.000
+
+66 chips have no zerocheck kernel:
+  Byte:true                                    no constraints (0 nodes)
+  Global:true                                  over the node bound (15196 nodes)
+  MemoryGlobalFinalize:true                    over the node bound (462 nodes)
+  MemoryGlobalInit:true                        over the node bound (462 nodes)
+  Program:true                                 no constraints (0 nodes)
+  Range:true                                   no constraints (0 nodes)
+  Add:true                                     over the node bound (232 nodes)
+  Addi:true                                    over the node bound (222 nodes)
+  Bitwise:true                                 over the node bound (240 nodes)
+  Branch:true                                  over the node bound (902 nodes)
+  Jal:true                                     over the node bound (376 nodes)
+  Jalr:true                                    over the node bound (396 nodes)
+  Byte:false                                   no constraints (0 nodes)
+  LoadByte:true                                over the node bound (536 nodes)
+  LoadDouble:true                              over the node bound (384 nodes)
+  LoadWord:true                                over the node bound (494 nodes)
+  Lt:true                                      over the node bound (576 nodes)
+  MemoryBump:true                              over the node bound (122 nodes)
+  MemoryLocal:true                             over the node bound (60 nodes)
+  Mul:true                                     over the node bound (2138 nodes)
+  ShiftLeft:true                               over the node bound (902 nodes)
+  ShiftRight:true                              over the node bound (1164 nodes)
+  StateBump:true                               over the node bound (136 nodes)
+  StoreByte:true                               over the node bound (584 nodes)
+  StoreDouble:true                             over the node bound (382 nodes)
+  Global:false                                 over the node bound (22794 nodes)
+  StoreWord:true                               over the node bound (462 nodes)
+  Sub:true                                     over the node bound (264 nodes)
+  Subw:true                                    over the node bound (216 nodes)
+  SyscallCore:true                             over the node bound (32 nodes)
+  MemoryGlobalFinalize:false                   over the node bound (693 nodes)
+  SyscallInstrs:true                           over the node bound (1610 nodes)
+  UType:true                                   over the node bound (322 nodes)
+  MemoryGlobalInit:false                       over the node bound (693 nodes)
+  Program:false                                no constraints (0 nodes)
+  Range:false                                  no constraints (0 nodes)
+  Add:false                                    over the node bound (348 nodes)
+  Addi:false                                   over the node bound (333 nodes)
+  Bitwise:false                                over the node bound (360 nodes)
+  Branch:false                                 over the node bound (1353 nodes)
+  Jal:false                                    over the node bound (564 nodes)
+  Jalr:false                                   over the node bound (594 nodes)
+  LoadByte:false                               over the node bound (804 nodes)
+  LoadDouble:false                             over the node bound (576 nodes)
+  LoadWord:false                               over the node bound (741 nodes)
+  Lt:false                                     over the node bound (864 nodes)
+  MemoryBump:false                             over the node bound (183 nodes)
+  MemoryLocal:false                            over the node bound (90 nodes)
+  Mul:false                                    over the node bound (3207 nodes)
+  ShiftLeft:false                              over the node bound (1353 nodes)
+  ShiftRight:false                             over the node bound (1746 nodes)
+  StateBump:false                              over the node bound (204 nodes)
+  StoreByte:false                              over the node bound (876 nodes)
+  StoreDouble:false                            over the node bound (573 nodes)
+  StoreWord:false                              over the node bound (693 nodes)
+  Sub:false                                    over the node bound (396 nodes)
+  Subw:false                                   over the node bound (324 nodes)
+  SyscallCore:false                            over the node bound (48 nodes)
+  SyscallInstrs:false                          over the node bound (2415 nodes)
+  UType:false                                  over the node bound (483 nodes)
+  KeccakPermute:true                           over the node bound (175498 nodes)
+  KeccakPermuteControl:true                    over the node bound (8234 nodes)
+  SyscallPrecompile:true                       over the node bound (32 nodes)
+  KeccakPermute:false                          over the node bound (263247 nodes)
+  KeccakPermuteControl:false                   over the node bound (12351 nodes)
+  SyscallPrecompile:false                      over the node bound (48 nodes)
+
+gkr dispatch site      count      gpu_s     wall_s   ms/call
+small-chip batch          567      0.054      0.141     0.153
+layer fold                693      0.001      0.030     0.042
+single fold               136      0.027      0.121     0.693
+layer transition            9      0.001      0.006     0.530
+first layer                19      0.002      0.014     0.652
+
+circuit build         chips          cells   thread_s
+first layer gpu            19        2787072      0.028
+first layer cpu            29         139040      0.004
+transition gpu             26        1051884      0.003
+transition cpu            934         422070      0.056
+
+jagged poly           calls          cells   thread_s
+jagged multilinear          3       79691776      0.188
+restack                     3       79691776      0.073
+
+tally                       calls          cells   thread_s
+basefold: batch                   3        6291456      0.113
+basefold: batch lagrange          3             38      0.000
+basefold: commit round           63      201326496      0.977
+basefold: fixed_at_zero          63       12582906      0.276
+basefold: grind                   3              0      0.000
+basefold: query phase             3             63      0.054
+jagged: assist                  148              0      0.216
+jagged: assist  wait            148              0      0.080
+jagged: fold                     70              0      0.017
+jagged: fold    wait             70              0      0.059
+jagged: params                    3           5616      0.000
+jagged: round                    35              0      0.011
+jagged: round   wait             35              0      0.037
+jagged: sumcheck                  3              0      0.136
+jagged: values                    3              0      0.004
+jagged: values  wait              3              0      0.021
+queue: commit                  1780              0      0.007
+queue: wait                    1780              0      2.348
+zerocheck: cpu round            924    42605729874      0.926
+zerocheck: dag degree0           60          15514      0.000
+zerocheck: dag degree1 mul         60           4912      0.000
+zerocheck: dag nodes             60         212636      0.000
+zerocheck: dag rest              60         192210      0.000
+gkr rounds left on the CPU: 126 rejected layers in 0.091s, 525 interaction layers in 0.099s
+compiled 67 kernels at run time in 0.148 thread-seconds; Metal compiles in another process, so that wait is not CPU time here
+device busy 1.181s of a 4.317s span, 27.4% -- and 44.4% of the whole proof
+device busy over the proof, 0.11s per column:
+    0.0s    76% ###############
+    0.1s     0% 
+    0.2s    15% ###
+    0.3s    61% ############
+    0.4s     0% 
+    0.5s     0% 
+    0.6s    44% #########
+    0.8s    31% ######
+    0.9s     0% 
+    1.0s     0% 
+    1.1s    18% ####
+    1.2s    58% ############
+    1.3s     5% #
+    1.4s    71% ##############
+    1.5s    15% ###
+    1.6s    51% ##########
+    1.7s    30% ######
+    1.8s     0% 
+    1.9s    45% #########
+    2.1s    90% ##################
+    2.2s    74% ###############
+    2.3s    54% ###########
+    2.4s     7% #
+    2.5s     2% 
+    2.6s     1% 
+    2.7s     5% #
+    2.8s    70% ##############
+    2.9s    21% ####
+    3.0s     0% 
+    3.1s    14% ###
+    3.2s    37% #######
+    3.3s     0% 
+    3.5s    22% ####
+    3.6s    24% #####
+    3.7s    16% ###
+    3.8s    56% ###########
+    3.9s    26% #####
+    4.0s    27% #####
+    4.1s    12% ##
+    4.2s    16% ###

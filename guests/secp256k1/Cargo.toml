@@ -1,0 +1,9 @@
+[package]
+name = "bench-secp256k1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = "=6.4.0"
+
+[workspace]
