@@ -81,32 +81,45 @@ def load_average() -> float:
     return os.getloadavg()[0]
 
 
-def wait_until_quiet(force: bool, threshold: float) -> float:
-    """Block until the machine is idle enough to time a proof on.
+def cpu_idle_pct() -> float:
+    """Instantaneous CPU idle, which is what "quiet" actually means here.
 
-    A proof of our own leaves the load average high for about a minute after
-    it ends -- the average decays with a 60 s time constant, and this project
-    has a recorded measurement corrupted by exactly that. So the wait is real
-    and unavoidable; it is polled often enough not to overshoot, and the time
-    spent waiting is returned so it can be recorded rather than hidden.
+    The load average on this machine is a phantom: it reads 7 while `top`
+    reports 96% idle and nothing of ours is running. Waiting on it cost up to
+    100 seconds a run and protected nothing. `top -l 2` discards its first
+    sample, which is a since-boot average, and reports the second.
+    """
+    try:
+        out = subprocess.run(["top", "-l", "2", "-n", "0", "-s", "1"],
+                             capture_output=True, text=True, timeout=30).stdout
+        hits = re.findall(r"([0-9.]+)%\s+idle", out)
+        return float(hits[-1]) if hits else 0.0
+    except Exception:
+        return 0.0
+
+
+def wait_until_quiet(force: bool, threshold: float = 70.0) -> float:
+    """Block until the machine is genuinely idle. Returns seconds waited.
+
+    Deliberately patient rather than fatal: this machine runs its owner's own
+    long jobs, and a suite that waits is worth more than one that finishes on
+    a busy machine. Every wrong answer in this project's history came from a
+    contaminated pair.
     """
     if force:
         return 0.0
     t0 = time.time()
     announced = False
-    while load_average() > threshold:
+    while True:
+        idle = cpu_idle_pct()
+        if idle >= threshold:
+            return round(time.time() - t0, 1)
         if not announced:
-            print(f"  ... waiting for the machine to settle (load {load_average():.1f})", flush=True)
+            print(f"  ... waiting for the machine ({idle:.0f}% idle)", flush=True)
             announced = True
         time.sleep(5)
-        # Deliberately patient rather than fatal. This machine runs its owner's
-        # own long jobs, and a suite that waits four hours for a quiet machine
-        # is worth more than one that finishes on a busy one: every wrong
-        # answer this project has recorded came from a contaminated pair.
-        if time.time() - t0 > 900 and int(time.time() - t0) % 900 < 5:
-            print(f"  ... still waiting ({(time.time()-t0)/60:.0f} min, load "
-                  f"{load_average():.1f})", flush=True)
-    return round(time.time() - t0, 1)
+        if time.time() - t0 > 900 and int(time.time() - t0) % 900 < 6:
+            print(f"  ... still waiting ({(time.time()-t0)/60:.0f} min, {idle:.0f}% idle)", flush=True)
 
 
 NUM = r"([0-9]+\.?[0-9]*)"
@@ -216,7 +229,7 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
     # warm-up is run and discarded before the GPU arm is timed.
     warm_key = (name, config, mode)
     if "gpu" in arms and warm_key not in _WARMED:
-        wait_until_quiet(force, threshold=5.0)
+        wait_until_quiet(force)
         w = run_once(name, n, "gpu", shard_size, mode, extra_env,
                      timeout=GUESTS[name].get("timeout", 1800))
         w.update({"guest": name, "size": size_label, "n": n, "config": config,
@@ -229,11 +242,12 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
               f"{w.get('wall_s')}", flush=True)
     for rep in range(repeats):
         for arm in arms:
-            waited = wait_until_quiet(force, threshold=5.0)
-            load_before = load_average()
+            waited = wait_until_quiet(force)
+            idle_before = cpu_idle_pct()
             r = run_once(name, n, arm, shard_size, mode, extra_env,
                          timeout=GUESTS[name].get("timeout", 1800))
-            r["load_before"] = round(load_before, 2)
+            r["idle_before_pct"] = round(idle_before, 1)
+            r["load_before"] = round(load_average(), 2)
             r.update({
                 "guest": name, "tier": GUESTS[name]["tier"], "stresses": GUESTS[name]["stresses"],
                 "size": size_label, "n": n, "shard_size": shard_size, "mode": mode,
