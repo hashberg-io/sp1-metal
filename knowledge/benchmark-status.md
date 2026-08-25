@@ -9,7 +9,7 @@
 | Guests | **Done.** Fourteen in `guests/`, sources and ELFs committed. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
 | Standard tier | **Done.** `results/bench-standard.jsonl`, 198 runs, 33 points. Committed. |
-| Full tier | **Running when this was written**, writing to `results/bench-full.jsonl`. |
+| Full tier | **Done.** `results/bench-full.jsonl`, 406 runs, 53 points. Committed. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
 
@@ -57,7 +57,55 @@ Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `result
 3. **A scaling cliff on secp256k1 that is ours.** Between n=1000 and n=1500, same shard count, the CPU arm is flat (7.73 -> 7.79 s) and the Metal arm goes from 2.15 s to not finishing in 900. At n=1000 Metal is 3.6x faster; at n=1500 it is >115x slower. `Secp256k1DoubleAssign` is 167,376 / 251,064 nodes, far over the bound, so it never gets a kernel and its zerocheck falls back to the CPU — and it is the widest chip in the machine.
 4. **Timeouts leaked processes** (fixed). `subprocess.run(timeout=)` kills only the direct child, so a hung prover under `/usr/bin/time` survived and held its memory.
 
-## What the full tier adds, and what to look for
+## What the full tier found
+
+406 runs, 53 points, 18 failures — every failure a timeout, and every timeout the hang.
+
+### The phase ablation: the parts do not sum, and not in the direction predicted
+
+`fib/standard`, GPU arm, one phase forced off at a time against a 10.98 s baseline:
+
+| phase forced off | gpu_s | cost of removing it |
+|---|---|---|
+| MERKLE | 23.85 | **+12.87 s** |
+| ZEROCHECK | 17.32 | +6.34 s |
+| JAGGED | 14.57 | +3.60 s |
+| TRANSITION | 13.13 | +2.15 s |
+| ENCODE | 12.25 | +1.28 s |
+| FIRST_LAYER | 11.15 | +0.17 s |
+
+Those costs sum to 26.41 s. The whole GPU path is worth 48.70 s (59.68 → 10.98). **The parts account for 54% of the whole, not more than it.**
+
+The prediction written down in advance was that they would sum to *more* than the whole, on the reasoning that the system is bound by its dependency structure rather than by any phase's throughput. That was wrong, and wrong in direction. Removing one phase leaves the others still absorbing its output on the device; only when all of them are off does the CPU pay the full uncompounded cost. The ablation therefore understates each phase rather than overstating it, and the Merkle tree at +12.87 s is the single largest thing this backend does.
+
+### Shard size: flat, confirming the earlier ladder
+
+5.49x, 5.55x, 5.44x, 5.74x, 5.72x at 1, 2, 4, 8 and 16 MiB. No trend worth naming.
+
+### Shard concurrency: it matters more than four-versus-eight suggested
+
+| permits | fib | sha256 |
+|---|---|---|
+| 1 | 3.96x | 3.48x |
+| 2 | 5.13x | 3.91x |
+| 4 | 5.44x | 4.10x |
+| 8 | 5.63x | 4.14x |
+
+The earlier finding that four and eight are indistinguishable stands — but one and two are not. Most of the backend's advantage needs at least four shards in flight, which is a real constraint on any deployment that serialises them.
+
+### The node bound raised: catastrophic, as predicted
+
+With `SP1_METAL_ZEROCHECK_MAX_NODES=1000000`, **0 of 3 GPU runs completed** for either curve guest, while their CPU arms were unmoved at 7.63 s. At the default bound the same guests run at 3.62x and 3.64x. Compiling a 167,000-node chip is not a trade worth making at any price.
+
+### Compressed mode: unmeasurable
+
+**0 of 3 GPU runs completed for every one of the three guests, and 0 of 10 attempts overall.** The CPU arms are fine — fib 27.72 s, sha256 28.09 s, secp256k1 25.15 s.
+
+This sharpens the hang: in `core` mode it is intermittent (keccak roughly two runs in three, fib never in hundreds), and under recursion it is **total**. That is a much better clue than "intermittent" was, and it is where a fix should start looking.
+
+It also means D7 remains unmeasured, because D7's bar is written against execute-to-compressed wall-clock and compressed does not complete.
+
+## What the full tier covered
 
 Beyond the guests: shard-size sweep (1/2/8/16 MiB), `SP1_METAL_PERMITS` at 1/2/8, the node bound raised to 10^6 on the curve guests, a six-way phase ablation on `fib`, and `compressed` mode on three guests.
 
