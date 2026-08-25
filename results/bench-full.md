@@ -1,5 +1,5 @@
 # full tier — Darwin 25.6.0 arm64 — git 8b88c6e — 2026-08-24T17:06:46
-349 timed runs, 62 measured points, 9 failures
+366 timed runs, 64 measured points, 18 failures
 
 | guest | size | config | cyc | shd | cpu_med | gpu_med | speedup | cpu_GB | gpu_GB |
 |---|---|---|---|---|---|---|---|---|---|
@@ -18,7 +18,7 @@
 | divrem | standard | baseline | 17,999,993 | 4 | 72.05 | 14.44 | 4.99x | 75.20 | 43.86 |
 | fib | large | baseline | 36,004,809 | 6 | 115.04 | 23.53 | 4.89x | 103.85 | 56.81 |
 | fib | small | baseline | 2,254,809 | 2 | 14.11 | 3.69 | 3.83x | 18.22 | 9.71 |
-| fib | small | compressed | 2,254,809 | 5 | 27.62 | - | - | 23.45 | - |
+| fib | small | compressed | 2,254,809 | - | 27.72 | - | - | 23.37 | - |
 | fib | standard | ablate=ENCODE | 18,004,809 | 4 | - | 12.25 | - | - | 48.46 |
 | fib | standard | ablate=FIRST_LAYER | 18,004,809 | 4 | - | 11.15 | - | - | 34.69 |
 | fib | standard | ablate=JAGGED | 18,004,809 | 4 | - | 14.57 | - | - | 46.77 |
@@ -48,10 +48,12 @@
 | mulh | standard | baseline | 18,000,000 | 4 | 61.67 | 11.60 | 5.32x | 69.74 | 41.71 |
 | secp256k1 | large | baseline | 13,816 | 3 | 7.81 | 2.09 | 3.73x | 12.76 | 6.18 |
 | secp256k1 | small | baseline | 7,066 | 3 | 7.54 | 2.05 | 3.68x | 12.47 | 6.12 |
+| secp256k1 | small | compressed | 7,066 | - | 25.15 | - | - | 24.07 | - |
 | secp256k1 | standard | baseline | 9,316 | 3 | 7.58 | 2.12 | 3.57x | 12.48 | 6.24 |
 | secp256k1 | standard | nodebound=1e6 | 9,316 | - | 7.63 | - | - | 12.28 | - |
 | sha256 | large | baseline | 2,085,041 | 4 | 61.13 | 11.33 | 5.40x | 69.45 | 36.48 |
 | sha256 | small | baseline | 265,041 | 2 | 14.20 | 4.07 | 3.49x | 19.20 | 10.67 |
+| sha256 | small | compressed | 265,041 | - | 28.09 | - | - | 24.76 | - |
 | sha256 | standard | baseline | 1,045,041 | 3 | 35.09 | 8.55 | 4.10x | 43.87 | 21.96 |
 | sha256 | standard | permits=1 | 1,045,041 | 3 | 41.55 | 11.94 | 3.48x | 43.97 | 23.45 |
 | sha256 | standard | permits=2 | 1,045,041 | 3 | 36.69 | 9.38 | 3.91x | 44.09 | 23.79 |
@@ -70,8 +72,11 @@ speedup across 53 points: median 4.05x, range 2.25x - 5.74x
   best  fib/standard 5.74x
   worst keccak/large 2.25x
 
-9 FAILED runs (correctness or timeout):
+18 FAILED runs (correctness or timeout):
   keccak/standard gpu: timeout after 900.1s
   keccak/large gpu: timeout after 900.1s
   secp256k1/standard gpu: timeout after 900.1s
   bn254/standard gpu: timeout after 900.0s
+  fib/small gpu: timeout after 1800.1s
+  sha256/small gpu: timeout after 1800.2s
+  secp256k1/small gpu: timeout after 900.2s
