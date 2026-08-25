@@ -334,6 +334,10 @@ fn context() -> Option<&'static Context> {
             .next()?;
         let one = ((1u64 << 32) % 0x7f00_0001u64) as u32;
         let source = format!("{header}\nconstant uint KB_ONE = {one}u;\n{KERNELS}");
+        // One compile at a time, process-wide: creating a pipeline while
+        // another thread is doing the same deadlocks in the driver. See
+        // `sp1_metal_core::compile`.
+        let _compiling = sp1_metal_core::compile::lock();
         let library =
             device.new_library_with_source(&source, &metal::CompileOptions::new()).ok()?;
         let pso = |name: &str| -> Option<ComputePipelineState> {

@@ -648,6 +648,7 @@ fn context() -> &'static Context {
         // depends on the constraints.
         let source = format!("{}\n{TRANSPOSE_KERNELS}", header());
         let pso = |name: &str| -> Option<ComputePipelineState> {
+            let _compiling = sp1_metal_probes::compile::lock();
             let library =
                 device.new_library_with_source(&source, &metal::CompileOptions::new()).ok()?;
             let f = library.get_function(name, None).ok()?;
@@ -726,6 +727,15 @@ fn pipeline_for<Fx: PrimeField32>(
     constraints: impl FnOnce() -> Vec<SymbolicExpression<Fx>>,
 ) -> Option<(ComputePipelineState, usize, usize)> {
     let ctx = context();
+    if let Some(hit) = ctx.pipelines.lock().expect("pipelines poisoned").get(key) {
+        return hit.clone();
+    }
+    // Creating a pipeline from two threads at once deadlocks in the driver; see
+    // `sp1_metal_core::compile`. Taken here rather than around the lookup above
+    // so that a thread wanting a kernel somebody else already compiled is never
+    // put behind a cold compile.
+    let _compiling = sp1_metal_probes::compile::lock();
+    // Another thread may have compiled this very chip while this one queued.
     if let Some(hit) = ctx.pipelines.lock().expect("pipelines poisoned").get(key) {
         return hit.clone();
     }

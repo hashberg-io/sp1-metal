@@ -163,6 +163,10 @@ struct Context {
 impl Context {
     fn new() -> Self {
         let device = Device::system_default().expect("no Metal device found");
+        // One compile at a time, process-wide: creating a pipeline while
+        // another thread is doing the same deadlocks in the driver. See
+        // `sp1_metal_probes::compile`.
+        let _compiling = sp1_metal_probes::compile::lock();
         let library = device
             .new_library_with_source(&shader_source(), &metal::CompileOptions::new())
             .expect("shader compilation failed");
@@ -1626,6 +1630,11 @@ where
         return vec![None; chips.len()];
     }
     arena_reset();
+    // Every Metal object here is autoreleased, and a prover thread has no pool
+    // of its own. Without this the command buffers accumulate until the queue
+    // runs out of slots, and the next `commandBuffer` blocks forever -- which
+    // is what a sampled hang showed, parked in `_MTLCommandBuffer init`.
+    pooled(|| {
     let ctx = context();
     let queue = ctx.queue();
     let cb = queue.new_command_buffer();
@@ -1649,6 +1658,7 @@ where
             })
         })
         .collect()
+    })
 }
 
 /// The tables the first-layer kernel walks, flattened out of a chip's

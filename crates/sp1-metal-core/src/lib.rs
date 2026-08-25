@@ -14,6 +14,7 @@
 // one in the project a stranger has to read. Keep it documented.
 #![warn(missing_docs)]
 
+pub mod compile;
 pub mod handoff;
 pub mod nocopy;
 pub mod queue;

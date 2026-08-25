@@ -106,6 +106,10 @@ fn context() -> Option<&'static Context> {
     CTX.get_or_init(|| {
         let device = Device::system_default()?;
         let start = std::time::Instant::now();
+        // One compile at a time, process-wide: creating a pipeline while
+        // another thread is doing the same deadlocks in the driver. See
+        // `sp1_metal_core::compile`.
+        let _compiling = sp1_metal_core::compile::lock();
         let library =
             device.new_library_with_source(&shader_source(), &metal::CompileOptions::new()).ok()?;
         stats::record_compile(start.elapsed().as_secs_f64());
@@ -300,98 +304,103 @@ pub fn coset_dft_into<F: TwoAdicField>(
     ordering: DftOrdering,
     dim: usize,
 ) -> bool {
-    if !eligible(src, shift, log_blowup, ordering, dim) {
-        return false;
-    }
-    let Some(ctx) = context() else {
-        return false;
-    };
-    let (rows, cols) = (src.sizes()[0], src.sizes()[1]);
-    let n = rows << log_blowup;
-    let total = n * cols;
-    assert_eq!(dst.total_len(), total, "destination is not the codeword's shape");
-    // A tensor from `with_sizes_in` has the capacity but a length of zero: the
-    // upstream path fills it by extending, so it never has to say so. Writing
-    // into it from a kernel does, and forgetting is silent — the codeword is
-    // correct in memory and every reader sees an empty slice.
-    assert!(dst.storage.capacity() >= total, "destination has no room for the codeword");
-    let _phase = stats::enter(Phase::Commit);
-
-    // Both sides are borrowed where they lie when Metal will take them. The
-    // codeword is the larger of the two by the blowup factor, and it is what
-    // the Merkle kernels read next, so a copy here would be paid twice.
-    let in_bytes = rows * cols * 4;
-    let out_bytes = n * cols * 4;
-    let start = std::time::Instant::now();
-    // SAFETY: the tensor's storage is `rows * cols` field elements, each a
-    // 4-byte Montgomery word, and it is not written while the buffer lives.
-    let b_src = unsafe {
-        nocopy::read_only(
-            &ctx.device,
-            std::slice::from_raw_parts(src.as_slice().as_ptr().cast::<u8>(), in_bytes),
-        )
-    };
-    let upload = start.elapsed().as_nanos() as u64;
-    stats::record_input(
-        if nocopy::takeable(src.as_slice().as_ptr().cast()) { Input::Wrapped } else { Input::Copied },
-        in_bytes,
-        upload,
-    );
-    // SAFETY: `dst` holds `n * cols` elements, asserted above, and is uniquely
-    // borrowed for the whole of this call.
-    let (b_dst, direct) = unsafe {
-        nocopy::write_into(
-            &ctx.device,
-            std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), out_bytes),
-        )
-    };
-    if direct {
-        // The Merkle kernels hash this codeword next, on this thread's queue,
-        // and nothing on the host touches it in between. It is the largest
-        // borrowed allocation in the proof, and mapping it twice is pure cost.
-        sp1_metal_core::handoff::keep(dst.as_mut_ptr().cast::<u8>(), out_bytes, &b_dst);
-    }
-    let tw = twiddles::<F>(ctx, n);
-
-    let queue = nocopy::thread_queue(&ctx.device);
-    let cb = queue.new_command_buffer();
-    let enc = cb.new_compute_command_encoder();
-    encode_dif(enc, ctx, &b_src, &b_dst, &tw, rows, cols, log_blowup);
-    enc.end_encoding();
-    // The codeword is read next by the Merkle kernels that commit it, and they
-    // run on this thread's queue behind this buffer, so the host has no reason
-    // to wait here. It does have to wait when it is about to read the codeword
-    // itself: to copy it out of a staging buffer, or to compare it against the
-    // CPU encoder under `SP1_METAL_ENCODE=check`.
-    if direct && !checking() {
-        queue::submit_deferred(cb);
-        stats::record_output(Output::Direct, out_bytes, 0);
-    } else {
-        queue::submit(cb);
-    }
-
-    if direct {
-        // Recorded above when deferred.
-        if checking() {
-            stats::record_output(Output::Direct, out_bytes, 0);
+    // Metal hands back autoreleased objects and a prover thread drains no
+    // pool of its own, so without this the command buffers accumulate until
+    // the queue has no slots left and the next one blocks forever.
+    metal::objc::rc::autoreleasepool(|| {
+        if !eligible(src, shift, log_blowup, ordering, dim) {
+            return false;
         }
-    } else {
+        let Some(ctx) = context() else {
+            return false;
+        };
+        let (rows, cols) = (src.sizes()[0], src.sizes()[1]);
+        let n = rows << log_blowup;
+        let total = n * cols;
+        assert_eq!(dst.total_len(), total, "destination is not the codeword's shape");
+        // A tensor from `with_sizes_in` has the capacity but a length of zero: the
+        // upstream path fills it by extending, so it never has to say so. Writing
+        // into it from a kernel does, and forgetting is silent — the codeword is
+        // correct in memory and every reader sees an empty slice.
+        assert!(dst.storage.capacity() >= total, "destination has no room for the codeword");
+        let _phase = stats::enter(Phase::Commit);
+
+        // Both sides are borrowed where they lie when Metal will take them. The
+        // codeword is the larger of the two by the blowup factor, and it is what
+        // the Merkle kernels read next, so a copy here would be paid twice.
+        let in_bytes = rows * cols * 4;
+        let out_bytes = n * cols * 4;
         let start = std::time::Instant::now();
-        // SAFETY: the kernel wrote exactly `out_bytes` bytes into the staging
-        // buffer, and `dst` has room for them.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                b_dst.contents().cast::<u8>(),
-                dst.as_mut_ptr().cast::<u8>(),
-                out_bytes,
-            );
+        // SAFETY: the tensor's storage is `rows * cols` field elements, each a
+        // 4-byte Montgomery word, and it is not written while the buffer lives.
+        let b_src = unsafe {
+            nocopy::read_only(
+                &ctx.device,
+                std::slice::from_raw_parts(src.as_slice().as_ptr().cast::<u8>(), in_bytes),
+            )
+        };
+        let upload = start.elapsed().as_nanos() as u64;
+        stats::record_input(
+            if nocopy::takeable(src.as_slice().as_ptr().cast()) { Input::Wrapped } else { Input::Copied },
+            in_bytes,
+            upload,
+        );
+        // SAFETY: `dst` holds `n * cols` elements, asserted above, and is uniquely
+        // borrowed for the whole of this call.
+        let (b_dst, direct) = unsafe {
+            nocopy::write_into(
+                &ctx.device,
+                std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), out_bytes),
+            )
+        };
+        if direct {
+            // The Merkle kernels hash this codeword next, on this thread's queue,
+            // and nothing on the host touches it in between. It is the largest
+            // borrowed allocation in the proof, and mapping it twice is pure cost.
+            sp1_metal_core::handoff::keep(dst.as_mut_ptr().cast::<u8>(), out_bytes, &b_dst);
         }
-        stats::record_output(Output::Staged, out_bytes, start.elapsed().as_nanos() as u64);
-    }
-    // SAFETY: the kernel initialised every one of these elements, and the
-    // capacity was checked above.
-    unsafe { dst.storage.set_len(total) };
-    true
+        let tw = twiddles::<F>(ctx, n);
+
+        let queue = nocopy::thread_queue(&ctx.device);
+        let cb = queue.new_command_buffer();
+        let enc = cb.new_compute_command_encoder();
+        encode_dif(enc, ctx, &b_src, &b_dst, &tw, rows, cols, log_blowup);
+        enc.end_encoding();
+        // The codeword is read next by the Merkle kernels that commit it, and they
+        // run on this thread's queue behind this buffer, so the host has no reason
+        // to wait here. It does have to wait when it is about to read the codeword
+        // itself: to copy it out of a staging buffer, or to compare it against the
+        // CPU encoder under `SP1_METAL_ENCODE=check`.
+        if direct && !checking() {
+            queue::submit_deferred(cb);
+            stats::record_output(Output::Direct, out_bytes, 0);
+        } else {
+            queue::submit(cb);
+        }
+
+        if direct {
+            // Recorded above when deferred.
+            if checking() {
+                stats::record_output(Output::Direct, out_bytes, 0);
+            }
+        } else {
+            let start = std::time::Instant::now();
+            // SAFETY: the kernel wrote exactly `out_bytes` bytes into the staging
+            // buffer, and `dst` has room for them.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    b_dst.contents().cast::<u8>(),
+                    dst.as_mut_ptr().cast::<u8>(),
+                    out_bytes,
+                );
+            }
+            stats::record_output(Output::Staged, out_bytes, start.elapsed().as_nanos() as u64);
+        }
+        // SAFETY: the kernel initialised every one of these elements, and the
+        // capacity was checked above.
+        unsafe { dst.storage.set_len(total) };
+        true
+    })
 }
 
 /// Whether every codeword should also be computed on the CPU and compared.
