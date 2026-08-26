@@ -89,6 +89,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_TRANSITION` | the logup GKR layer transition | on |
 | `SP1_METAL_FIRST_LAYER` | the GKR circuit's first layer | on |
 | `SP1_METAL_ZEROCHECK` | the zerocheck round reduction | on |
+| `SP1_METAL_ZC_DUMP` | prints the generated kernel for the named chip | off |
 | `SP1_METAL_ZEROCHECK_FOLD` | cell count below which the zerocheck fold stays on the CPU | `SP1_METAL_MIN_ENTRIES` |
 | `SP1_METAL_JAGGED` | the jagged phase as a whole | on |
 | `SP1_METAL_JAGGED_VALUES` | the jagged little polynomial's values | on |
@@ -106,9 +107,13 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 
 The last two are switches for negative results, kept so that neither question gets asked twice.
 
-Five of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST`.
+Six of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST` and `ZEROCHECK`.
 In that mode both paths run on every call of a real proof and their results are compared element for element.
 It is slow and it is the strongest correctness evidence available short of the verifier, which also runs.
+
+**Zerocheck checks itself even when you do not ask.** Its kernel is generated per chip from that chip's constraint DAG, and a generated kernel is only as right as the generator. The first round for each chip therefore runs both paths and compares: a chip that agrees is trusted for the life of the process, and a chip that disagrees is declined and its rounds go to the CPU. The cost is one extra CPU round per chip, not per call.
+
+That is not belt-and-braces. Five of SP1's recursion AIRs — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — transpile to kernels that compute the wrong round polynomial, which is why compressed proofs did not verify before this check existed. They decline themselves now. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call and makes a disagreement fatal, which is how those five were found.
 
 ## Compatibility
 
