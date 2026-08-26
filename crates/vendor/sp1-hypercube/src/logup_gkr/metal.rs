@@ -293,6 +293,26 @@ thread_local! {
     static CACHE: RefCell<Vec<Cached>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Whether every upload gets a fresh buffer of its own, read once.
+///
+/// Off. A diagnostic: it turns off both the lending of host pages and the
+/// staging arena, so an upload shares nothing with any other and nothing
+/// outlives its dispatch. If a corruption survives this, it is not in how the
+/// data reaches the device.
+fn upload_fresh() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_UPLOAD_FRESH").is_ok_and(|v| v == "1"))
+}
+
+/// Whether host pages are lent to the device rather than copied, read once.
+///
+/// On. Setting it to 0 keeps the staging arena but never wraps a caller's own
+/// memory, which separates the two things `upload_fresh` turns off together.
+fn upload_lend() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_UPLOAD_LEND").map(|v| v != "0").unwrap_or(true))
+}
+
 /// Whether an MLE already uploaded this round is reused, read once.
 fn cache_uploads() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -351,10 +371,21 @@ fn bind_small(enc: &metal::ComputeCommandEncoderRef, index: u64, bytes: &[u8]) -
         enc.set_bytes(index, bytes.len() as u64, bytes.as_ptr().cast());
         None
     } else {
-        let b = upload(bytes);
+        // Never lent, always copied. These are sub-slices of arrays a layer
+        // binds once per chip -- `eq_row[..2 * n_pairs]` starts at the same
+        // page for every chip in the layer -- so lending them would put
+        // several no-copy buffers over the same pages at once, which Metal
+        // does not allow. They are small by construction: the inline path
+        // above has already taken everything under four kilobytes.
+        let b = upload_copy(bytes);
         enc.set_buffer(index, Some(&b), 0);
         Some(b)
     }
+}
+
+/// A buffer holding its own copy of `bytes`, staged through the arena.
+fn upload_copy(bytes: &[u8]) -> Buffer {
+    upload_inner(&context().device, bytes, false)
 }
 
 /// Hands a slice of field elements to Metal.
@@ -383,7 +414,18 @@ fn upload(bytes: &[u8]) -> Buffer {
 }
 
 fn upload_inner(device: &Device, bytes: &[u8], aligned: bool) -> Buffer {
-    if aligned && !bytes.is_empty() {
+    if upload_fresh() {
+        // Neither lent nor staged: a buffer of its own, with its own copy of
+        // the data. Slow, and the only upload that shares nothing with any
+        // other -- which is what makes it worth having when something is
+        // corrupting memory and the question is whose.
+        return device.new_buffer_with_data(
+            bytes.as_ptr().cast(),
+            bytes.len().max(1) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+    }
+    if aligned && upload_lend() && !bytes.is_empty() {
         // SAFETY: the buffer borrows `bytes` for the lifetime of the dispatch,
         // which is awaited before this function's caller returns.
         #[allow(unused_unsafe)]
