@@ -1,4 +1,4 @@
-> **Resolved 2026-08-26.** This was never a hang. See `results/zerocheck-invalid-proofs.md`: the GPU zerocheck computed the wrong round polynomial for five recursion AIRs, SP1 retried until its budget was gone, and the parked threads that remained read as a hang. Kept for the diagnosis, and because the compile deadlock and the two missing autorelease pools found along the way were real and are fixed.
+> **Resolved 2026-08-26.** This was never a hang. See `results/zerocheck-invalid-proofs.md`: the GPU zerocheck computed the wrong round polynomial for four recursion AIRs (eight chip variants, both rounds each), SP1 retried until its budget was gone, and the parked threads that remained read as a hang. Kept for the diagnosis, and because the compile deadlock and the two missing autorelease pools found along the way were real and are fixed.
 
 # An intermittent hang in the Metal path
 

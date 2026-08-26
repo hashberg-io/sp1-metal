@@ -113,7 +113,7 @@ It is slow and it is the strongest correctness evidence available short of the v
 
 **Zerocheck checks itself even when you do not ask.** Its kernel is generated per chip from that chip's constraint DAG, and a generated kernel is only as right as the generator. The first round for each chip therefore runs both paths and compares: a chip that agrees is trusted for the life of the process, and a chip that disagrees is declined and its rounds go to the CPU. The cost is one extra CPU round per chip, not per call.
 
-That is not belt-and-braces. Five of SP1's recursion AIRs — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — transpile to kernels that compute the wrong round polynomial, which is why compressed proofs did not verify before this check existed. They decline themselves now. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call and makes a disagreement fatal, which is how those five were found.
+That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — transpile to kernels that compute the wrong round polynomial, which is why compressed proofs did not verify before this check existed. They decline themselves now. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call and makes a disagreement fatal, which is how those five were found.
 
 ## Known issues
 
@@ -139,7 +139,7 @@ Between n=1000 and n=1500 — same shard count — the CPU arm is flat at 7.7 s 
 
 ### Fixed, but worth knowing
 
-Compressed proofs did not verify until 2026-08-26, because the GPU zerocheck computed the wrong round polynomial for five of SP1's recursion AIRs. Each generated kernel is now checked against the CPU on first use and declined if it disagrees, so those five decline themselves. If you are reading a copy of this from before that fix, `SP1_METAL_ZEROCHECK=0` is required for compressed proofs.
+Compressed proofs did not verify until 2026-08-26, because the GPU zerocheck computed the wrong round polynomial for five of SP1's recursion AIRs. Each generated kernel is now checked against the CPU on first use and declined if it disagrees, so those decline themselves. If you are reading a copy of this from before that fix, `SP1_METAL_ZEROCHECK=0` is required for compressed proofs.
 
 ## Compatibility
 
