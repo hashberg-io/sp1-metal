@@ -19,6 +19,20 @@
 //! that the allocator serves them from their own mapping, and almost never a
 //! whole number of pages long, because their length is a row count times an
 //! interaction count.
+//!
+//! There *is* a second requirement, and it is about the caller rather than the
+//! pointer: **no two live no-copy buffers may cover the same page.** Lending an
+//! allocation once is always safe. Lending a *sub-slice* is safe only if
+//! nothing else lends a slice sharing its pages at the same time — and since
+//! Metal takes whole pages, two slices of one array can share a page without
+//! overlapping by a single byte.
+//!
+//! The GKR round broke this and it cost a wrong proof, not a crash: it bound a
+//! prefix of the same array once per chip, so a layer with several wide chips
+//! had several buffers over that array's first page at once. See
+//! `results/gkr-overlapping-lends.md`. Anything that lends per item rather than
+//! per array should copy instead, which for a slice small enough to be bound
+//! per item costs nothing worth measuring.
 
 use metal::{Buffer, Device, MTLResourceOptions};
 

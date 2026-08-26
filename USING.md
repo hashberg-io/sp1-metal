@@ -91,6 +91,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_TRANSITION` | the logup GKR layer transition | on |
 | `SP1_METAL_FIRST_LAYER` | the GKR circuit's first layer | on |
 | `SP1_METAL_ZEROCHECK` | the zerocheck round reduction | on |
+| `SP1_METAL_GKR_ROUND` | the logup GKR round reduction | on |
 | `SP1_METAL_ZC_DUMP` | prints the generated kernel for the named chip | off |
 | `SP1_METAL_ZEROCHECK_FOLD` | cell count below which the zerocheck fold stays on the CPU | `SP1_METAL_MIN_ENTRIES` |
 | `SP1_METAL_JAGGED` | the jagged phase as a whole | on |
@@ -98,6 +99,8 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_JAGGED_ASSIST` | the jagged assist sumcheck | on |
 | `SP1_METAL_BATCH` | the batched fold | on |
 | `SP1_METAL_UPLOAD_CACHE` | reuse of device buffers across dispatches | on |
+| `SP1_METAL_UPLOAD_LEND` | lending host pages to the device rather than copying | on |
+| `SP1_METAL_UPLOAD_FRESH` | a private buffer for every upload, sharing nothing | off — a diagnostic |
 | `SP1_METAL_REUSE` | reuse of a round's buffer between reduce and fold | on |
 | `SP1_METAL_ZC_ILP` | interleaved constraint bodies in the generated kernel | on |
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
@@ -109,17 +112,17 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 
 The last two are switches for negative results, kept so that neither question gets asked twice.
 
-Six of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST` and `ZEROCHECK`.
+Seven of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST`, `ZEROCHECK` and `GKR_ROUND`.
 In that mode both paths run on every call of a real proof and their results are compared element for element.
 It is slow and it is the strongest correctness evidence available short of the verifier, which also runs.
 
-**Zerocheck checks itself even when you do not ask.** Its kernel is generated per chip from that chip's constraint DAG, and a generated kernel is only as right as the generator. The first round for each chip therefore runs both paths and compares: a chip that agrees is trusted for the life of the process, and a chip that disagrees is declined and its rounds go to the CPU. The cost is one extra CPU round per chip, not per call.
+**Zerocheck checks itself even when you do not ask.** Its kernel is generated per chip from that chip's constraint DAG, and a generated kernel is only as right as the generator. The first round for each chip therefore compares both paths over the first few hundred row pairs of the round: a chip that agrees is trusted for the life of the process, and a chip that disagrees is declined and its rounds go to the CPU. A prefix is enough for what the check is for — a wrong column, a wrong operation or a wrong constant is wrong on every row — and comparing the whole round instead cost the larger workloads up to half their advantage.
 
-That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — transpile to kernels that compute the wrong round polynomial, which is why compressed proofs did not verify before this check existed. They decline themselves now. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call and makes a disagreement fatal, which is how those five were found.
+That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — used to transpile to kernels that computed the wrong round polynomial, which is why compressed proofs did not verify before this check existed. The cause is fixed and they no longer decline, but the check is what turned an unverifiable proof into a performance cost while it lasted. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call, over the whole round, and makes a disagreement fatal.
 
 ## Known issues
 
-Three, all measured, none fixed. Each has a workaround and each is recorded in `results/` with the evidence.
+Two, both measured. Each has a workaround and each is recorded in `results/` with the evidence.
 
 ### A Keccak or division program's first proof appears to hang for ten minutes
 
@@ -133,15 +136,13 @@ Node count does not predict this: `Global:true` at **15,196** nodes compiles ins
 
 `SP1_METAL_ZEROCHECK_MAX_NODES=1000000` makes the elliptic-curve guests stop finishing altogether: 0 of 3 runs completed in 900 s while their CPU arms were unmoved at 7.6 s. The bound's default is conservative for a reason.
 
-### secp256k1 degrades sharply past about a thousand operations
-
-Between n=1000 and n=1500 — same shard count — the CPU arm is flat at 7.7 s while the Metal arm goes from 2.15 s to not finishing in 900. At n=1000 Metal is 3.6x faster; at n=1500 it is more than 115x slower.
-
-`Secp256k1DoubleAssign` is 167,376 and 251,064 nodes, far over the bound, so it never gets a kernel and its zerocheck falls back to the CPU — and it is the widest chip in the machine. **Workaround:** none. Keep elliptic-curve workloads small, or set `SP1_METAL_ZEROCHECK=0` for them.
-
 ### Fixed, but worth knowing
 
-Compressed proofs did not verify until 2026-08-26, because the GPU zerocheck computed the wrong round polynomial for five of SP1's recursion AIRs. Each generated kernel is now checked against the CPU on first use and declined if it disagrees, so those decline themselves. If you are reading a copy of this from before that fix, `SP1_METAL_ZEROCHECK=0` is required for compressed proofs.
+Two proofs that did not verify, both fixed on 2026-08-26, and both of which presented as a hang: SP1 retries a failed shard silently and leaves every thread parked, so nothing but `RUST_LOG=error` says what happened.
+
+**Compressed proofs did not verify.** The GPU zerocheck computed the wrong round polynomial for four of SP1's recursion AIRs, because the symbolic builder that hands out an AIR's constraints labels preprocessed columns as main ones — so the transpiler read the opcode flags of every recursion chip from the wrong trace. Fixed in this repository's copy of `p3-uni-stark`; if you are reading this from before that fix, `SP1_METAL_ZEROCHECK=0` is required for compressed proofs.
+
+**secp256k1 past about a thousand operations did not verify.** This was previously recorded here as a performance cliff — 115x *slower* than the CPU arm — and it was not slow, it was wrong. The GKR round bound a slice of the same array once per chip and lent it each time, so a layer with several wide chips had several no-copy buffers over the same pages. Those bindings are copied now. If you are reading this from before the fix, `SP1_METAL_MIN_ENTRIES=999999999` keeps that phase on the CPU.
 
 ## Compatibility
 

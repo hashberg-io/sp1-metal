@@ -8,6 +8,12 @@
 # Metal path, not a cost of the workload: at n=1500 the CPU arm proves in 7.79 s
 # and the Metal arm does not finish in 900.
 #
+# SUPERSEDED 2026-08-26: this is not a performance cliff. The Metal arm does
+# not finish because it produces a shard proof that does not verify -- the GKR
+# round lent overlapping pages -- and SP1 retries it until the budget is gone.
+# Fixed; secp256k1 now verifies at every size from 1000 to 4000 at 3.47x-3.59x
+# with no discontinuity. See results/gkr-overlapping-lends.md.
+#
 # An earlier reading of this cliff was contaminated -- the diagnostic ran
 # alongside a stuck 21-minute process -- and was re-measured cleanly.
 guest	n	arm	wall_s	shards	note
