@@ -319,6 +319,11 @@ def run_tier(tier: str, repeats: int, fh, force: bool) -> None:
             g = GUESTS[nm]
             pair(nm, label, g["sizes"][label], 4 << 20, "core", repeats, None, "baseline", fh, force)
     if tier == "standard":
+        # One compressed point, because the zerocheck defect that made
+        # compressed proofs fail to verify hid for as long as it did precisely
+        # because nothing routinely proved in the mode it broke.
+        pair("fib", "small", GUESTS["fib"]["sizes"]["small"], 4 << 20, "compressed",
+             repeats, None, "compressed", fh, force)
         return
 
     # full: adds Tier C, the sweeps, the ablation and compressed mode.
