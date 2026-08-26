@@ -32,6 +32,7 @@ Each records its own result at the end; do not read the opening as a live statem
 
 | document | what it is |
 |---|---|
+| [defect-plan.md](defect-plan.md) | How to close the four open defects, in the order that makes the later ones cheaper. Includes what has already been ruled out. |
 | [benchmark-status.md](benchmark-status.md) | Where the benchmark work stands, what it found, how to check on the running suite and how to resume it. **Read this first if picking the work back up.** |
 | [benchmark-plan.md](benchmark-plan.md) | A suite that measures the backend across the regimes it is sensitive to and checks correctness from the same runs. Not built; blocked on the SP1 guest toolchain. |
 
