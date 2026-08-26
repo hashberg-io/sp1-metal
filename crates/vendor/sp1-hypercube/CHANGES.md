@@ -86,14 +86,16 @@ Each phase below also has a runtime switch, and most accept `=check` to run both
   Seven kernels: `logup_round_ext`, `logup_round_base`, `fold_padded_ext`, `fold_padded_base`, `gkr_transition_ext`, `gkr_transition_base`, `first_layer`.
   A whole layer's chips go to the device in one command buffer and are waited for once, since the work is the same either way and what a round trip costs is re-entering a queue three other proving threads are using.
   The interaction layers — the rounds after the row variables are exhausted, where the whole layer is one row — stay on the CPU, being small by construction.
-  Switches: `SP1_METAL_TRANSITION`, `SP1_METAL_FIRST_LAYER`, `SP1_METAL_MIN_LAYER`, `SP1_METAL_MIN_ENTRIES`, `SP1_METAL_BATCH`.
+  Switches: `SP1_METAL_GKR_ROUND`, `SP1_METAL_TRANSITION`, `SP1_METAL_FIRST_LAYER`, `SP1_METAL_MIN_LAYER`, `SP1_METAL_MIN_ENTRIES`, `SP1_METAL_BATCH`, `SP1_METAL_UPLOAD_LEND`, `SP1_METAL_UPLOAD_FRESH`.
+  The round reduction binds a slice of `eq_row` and of `eq_interaction` per chip and *copies* them: they start at the same page for every chip in the layer, so lending them put several no-copy buffers over one page at once, which cost a proof that did not verify.
 
 - **`src/prover/zerocheck/metal.rs`.**
   The zerocheck round reduction, generated per chip and compiled the first time that chip is seen.
   The plan for this phase assumed the generator could not live here, because enumerating chips needs `sp1-core-machine` and that depends on this crate; it does not have to enumerate anything, since the prover is handed the AIR and this crate already asks AIRs for their symbolic constraints elsewhere.
   It also assumed compilation would have to happen ahead of time: true of the elliptic-curve precompiles, which run to 178,000 constraint nodes, and false of everything else — the sixty-two core chips compile in 15.5 seconds between them, once per process.
   Emits `zc_round` per chip, plus `zc_transpose_base` and `zc_transpose_ext`.
-  Switches: `SP1_METAL_ZEROCHECK`, `SP1_METAL_ZC_LAYOUT`, `SP1_METAL_ZC_ILP`, `SP1_METAL_ZEROCHECK_FOLD`, `SP1_METAL_ZEROCHECK_MAX_NODES`.
+  A chip's kernel is compiled on a worker thread under `SP1_METAL_COMPILE_BUDGET` seconds and declined if it is not ready, with the verdict cached under `~/Library/Caches/sp1-metal`; node count does not predict compile cost, so the node bound is now only a guard against generating megabytes of source.
+  Switches: `SP1_METAL_ZEROCHECK`, `SP1_METAL_COMPILE_BUDGET`, `SP1_METAL_ZC_LAYOUT`, `SP1_METAL_ZC_ILP`, `SP1_METAL_ZC_DUMP`, `SP1_METAL_ZEROCHECK_FOLD`, `SP1_METAL_ZEROCHECK_MAX_NODES`.
 
 - **`src/prover/metal_tcs.rs`.**
   `MetalMerkleProver`: the tensor commitment with its Merkle tree on the GPU.
