@@ -144,13 +144,26 @@ where
             + Air<slop_uni_stark::SymbolicAirBuilder<F>>,
     {
         #[cfg(feature = "metal")]
+        let metal_out = self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
+            partial_lagrange,
+            preprocessed_values,
+            main_values,
+        );
+        // A generated kernel is trusted only once it has been checked against
+        // the CPU for this chip. The first call runs both and compares; after
+        // that a chip that agreed is taken on its own word, and one that did
+        // not is never asked again. See `metal::VERDICTS`.
+        #[cfg(feature = "metal")]
+        let chip_key =
+            format!("{}:{}", MachineAir::<F>::name(self.air.as_ref()), IS_FIRST_ROUND);
+        #[cfg(feature = "metal")]
         {
-            if let Some(out) = self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
-                partial_lagrange,
-                preprocessed_values,
-                main_values,
-            ) {
-                return out;
+            if let Some(out) = metal_out {
+                if super::metal::verdict(&chip_key) == Some(true)
+                    && !super::metal::checking()
+                {
+                    return out;
+                }
             }
         }
         // Everything past here is the CPU reduction, which is what a chip with
@@ -160,6 +173,19 @@ where
         let fallback = sp1_metal_probes::tally::Span::start("zerocheck: cpu round");
         #[cfg(feature = "metal")]
         let fallback_cells = main_values.num_polynomials() << main_values.num_variables();
+        // Captured before the block below shadows `main_values` with its guts.
+        #[cfg(feature = "metal")]
+        let shape = (
+            main_values.num_real_entries(),
+            1usize << main_values.num_variables(),
+            main_values.num_polynomials(),
+            preprocessed_values.map_or(0, slop_multilinear::PaddedMle::num_polynomials),
+            preprocessed_values.map_or(0, slop_multilinear::PaddedMle::num_real_entries),
+            main_values.inner().as_ref().map_or(0, |i| i.guts().sizes()[0]),
+            preprocessed_values
+                .and_then(|p| p.inner().as_ref().map(|i| i.guts().sizes()[0]))
+                .unwrap_or(0),
+        );
         let air = self.air.clone();
         let public_values = self.public_values.clone();
         let powers_of_alpha = self.powers_of_alpha.clone();
@@ -278,6 +304,50 @@ where
             );
             #[cfg(feature = "metal")]
             fallback.stop(fallback_cells);
+            #[cfg(feature = "metal")]
+            if let Some(gpu) = metal_out {
+                let agrees = gpu == out;
+                if super::metal::verdict(&chip_key).is_none() {
+                    super::metal::record_verdict(&chip_key, agrees);
+                }
+                // Only `=check` treats a disagreement as fatal. Otherwise the
+                // chip is quietly declined from here on and the CPU's answer --
+                // already computed, and the one being returned -- stands.
+                if !agrees && super::metal::checking() {
+                    let name = MachineAir::<F>::name(self.air.as_ref());
+                    let which = |a: EF, b: EF| if a == b { "ok" } else { "DIFFERS" };
+                    panic!(
+                        "zerocheck GPU round disagrees with the CPU round\n  \
+                         chip            {name}\n  \
+                         first round     {IS_FIRST_ROUND}\n  \
+                         extension cols  {}\n  \
+                         rows            {} real of {}\n  \
+                         main columns    {}\n  \
+                         main guts rows  {}\n  \
+                         prep columns    {}\n  \
+                         prep real rows  {}\n  \
+                         prep guts rows  {}\n  \
+                         y(0)  {}\n  \
+                         y(2)  {}\n  \
+                         y(4)  {}\n  \
+                         gpu y0 {:?}\n  cpu y0 {:?}\n  \
+                         gpu y2 {:?}\n  cpu y2 {:?}\n  \
+                         gpu y4 {:?}\n  cpu y4 {:?}",
+                        std::any::TypeId::of::<K>() != std::any::TypeId::of::<F>(),
+                        shape.0,
+                        shape.1,
+                        shape.2,
+                        shape.5,
+                        shape.3,
+                        shape.4,
+                        shape.6,
+                        which(gpu.0, out.0),
+                        which(gpu.1, out.1),
+                        which(gpu.2, out.2),
+                        gpu.0, out.0, gpu.1, out.1, gpu.2, out.2,
+                    );
+                }
+            }
             out
         }
     }

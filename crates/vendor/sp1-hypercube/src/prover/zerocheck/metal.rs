@@ -475,7 +475,7 @@ fn transpile_round<Fx: PrimeField32>(
     constraints: &[SymbolicExpression<Fx>],
     is_first_round: bool,
     ext_columns: bool,
-) -> (String, usize, usize) {
+) -> (String, usize, usize, bool) {
     let shape = dag_shape(constraints);
     sp1_metal_probes::tally::record("zerocheck: dag nodes", shape[0], 0);
     sp1_metal_probes::tally::record("zerocheck: dag degree0", shape[1], 0);
@@ -485,6 +485,7 @@ fn transpile_round<Fx: PrimeField32>(
     let mut nodes = 0usize;
     let mut base_muls = 0usize;
     let mut copies: Vec<String> = Vec::new();
+    let mut reads_next_row = false;
     for (prefix, point, acc) in [("a", 0u8, "acc0"), ("b", 2, "acc2"), ("c", 4, "acc4")] {
         // The first round knows the polynomial vanishes at 0, so that copy of
         // the body would be dead weight.
@@ -497,6 +498,7 @@ fn transpile_round<Fx: PrimeField32>(
         let names: Vec<(String, Ty)> = constraints.iter().map(|c| cg.emit(c)).collect();
         nodes += cg.next;
         base_muls += cg.base_muls;
+        reads_next_row |= cg.reads_next_row;
         write!(copy, "{}", cg.body).unwrap();
         writeln!(copy, "        uint4 {acc} = uint4(0u);").unwrap();
         for (k, (n, ty)) in names.iter().enumerate() {
@@ -616,7 +618,7 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
         at2 = at2,
     );
     let source = format!("{}\nconstant uint KB_ONE = {}u;\n{}", header(), to_monty(1), kernel);
-    (source, nodes, base_muls)
+    (source, nodes, base_muls, reads_next_row)
 }
 
 
@@ -669,6 +671,49 @@ fn context() -> &'static Context {
 fn zerocheck_on_gpu() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("SP1_METAL_ZEROCHECK").map(|v| v != "0").unwrap_or(true))
+}
+
+/// What the first use of a chip's kernel found when checked against the CPU.
+///
+/// A generated kernel is only as right as the transpiler, and the transpiler is
+/// wrong for at least one recursion AIR in a way no static check here caught:
+/// `BaseAlu`'s body reads the correct tables in the correct order and still
+/// computes the wrong sum. Enumerating such hazards one at a time is a losing
+/// game, so the backend proves each kernel correct instead of assuming it.
+///
+/// The first call for a chip runs both paths and compares. A chip that agrees
+/// is trusted from then on; a chip that disagrees is declined for the life of
+/// the process and its rounds go to the CPU. The cost is one extra CPU round
+/// per chip -- not per call -- against a class of defects whose symptom is
+/// otherwise a proof that fails to verify two phases later.
+static VERDICTS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+
+/// Whether this chip's kernel has been checked, and what was found.
+pub(crate) fn verdict(key: &str) -> Option<bool> {
+    VERDICTS.lock().expect("verdicts poisoned").as_ref().and_then(|m| m.get(key).copied())
+}
+
+/// Records what checking this chip's kernel against the CPU found.
+pub(crate) fn record_verdict(key: &str, agrees: bool) {
+    let mut g = VERDICTS.lock().expect("verdicts poisoned");
+    g.get_or_insert_with(HashMap::new).insert(key.to_string(), agrees);
+    if !agrees {
+        crate::prover::zerocheck::counters::note_no_pipeline(key, "disagreed with the CPU", 0);
+    }
+}
+
+/// Whether every call is checked rather than only the first, read once.
+///
+/// The five other phases that moved to the GPU each have one of these, and each
+/// of them is correct. This phase did not, and it is the one that turned out to
+/// compute the wrong thing for the recursion AIRs -- silently, because a wrong
+/// round polynomial does not fail until a proof is verified two phases later.
+///
+/// Slow by construction: it does the work twice and keeps the CPU arm's answer.
+/// It is an instrument, not a mode to prove in.
+pub(crate) fn checking() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_ZEROCHECK").is_ok_and(|v| v == "check"))
 }
 
 /// The largest constraint DAG this will generate a kernel for.
@@ -747,8 +792,24 @@ fn pipeline_for<Fx: PrimeField32>(
         crate::prover::zerocheck::counters::note_no_pipeline(key, "no constraints", 0);
         None
     } else {
-        let (source, nodes, base_muls) = transpile_round(&cs, is_first_round, ext_columns);
-        if nodes > max_nodes() {
+        let (source, nodes, base_muls, reads_next_row) =
+            transpile_round(&cs, is_first_round, ext_columns);
+        // `SP1_METAL_ZC_DUMP=<chip key>` prints the generated kernel, which is
+        // the only way to see what a chip's constraints actually became.
+        if std::env::var("SP1_METAL_ZC_DUMP").is_ok_and(|v| v == key) {
+            eprintln!("--- generated kernel for {key} ---\n{source}\n--- end ---");
+        }
+        if reads_next_row {
+            // The zerocheck folder hands the AIR one row, so a constraint that
+            // reaches for another cannot be served here -- and the emitted code
+            // would silently read the current row in its place. The recursion
+            // AIRs do reach: `BaseAlu` is one, and the wrong round polynomial
+            // it produced did not fail until the proof was verified two phases
+            // later. Declining is what the flag was always for; nothing read it
+            // until a compressed proof refused to verify.
+            crate::prover::zerocheck::counters::note_no_pipeline(key, "reads another row", nodes);
+            None
+        } else if nodes > max_nodes() {
             crate::prover::zerocheck::counters::note_no_pipeline(key, "over the node bound", nodes);
             None
         } else {
