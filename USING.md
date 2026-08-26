@@ -105,7 +105,8 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_ZC_ILP` | interleaved constraint bodies in the generated kernel | on |
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |
-| `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip is not compiled | 16384 |
+| `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip's kernel is not even generated | 65536 |
+| `SP1_METAL_COMPILE_BUDGET` | seconds a chip's kernel may spend in the Metal compiler | 5 |
 | `SP1_METAL_PERMITS` | shards proved at once, where the cap is above one | as the caller set it |
 | `SP1_METAL_ZC_LAYOUT` | column-major zerocheck layout | **off** — measured 21% slower |
 | `SP1_METAL_DEFER` | deferred command-buffer submission | **off** — produces wrong proofs |
@@ -122,21 +123,13 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ## Known issues
 
-Two, both measured. Each has a workaround and each is recorded in `results/` with the evidence.
-
-### A Keccak or division program's first proof appears to hang for ten minutes
-
-`KeccakPermuteControl` (8,234 and 12,351 constraint nodes) and `DivRem` (7,624 and 11,436) each take about ten minutes to compile into a Metal kernel. macOS caches the result against its source, so it is paid once per program per machine — but it is paid on the *first* proof, with no output, and it looks exactly like a hang.
-
-Node count does not predict this: `Global:true` at **15,196** nodes compiles instantly in every workload measured. Compiling the two offending chips also buys nothing — keccak's warm wall is 2.77 s with them and 2.79–2.85 s without.
-
-**Workaround:** `SP1_METAL_ZEROCHECK_MAX_NODES=8000`, which excludes them and costs nothing measurable.
-
-### Do not raise the node bound
-
-`SP1_METAL_ZEROCHECK_MAX_NODES=1000000` makes the elliptic-curve guests stop finishing altogether: 0 of 3 runs completed in 900 s while their CPU arms were unmoved at 7.6 s. The bound's default is conservative for a reason.
+None outstanding. What follows is what was wrong and how you would recognise it in an older copy.
 
 ### Fixed, but worth knowing
+
+**A Keccak or division program's first proof appeared to hang for ten minutes.** `KeccakPermuteControl` and `DivRem` each take about that long in the Metal compiler, paid on the first proof with no output. Node count never predicted it — `Global:true` at 15,196 nodes compiles instantly while `KeccakPermuteControl` at 12,351 does not — so the bound drawn on node count could neither catch them nor be raised past them.
+
+A chip's kernel now gets `SP1_METAL_COMPILE_BUDGET` seconds and is declined if it is not ready, and the verdict is remembered under `~/Library/Caches/sp1-metal/` so the wait is paid once per source per machine rather than once per process. A keccak proof's first run is 10.6 s and its second 5.3 s, with no workaround set. Raise the budget if you would rather wait: `SP1_METAL_COMPILE_BUDGET=600` restores the old behaviour.
 
 Two proofs that did not verify, both fixed on 2026-08-26, and both of which presented as a hang: SP1 retries a failed shard silently and leaves every thread parked, so nothing but `RUST_LOG=error` says what happened.
 

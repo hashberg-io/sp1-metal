@@ -725,25 +725,27 @@ pub(crate) fn checking() -> bool {
 
 /// The largest constraint DAG this will generate a kernel for.
 ///
-/// The elliptic-curve precompiles reach 178,000 nodes and megabytes of source,
-/// which is minutes in the Metal compiler; the core chips are two orders of
-/// magnitude smaller. Past this the chip stays on the CPU.
-const MAX_NODES: usize = 16_384;
+/// This is no longer where a slow chip is caught -- [`compile_budget`] is --
+/// and it does not have to be, because the node count never predicted the
+/// compile cost. What it still bounds is the work *before* the compiler: the
+/// elliptic-curve precompiles reach 178,000 nodes and generate megabytes of
+/// source, and building that DAG and walking it into text is paid on the
+/// calling thread with no deadline over it.
+///
+/// So it is now what it should always have been: a cheap pre-filter against
+/// pathological source size, set well above every chip in the machine except
+/// those precompiles, rather than the edge of a cliff it was drawn on top of.
+const MAX_NODES: usize = 65_536;
 
 /// The node bound in force, which `SP1_METAL_ZEROCHECK_MAX_NODES` overrides.
 ///
-/// The default was set from the precompiles, which are three orders of
-/// magnitude past it, and nothing had ever chosen it against the core chips.
-/// The counters say exactly one core chip is caught by it -- `Global`, at
-/// 22,794 nodes -- and raising the bound to let that one through is measured at
-/// **1,814 seconds of kernel compilation**, taking the acceptance proof from
-/// 12.0 seconds to 463.6. The other sixty-one kernels compile in 0.04 seconds
-/// between them, so the cost is not linear in the node count and the bound is
-/// not conservative: it is the edge of a cliff.
-///
-/// What `Global` would need is the treatment the GKR first layer got -- the
-/// constraints as a table one kernel walks, rather than a DAG unrolled into
-/// source -- not a larger number here.
+/// The old default of 16,384 caught exactly one core chip -- `Global`, at
+/// 22,794 nodes -- and raising it was measured at **1,814 seconds of kernel
+/// compilation**, taking the acceptance proof from 12.0 seconds to 463.6,
+/// while the other sixty-one kernels compiled in 0.04 seconds between them.
+/// That is why the bound could not be raised. With a deadline it can: `Global`
+/// is now offered to the compiler, declined when it does not finish in time,
+/// and remembered as declined.
 fn max_nodes() -> usize {
     static MAX: OnceLock<usize> = OnceLock::new();
     *MAX.get_or_init(|| {
@@ -752,6 +754,105 @@ fn max_nodes() -> usize {
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_NODES)
     })
+}
+
+/// How long a chip's kernel may spend in the Metal compiler before the chip is
+/// declined, in seconds. `SP1_METAL_COMPILE_BUDGET` overrides it.
+///
+/// This is what the node bound was trying and failing to be. `KeccakPermuteControl`
+/// at 12,351 nodes takes about ten minutes to compile and `Global:true` at
+/// **15,196** compiles instantly, so the node count does not predict the cost and
+/// no bound drawn on it can. A deadline needs no prediction: a chip that compiles
+/// quickly is accepted whatever its size, and one that does not is declined
+/// whatever its size.
+fn compile_budget() -> std::time::Duration {
+    static BUDGET: OnceLock<std::time::Duration> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let secs = std::env::var("SP1_METAL_COMPILE_BUDGET")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(5.0);
+        std::time::Duration::from_secs_f64(secs.max(0.0))
+    })
+}
+
+/// Where the record of what has already blown the budget is kept.
+///
+/// The deadline has to be paid to be learnt, and a process learns nothing from
+/// the last one. macOS keys its own shader cache on the source text, so this
+/// does the same: a chip declined once is declined immediately ever after on
+/// this machine, and a chip that compiled is compiled again from a cache that
+/// is by then warm.
+fn budget_verdict_path(source: &str) -> Option<std::path::PathBuf> {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for b in source.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::PathBuf::from(home).join("Library/Caches/sp1-metal/zerocheck");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join(format!("{hash:016x}")))
+}
+
+/// Compiles `source`, or gives up on it.
+///
+/// The compiler is synchronous and cannot be cancelled, so the work goes to a
+/// thread and this waits with a deadline; on expiry the chip is declined and
+/// the thread is left to finish and drop what it built, which costs nothing but
+/// its own completion.
+///
+/// The thread takes the process-wide compile lock rather than the caller,
+/// because the caller lets go when the deadline expires: holding it here would
+/// release it while a compile was still running, which is exactly the
+/// concurrent pipeline creation that deadlocks in the driver.
+///
+/// **An abandoned compile keeps that lock until it finishes**, which for the
+/// chips this exists to catch is another ten minutes. So nothing waits for it:
+/// while one is outstanding every other chip declines on the spot and goes to
+/// the CPU, rather than queueing behind a compile whose result nobody wants.
+/// Waiting for the lock instead -- even without charging it to the budget --
+/// makes the first slow chip block every chip after it, which is worse than
+/// the pathology it was meant to fix and is how the first version of this
+/// behaved.
+fn compile_within(device: &Device, source: &str) -> Option<ComputePipelineState> {
+    /// Compiles that blew their budget and are still running.
+    static ABANDONED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    use std::sync::atomic::Ordering;
+
+    let verdict = budget_verdict_path(source);
+    if let Some(path) = verdict.as_ref() {
+        if std::fs::read_to_string(path).is_ok_and(|v| v.starts_with("slow")) {
+            return None;
+        }
+    }
+    if ABANDONED.load(Ordering::Acquire) > 0 {
+        return None;
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let device = device.clone();
+    let src = source.to_string();
+    ABANDONED.fetch_add(1, Ordering::AcqRel);
+    std::thread::spawn(move || {
+        let _compiling = sp1_metal_probes::compile::lock();
+        let pso = device
+            .new_library_with_source(&src, &metal::CompileOptions::new())
+            .ok()
+            .and_then(|library| library.get_function("zc_round", None).ok())
+            .and_then(|f| device.new_compute_pipeline_state_with_function(&f).ok());
+        ABANDONED.fetch_sub(1, Ordering::AcqRel);
+        let _ = done_tx.send(pso);
+    });
+    let budget = compile_budget();
+    let out = if budget.is_zero() {
+        done_rx.recv().ok().flatten()
+    } else {
+        done_rx.recv_timeout(budget).ok().flatten()
+    };
+    if let Some(path) = verdict.as_ref() {
+        let _ = std::fs::write(path, if out.is_some() { "ok" } else { "slow" });
+    }
+    out
 }
 
 /// The pipeline for a chip, generated and compiled on first sight.
@@ -782,15 +883,10 @@ fn pipeline_for<Fx: PrimeField32>(
     if let Some(hit) = ctx.pipelines.lock().expect("pipelines poisoned").get(key) {
         return hit.clone();
     }
-    // Creating a pipeline from two threads at once deadlocks in the driver; see
-    // `sp1_metal_core::compile`. Taken here rather than around the lookup above
-    // so that a thread wanting a kernel somebody else already compiled is never
-    // put behind a cold compile.
-    let _compiling = sp1_metal_probes::compile::lock();
-    // Another thread may have compiled this very chip while this one queued.
-    if let Some(hit) = ctx.pipelines.lock().expect("pipelines poisoned").get(key) {
-        return hit.clone();
-    }
+    // The process-wide compile lock is taken by the compiling thread rather
+    // than here; see `compile_within`. Two threads reaching this for the same
+    // chip at once will both generate its source, which wastes a transpile and
+    // is otherwise harmless.
     let cs = constraints();
     let compile_start = std::time::Instant::now();
     // Why a chip has no kernel is worth saying out loud: the three reasons are
@@ -820,14 +916,13 @@ fn pipeline_for<Fx: PrimeField32>(
             crate::prover::zerocheck::counters::note_no_pipeline(key, "over the node bound", nodes);
             None
         } else {
-            let pso = ctx
-                .device
-                .new_library_with_source(&source, &metal::CompileOptions::new())
-                .ok()
-                .and_then(|library| library.get_function("zc_round", None).ok())
-                .and_then(|f| ctx.device.new_compute_pipeline_state_with_function(&f).ok());
+            let pso = compile_within(&ctx.device, &source);
             if pso.is_none() {
-                crate::prover::zerocheck::counters::note_no_pipeline(key, "did not compile", nodes);
+                crate::prover::zerocheck::counters::note_no_pipeline(
+                    key,
+                    "did not compile within the budget",
+                    nodes,
+                );
             }
             // What the compiler will actually let this kernel run. A generated
             // body of hundreds of live extension values can need more registers

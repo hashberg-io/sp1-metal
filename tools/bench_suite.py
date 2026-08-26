@@ -367,8 +367,7 @@ guest("branch", "bench-branch", 170_000, 1_358_569, 2_700_000, "A", "control flo
 guest("divrem", "bench-divrem", 150_000, 1_199_680, 2_400_000, "A", "division")
 guest("mulh", "bench-mulh", 375_000, 2_999_198, 6_000_000, "A", "widening multiply")
 guest("sha256", "bench-sha256", 5_000, 20_000, 40_000, "B", "ShaExtend/ShaCompress")
-guest("keccak", "bench-keccak", 500, 2_000, 4_000, "B", "KeccakPermute",
-      env={"SP1_METAL_ZEROCHECK_MAX_NODES": "8000"}, timeout=900)
+guest("keccak", "bench-keccak", 500, 2_000, 4_000, "B", "KeccakPermute", timeout=900)
 guest("secp256k1", "bench-secp256k1", 250, 500, 1_000, "B", "Weierstrass/Fp", timeout=900)
 guest("bn254", "bench-bn254", 250, 500, 1_000, "B", "Bn254 add/double", timeout=900)
 guest("uint256", "bench-uint256", 250, 500, 1_000, "B", "Uint256Mul", timeout=900)
