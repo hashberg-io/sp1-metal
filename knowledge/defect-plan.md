@@ -1,6 +1,15 @@
 # Closing the four open defects
 
-> **Status: planned, not started.** Written 2026-08-26 as a handover, so it can be picked up with no memory of the session that found these.
+> **Status: all four closed, 2026-08-26.** What follows is the plan as written plus what actually happened, because two of the four were not what the plan thought they were.
+>
+> | # | Defect | Outcome |
+> |---|---|---|
+> | 1 | Ten-minute kernel compiles | Fixed by a compile deadline, as planned |
+> | 2 | The node bound cannot be raised | Fixed with it, and raised to 65,536 |
+> | 3 | secp256k1 falls off a cliff | **Not a performance defect at all** — a wrong proof, from lending overlapping pages |
+> | 4 | Eight mistranspiled chip variants | Fixed — one mislabelled line in `p3-uni-stark` |
+>
+> Two things the plan got wrong are worth carrying forward. It called defect 3 a performance cliff on the strength of a timeout, when the timeout was SP1 retrying a proof that would not verify — the same disguise the zerocheck defect wore, and the second time this project has been fooled by it. And it assumed defect 4 would need a long bisection of the constraint DAG; the answer was upstream of the transpiler entirely, in what the symbolic builder calls a preprocessed column.
 
 Four defects remain in the Metal backend. None blocks a release — each is documented in [USING.md](../USING.md)'s known-issues section with a workaround — but each costs something real. This is how to close them, in the order that makes the later ones cheaper.
 
