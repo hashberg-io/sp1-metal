@@ -115,6 +115,32 @@ It is slow and it is the strongest correctness evidence available short of the v
 
 That is not belt-and-braces. Five of SP1's recursion AIRs — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — transpile to kernels that compute the wrong round polynomial, which is why compressed proofs did not verify before this check existed. They decline themselves now. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call and makes a disagreement fatal, which is how those five were found.
 
+## Known issues
+
+Three, all measured, none fixed. Each has a workaround and each is recorded in `results/` with the evidence.
+
+### A Keccak or division program's first proof appears to hang for ten minutes
+
+`KeccakPermuteControl` (8,234 and 12,351 constraint nodes) and `DivRem` (7,624 and 11,436) each take about ten minutes to compile into a Metal kernel. macOS caches the result against its source, so it is paid once per program per machine — but it is paid on the *first* proof, with no output, and it looks exactly like a hang.
+
+Node count does not predict this: `Global:true` at **15,196** nodes compiles instantly in every workload measured. Compiling the two offending chips also buys nothing — keccak's warm wall is 2.77 s with them and 2.79–2.85 s without.
+
+**Workaround:** `SP1_METAL_ZEROCHECK_MAX_NODES=8000`, which excludes them and costs nothing measurable.
+
+### Do not raise the node bound
+
+`SP1_METAL_ZEROCHECK_MAX_NODES=1000000` makes the elliptic-curve guests stop finishing altogether: 0 of 3 runs completed in 900 s while their CPU arms were unmoved at 7.6 s. The bound's default is conservative for a reason.
+
+### secp256k1 degrades sharply past about a thousand operations
+
+Between n=1000 and n=1500 — same shard count — the CPU arm is flat at 7.7 s while the Metal arm goes from 2.15 s to not finishing in 900. At n=1000 Metal is 3.6x faster; at n=1500 it is more than 115x slower.
+
+`Secp256k1DoubleAssign` is 167,376 and 251,064 nodes, far over the bound, so it never gets a kernel and its zerocheck falls back to the CPU — and it is the widest chip in the machine. **Workaround:** none. Keep elliptic-curve workloads small, or set `SP1_METAL_ZEROCHECK=0` for them.
+
+### Fixed, but worth knowing
+
+Compressed proofs did not verify until 2026-08-26, because the GPU zerocheck computed the wrong round polynomial for five of SP1's recursion AIRs. Each generated kernel is now checked against the CPU on first use and declined if it disagrees, so those five decline themselves. If you are reading a copy of this from before that fix, `SP1_METAL_ZEROCHECK=0` is required for compressed proofs.
+
 ## Compatibility
 
 **This tracks SP1 6.4.0 exactly.** Every crate is pinned with `=6.4.0` and a consumer on any other 6.x will not resolve.

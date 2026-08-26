@@ -4,8 +4,11 @@ GPU proving for the [SP1](https://github.com/succinctlabs/sp1) zkVM on Apple Sil
 SP1's official GPU story is CUDA-only and no Metal backend exists anywhere public, so on Apple hardware the prover falls back to CPU.
 This closes part of that gap: four phases of a shard proof run on the GPU, and a real proof verifies.
 
-**On an M4 Max, core shard proving is 5.56x faster than the same machine's CPU prover** — 10.85 s against 60.25 s, both arms through one binary. Across shard sizes, workload shapes and workload sizes the envelope is 3.71x to 5.63x.
-That figure is core proving, not the execute-to-compressed wall-clock that this project's own [D7](knowledge/desiderata.md) asks for; end to end it would land nearer 4.5x, which is below that bar. [The verdict](knowledge/verdict.md) says which earlier claims this refuted and which it did not.
+**On an M4 Max, core shard proving is 5.6x faster than the same machine's CPU prover** on a large workload — 10.65 s against 59.35 s, both arms through one binary.
+
+That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **2.25x to 5.74x**, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **2.85x to 3.72x**, so recursion roughly halves the advantage and the 5x bar is not met.
+
+Every figure here comes from [`results/`](results); [the verdict](knowledge/verdict.md) says which of this project's earlier claims survived and which did not.
 
 This is experimental software and an independent fork. It is not affiliated with, endorsed by, or supported by Succinct Labs.
 
