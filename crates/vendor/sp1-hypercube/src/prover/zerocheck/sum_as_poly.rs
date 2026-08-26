@@ -65,6 +65,7 @@ where
         partial_lagrange: &Mle<EF>,
         preprocessed_values: Option<&PaddedMle<K>>,
         main_values: &PaddedMle<K>,
+        max_pairs: usize,
     ) -> Option<(EF, EF, EF)>
     where
         K: ExtensionField<F>,
@@ -125,9 +126,156 @@ where
             eq,
             preprocessed_values,
             main_values,
+            max_pairs,
         )?;
         // SAFETY: EF is the extension the kernels are written for, checked above.
         Some(unsafe { std::mem::transmute_copy(&out) })
+    }
+
+    /// The row pairs a first-use check compares.
+    ///
+    /// The whole round would be exact, and is what this used to compare, but a
+    /// chip's first call is its *largest* round and there are two keys per
+    /// chip — so checking in full cost the larger workloads between 30% and
+    /// 100%, taking fib's large point from 22.71 seconds to 45.26 with the CPU
+    /// arm unmoved.
+    ///
+    /// What the check is for is a generator bug: a wrong column, a wrong
+    /// operation, a wrong constant. Those are wrong on every row, so a few
+    /// hundred pairs find them. The wrapper around the generated body — the
+    /// row-pair guards, the eq weighting, the reduction — is not generated and
+    /// is exercised by every proof that has ever run.
+    #[cfg(feature = "metal")]
+    const CHECK_PAIRS: usize = 512;
+
+    /// Whether this chip's generated kernel agrees with the CPU over the first
+    /// [`Self::CHECK_PAIRS`] row pairs.
+    ///
+    /// `None` means there was no kernel to check, which is not a verdict: the
+    /// chip is declined for one of the reasons `metal::sum_as_poly` tallies,
+    /// and asking again later is free.
+    #[cfg(feature = "metal")]
+    fn metal_agrees_on_prefix<K, const IS_FIRST_ROUND: bool>(
+        &self,
+        partial_lagrange: &Mle<EF>,
+        preprocessed_values: Option<&PaddedMle<K>>,
+        main_values: &PaddedMle<K>,
+    ) -> Option<bool>
+    where
+        K: ExtensionField<F>,
+        EF: ExtensionField<K>,
+        A: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>>
+            + MachineAir<F>
+            + Air<slop_uni_stark::SymbolicAirBuilder<F>>,
+    {
+        let pairs = main_values.num_real_entries().div_ceil(2).min(Self::CHECK_PAIRS);
+        if pairs == 0 {
+            return None;
+        }
+        let gpu = self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
+            partial_lagrange,
+            preprocessed_values,
+            main_values,
+            pairs,
+        )?;
+        let cpu = self.cpu_sum_over_prefix::<K, IS_FIRST_ROUND>(
+            partial_lagrange,
+            preprocessed_values,
+            main_values,
+            pairs,
+        );
+        Some(gpu == cpu)
+    }
+
+    /// The round's three sums over the first `pairs` row pairs, on the CPU.
+    ///
+    /// The reduction is a plain sum over row pairs, so a prefix of it is a
+    /// quantity both paths can be asked for. Serial and unchunked: it is a few
+    /// hundred rows, run once per chip, and a rayon bridge over that costs more
+    /// than it saves.
+    #[cfg(feature = "metal")]
+    fn cpu_sum_over_prefix<K, const IS_FIRST_ROUND: bool>(
+        &self,
+        partial_lagrange: &Mle<EF>,
+        preprocessed_values: Option<&PaddedMle<K>>,
+        main_values: &PaddedMle<K>,
+        pairs: usize,
+    ) -> (EF, EF, EF)
+    where
+        K: ExtensionField<F>,
+        EF: ExtensionField<K>,
+        A: for<'b> Air<ConstraintSumcheckFolder<'b, F, K, EF>> + MachineAir<F>,
+    {
+        let main_w = main_values.num_polynomials();
+        let prep_w = preprocessed_values.map_or(0, slop_multilinear::PaddedMle::num_polynomials);
+        let Some(main_inner) = main_values.inner().as_ref() else {
+            return (EF::zero(), EF::zero(), EF::zero());
+        };
+        let main = main_inner.guts().as_buffer().as_slice();
+        let has_preprocessed = preprocessed_values.is_some();
+        let prep = preprocessed_values
+            .and_then(|p| p.inner().as_ref())
+            .map_or([].as_slice(), |p| p.guts().as_buffer().as_slice());
+        let eq = partial_lagrange.guts().as_buffer().as_slice();
+
+        // The dummy rows an odd trace ends on, decided exactly as the chunked
+        // reduction below decides them.
+        let padding_main = vec![K::zero(); main_w];
+        let padding_prep = vec![K::zero(); prep_w];
+        let mut main_0 = vec![K::zero(); main_w];
+        let mut main_2 = vec![K::zero(); main_w];
+        let mut main_4 = vec![K::zero(); main_w];
+        let mut prep_0 = vec![K::zero(); prep_w];
+        let mut prep_2 = vec![K::zero(); prep_w];
+        let mut prep_4 = vec![K::zero(); prep_w];
+        let mut out = (EF::zero(), EF::zero(), EF::zero());
+
+        for j in 0..pairs {
+            let row_0 = 2 * j * main_w;
+            let row_1 = row_0 + main_w;
+            let main_row_1 = if main.len() >= row_1 + main_w {
+                &main[row_1..row_1 + main_w]
+            } else {
+                &padding_main[..]
+            };
+            interpolate_last_var_non_padded_values::<K, IS_FIRST_ROUND>(
+                &main[row_0..row_0 + main_w],
+                main_row_1,
+                &mut main_0,
+                &mut main_2,
+                &mut main_4,
+            );
+            if has_preprocessed {
+                let p_0 = 2 * j * prep_w;
+                let p_1 = p_0 + prep_w;
+                let prep_row_1 =
+                    if prep.len() == p_1 { &padding_prep[..] } else { &prep[p_1..p_1 + prep_w] };
+                interpolate_last_var_non_padded_values::<K, IS_FIRST_ROUND>(
+                    &prep[p_0..p_0 + prep_w],
+                    prep_row_1,
+                    &mut prep_0,
+                    &mut prep_2,
+                    &mut prep_4,
+                );
+            }
+            increment_y_values::<K, F, EF, A, IS_FIRST_ROUND>(
+                &self.public_values,
+                &self.powers_of_alpha,
+                self.air.as_ref(),
+                &mut out.0,
+                &mut out.1,
+                &mut out.2,
+                &prep_0,
+                &main_0,
+                &prep_2,
+                &main_2,
+                &prep_4,
+                &main_4,
+                &self.gkr_powers,
+                eq[j],
+            );
+        }
+        out
     }
 
     pub(crate) fn sum_as_poly_in_last_variable<K, const IS_FIRST_ROUND: bool>(
@@ -143,25 +291,44 @@ where
             + MachineAir<F>
             + Air<slop_uni_stark::SymbolicAirBuilder<F>>,
     {
-        #[cfg(feature = "metal")]
-        let metal_out = self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
-            partial_lagrange,
-            preprocessed_values,
-            main_values,
-        );
         // A generated kernel is trusted only once it has been checked against
-        // the CPU for this chip. The first call runs both and compares; after
-        // that a chip that agreed is taken on its own word, and one that did
-        // not is never asked again. See `metal::VERDICTS`.
+        // the CPU for this chip. The first call compares a prefix of the round
+        // (see `metal_agrees_on_prefix`); after that a chip that agreed is
+        // taken on its own word, and one that did not is never asked again.
+        // See `metal::VERDICTS`.
         #[cfg(feature = "metal")]
         let chip_key =
             format!("{}:{}", MachineAir::<F>::name(self.air.as_ref()), IS_FIRST_ROUND);
         #[cfg(feature = "metal")]
+        let checking = super::metal::checking();
+        #[cfg(feature = "metal")]
+        if !checking && super::metal::verdict(&chip_key).is_none() {
+            if let Some(agrees) = self.metal_agrees_on_prefix::<K, IS_FIRST_ROUND>(
+                partial_lagrange,
+                preprocessed_values,
+                main_values,
+            ) {
+                super::metal::record_verdict(&chip_key, agrees);
+            }
+        }
+        // Under `=check` the round is always computed both ways, whatever the
+        // verdict says, because that mode exists to produce the diagnostic
+        // below rather than to prove quickly.
+        #[cfg(feature = "metal")]
+        let metal_out = if checking || super::metal::verdict(&chip_key) == Some(true) {
+            self.metal_sum_as_poly::<K, IS_FIRST_ROUND>(
+                partial_lagrange,
+                preprocessed_values,
+                main_values,
+                usize::MAX,
+            )
+        } else {
+            None
+        };
+        #[cfg(feature = "metal")]
         {
             if let Some(out) = metal_out {
-                if super::metal::verdict(&chip_key) == Some(true)
-                    && !super::metal::checking()
-                {
+                if !checking {
                     return out;
                 }
             }
@@ -313,7 +480,7 @@ where
                 // Only `=check` treats a disagreement as fatal. Otherwise the
                 // chip is quietly declined from here on and the CPU's answer --
                 // already computed, and the one being returned -- stands.
-                if !agrees && super::metal::checking() {
+                if !agrees && checking {
                     let name = MachineAir::<F>::name(self.air.as_ref());
                     let which = |a: EF, b: EF| if a == b { "ok" } else { "DIFFERS" };
                     panic!(

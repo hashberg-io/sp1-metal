@@ -875,6 +875,11 @@ struct ZcParams {
 ///
 /// Returns `None` whenever the chip is not one this can serve, leaving the
 /// caller to do what it always did.
+///
+/// `max_pairs` stops the sum short of the trace. The reduction is a plain sum
+/// over row pairs, so any prefix of it is a quantity the CPU can be asked for
+/// too -- which is how a generated kernel is checked without paying for a whole
+/// CPU round. Pass `usize::MAX` to reduce the trace.
 pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     key: &str,
     is_first_round: bool,
@@ -886,6 +891,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     partial_lagrange: &Mle<EF>,
     preprocessed: Option<&PaddedMle<C>>,
     main: &PaddedMle<C>,
+    max_pairs: usize,
 ) -> Option<(EF, EF, EF)> {
     // Every refusal below is tallied by reason and by the cells it turns away,
     // because the round reduction is most of zerocheck and an aggregate count
@@ -905,7 +911,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     };
     let main_w = main_inner.num_polynomials();
     let rows = main_inner.guts().sizes()[0];
-    let pairs = main.num_real_entries().div_ceil(2);
+    let pairs = main.num_real_entries().div_ceil(2).min(max_pairs);
     if main_w == 0 || rows == 0 || pairs == 0 {
         return reject(2);
     }
