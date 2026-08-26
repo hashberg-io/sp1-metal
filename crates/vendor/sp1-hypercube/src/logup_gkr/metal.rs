@@ -910,6 +910,73 @@ where
     totals
 }
 
+/// Whether the logup GKR round reduction goes to the GPU, read once.
+///
+/// `SP1_METAL_MIN_ENTRIES` decides *which* layers go; this decides whether any
+/// do, and it accepts `=check`. This phase had no check mode, and it is the
+/// second phase without one to be found computing the wrong thing -- silently,
+/// because a wrong round message does not fail until a shard proof is verified.
+fn round_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_GKR_ROUND").map(|v| v != "0").unwrap_or(true))
+}
+
+/// Whether every round is computed both ways and compared.
+///
+/// Slow by construction: it does the work three times and keeps the CPU's
+/// answer. It is an instrument, not a mode to prove in.
+fn round_checking() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SP1_METAL_GKR_ROUND").is_ok_and(|v| v == "check"))
+}
+
+/// The shape of a round's layer, for the diagnostics below.
+///
+/// What decides a chip's path through the reduction is its width and its
+/// length against the threshold, so those are what a disagreement has to name.
+fn layer_report<F, K, B>(poly: &LogupRoundPolynomial<F, K, B>) -> String
+where
+    F: slop_algebra::Field,
+    K: slop_algebra::ExtensionField<F>,
+{
+    use std::fmt::Write as _;
+    let min = min_entries_for_gpu();
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "  eq_row {}  eq_interaction {}  min_entries {min}",
+        poly.eq_row.guts().as_slice().len(),
+        poly.eq_interaction.guts().as_slice().len(),
+    );
+    match &poly.layer {
+        PolynomialLayer::InteractionLayer(_) => {
+            let _ = writeln!(s, "  interaction layer");
+        }
+        PolynomialLayer::CircuitLayer(layer) => {
+            let _ = writeln!(s, "  circuit layer, {} chips", layer.numerator_0.len());
+            let mut offset = 0usize;
+            for (i, n0) in layer.numerator_0.iter().enumerate() {
+                let width = n0.num_polynomials();
+                let len = n0.inner().as_ref().map_or(0, |x| x.guts().as_slice().len());
+                let rows = if width == 0 { 0 } else { len / width };
+                let path = if width == 0 || len == 0 {
+                    "skipped"
+                } else if len < min {
+                    "batched"
+                } else {
+                    "dispatched"
+                };
+                let _ = writeln!(
+                    s,
+                    "    chip {i:>3}  width {width:>5}  rows {rows:>9}  len {len:>11}  eqi_off {offset:>5}  {path}",
+                );
+                offset += width;
+            }
+        }
+    }
+    s
+}
+
 /// The logup GKR round reduction, on the GPU.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetalRoundOps;
@@ -926,21 +993,54 @@ where
 {
     fn round_evals(poly: &LogupRoundPolynomial<F, K, Self>) -> (K, K, K) {
         let _phase = stats::enter(stats::Phase::Gkr);
-        if is::<K, EF>() {
+        if !round_on() {
+            return cpu_round_evals(poly);
+        }
+        let checking = round_checking();
+        // The CPU round is run before the GPU one as well as after, and the two
+        // are compared to each other. A reduction that only reads its layer
+        // gives the same answer twice; one that writes to memory it was lent
+        // gives a second answer the GPU agrees with, because by then both are
+        // reading the damage -- which is a disagreement no amount of comparing
+        // the two paths against each other would ever show.
+        let before = checking.then(|| cpu_round_evals(poly));
+        let gpu: Option<(K, K, K)> = if is::<K, EF>() {
             if is::<F, BaseField>() {
                 // SAFETY: the type ids match, so these are the same types.
                 let p: &LogupRoundPolynomial<BaseField, EF, Self> =
                     unsafe { &*std::ptr::from_ref(poly).cast() };
-                return unsafe { std::mem::transmute_copy(&round_evals_base(p)) };
-            }
-            if is::<F, EF>() {
+                Some(unsafe { std::mem::transmute_copy(&round_evals_base(p)) })
+            } else if is::<F, EF>() {
                 // SAFETY: as above.
                 let p: &LogupRoundPolynomial<EF, EF, Self> =
                     unsafe { &*std::ptr::from_ref(poly).cast() };
-                return unsafe { std::mem::transmute_copy(&round_evals_ext(p)) };
+                Some(unsafe { std::mem::transmute_copy(&round_evals_ext(p)) })
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        let Some(gpu) = gpu else {
+            return before.unwrap_or_else(|| cpu_round_evals(poly));
+        };
+        if !checking {
+            return gpu;
         }
-        cpu_round_evals(poly)
+        let after = cpu_round_evals(poly);
+        assert!(
+            before.as_ref() == Some(&after),
+            "the GPU round changed what the CPU round reads\n{}",
+            layer_report(poly),
+        );
+        assert!(
+            gpu == after,
+            "logup GKR round disagrees with the CPU\n{}  gpu {:?}\n  cpu {:?}",
+            layer_report(poly),
+            gpu,
+            after,
+        );
+        after
     }
 
     fn fix_numerator(mle: &PaddedMle<F>, alpha: K) -> PaddedMle<K> {
