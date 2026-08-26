@@ -52,3 +52,24 @@ Upstream: https://github.com/succinctlabs/sp1
 There is no seam above it: `FriCpuProver::batch` is a method on a concrete type called from a concrete prover.
 
 **Changes from 6.4.0** are listed in [CHANGES.md](slop-basefold-prover/CHANGES.md).
+
+## `slop-jagged`
+
+Vendored from `slop-jagged` 6.4.0 (crates.io), which is MIT OR Apache-2.0 and carries its own licence terms.
+Upstream: https://github.com/succinctlabs/sp1
+
+**Why.** The jagged evaluation's sumcheck restacks the whole polynomial before every round, and upstream did it in three passes over the data where one will do — the last of those transposes a single-row matrix, so it permutes nothing and copies everything.
+The round reduction below it is a method on a concrete CPU prover with nothing above it to substitute.
+
+**Changes from 6.4.0** are listed in [CHANGES.md](slop-jagged/CHANGES.md).
+
+## `p3-uni-stark`
+
+Vendored from `p3-uni-stark` 0.4.3-succinct (crates.io), which is MIT OR Apache-2.0.
+Upstream: https://github.com/Plonky3/Plonky3
+
+**Why.** One line. `SymbolicAirBuilder` labels an AIR's preprocessed variables `Entry::Main`, so preprocessed column *j* and main column *j* come back as the same variable.
+Upstream never has to tell them apart — it asks these constraints only how many there are and what degree they reach — but this project compiles them into a kernel, where a variable that says `Main` becomes a load from the main trace.
+Every recursion AIR reads its opcode flags from the preprocessed trace, so every recursion kernel computed the wrong round polynomial.
+
+**Changes from 0.4.3-succinct** are listed in [CHANGES.md](p3-uni-stark/CHANGES.md).

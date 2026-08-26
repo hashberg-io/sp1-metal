@@ -34,3 +34,4 @@ lto = "thin"
 # unify.
 [patch.crates-io]
 sp1-hypercube = { path = "../vendor/sp1-hypercube" }
+p3-uni-stark = { path = "../vendor/p3-uni-stark" }

@@ -39,6 +39,7 @@ slop-dft = "=6.4.0"
 slop-multilinear = "=6.4.0"
 slop-jagged = "=6.4.0"
 slop-basefold-prover = "=6.4.0"
+p3-uni-stark = "=0.4.3-succinct"
 
 [patch.crates-io]
 sp1-hypercube        = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
@@ -46,6 +47,7 @@ slop-jagged          = { git = "https://github.com/hashberg-io/sp1-metal", tag =
 slop-multilinear     = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
 slop-basefold-prover = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
 slop-dft             = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
+p3-uni-stark         = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
 ```
 
 Then build with the feature on:
@@ -59,7 +61,7 @@ Every runtime switch defaults to on, so there is no environment variable to set 
 
 Two details worth knowing rather than discovering:
 
-- All five crates must be patched even though your code names one or none of them, because they must resolve to the same copies the SDK uses.
+- All six crates must be patched even though your code names one or none of them, because they must resolve to the same copies the SDK uses.
 - Cargo finds each crate by searching the repository, so no subdirectory needs naming. `sp1-metal-core` and `sp1-metal-probes` come along as path dependencies inside the checkout.
 
 ## Telling whether it worked
@@ -146,7 +148,7 @@ Compressed proofs did not verify until 2026-08-26, because the GPU zerocheck com
 **This tracks SP1 6.4.0 exactly.** Every crate is pinned with `=6.4.0` and a consumer on any other 6.x will not resolve.
 
 That is stated rather than solved.
-The five crates here are the published releases plus a recorded set of changes, so moving to a new SP1 version means unpacking the new releases and reapplying those changes; each crate's `CHANGES.md` lists every file that differs and why, which is what makes that a morning's work rather than an archaeology exercise.
+The six crates here are the published releases plus a recorded set of changes, so moving to a new SP1 version means unpacking the new releases and reapplying those changes; each crate's `CHANGES.md` lists every file that differs and why, which is what makes that a morning's work rather than an archaeology exercise.
 
 These crates are not on crates.io and will not be.
 `[patch.crates-io]` matches by package name: renaming them breaks the patch, and the real names belong to upstream.

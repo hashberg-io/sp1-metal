@@ -5,6 +5,10 @@ This product includes software developed by Succinct Labs as part of SP1
 (https://github.com/succinctlabs/sp1), licensed under either of Apache License,
 Version 2.0 or the MIT license, at the recipient's option.
 
+It also includes software developed by the Plonky3 authors
+(https://github.com/Plonky3/Plonky3), licensed under either of Apache License,
+Version 2.0 or the MIT license, at the recipient's option.
+
 The following crates under `crates/vendor/` are redistributed here in modified
 form. Each is the corresponding crates.io release of that version, unpacked
 verbatim, with the modifications recorded in the `CHANGES.md` file beside it.
@@ -16,6 +20,7 @@ unmodified.
   crates/vendor/slop-jagged            from slop-jagged 6.4.0
   crates/vendor/slop-multilinear       from slop-multilinear 6.4.0
   crates/vendor/slop-basefold-prover   from slop-basefold-prover 6.4.0
+  crates/vendor/p3-uni-stark           from p3-uni-stark 0.4.3-succinct
 
 None of these releases ships a LICENSE or NOTICE file inside its crates.io
 package; each declares `license = "MIT OR Apache-2.0"` in its own manifest, and

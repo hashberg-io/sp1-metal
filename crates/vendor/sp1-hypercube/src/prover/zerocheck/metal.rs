@@ -248,7 +248,12 @@ impl Codegen {
         } else {
             let pt = self.point;
             let suffix = if self.ext_columns { "" } else { "_base" };
-            format!("zc_at_{pt}{suffix}({table}, {table}_b0, {table}_b1, {idx}, has1)")
+            // Each trace has its own row count, and the CPU decides whether a
+            // row pair has a second row per trace as well, so the guard is not
+            // shared: a preprocessed trace one row shorter than the main one
+            // would otherwise interpolate against a row that is not there.
+            let has1 = if table == "prep" { "has1p" } else { "has1" };
+            format!("zc_at_{pt}{suffix}({table}, {table}_b0, {table}_b1, {idx}, {has1})")
         };
         self.bind(ty, &expr)
     }
@@ -548,6 +553,7 @@ struct ZcParams {{
     uint rows;
     uint main_w;
     uint prep_w;
+    uint prep_rows;
 }};
 
 kernel void zc_round(device const {col}* main [[buffer(0)]],
@@ -568,6 +574,7 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
     if (gid < p.pairs) {{
         uint q = gid;
         bool has1 = (2u * q + 1u) < p.rows;
+        bool has1p = (2u * q + 1u) < p.prep_rows;
 {bases}
 {bodies}
         // The interaction adjustment: every column, main then preprocessed,
@@ -583,7 +590,7 @@ kernel void zc_round(device const {col}* main [[buffer(0)]],
             uint pi = i * {stride};
             uint4 w = gp[p.main_w + i];
             g0 = ext_add(g0, {gkr_mul}(w, prep[prep_b0 + pi]));
-            g2 = ext_add(g2, {gkr_mul}(w, {at2}(prep, prep_b0, prep_b1, pi, has1)));
+            g2 = ext_add(g2, {gkr_mul}(w, {at2}(prep, prep_b0, prep_b1, pi, has1p)));
         }}
         uint4 g4 = ext_sub(ext_add(g2, g2), g0);
         uint4 e = eq[q];
@@ -861,6 +868,7 @@ struct ZcParams {
     rows: u32,
     main_w: u32,
     prep_w: u32,
+    prep_rows: u32,
 }
 
 /// The three points of the round polynomial, summed over row pairs.
@@ -903,6 +911,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
     }
     let prep_inner = preprocessed.and_then(|p| p.inner().as_ref());
     let prep_w = preprocessed.map_or(0, PaddedMle::num_polynomials);
+    let prep_rows = prep_inner.map_or(0, |p| p.guts().sizes()[0]);
     if prep_w > 0 && prep_inner.is_none() {
         return reject(3);
     }
@@ -952,6 +961,7 @@ pub(crate) fn sum_as_poly<Fx: PrimeField32, C: Field>(
         rows: rows as u32,
         main_w: main_w as u32,
         prep_w: prep_w as u32,
+        prep_rows: prep_rows as u32,
     };
     // The column-major copies the round will read, and the pipeline that makes
     // them. Anything missing leaves this `None`, which puts the round back on

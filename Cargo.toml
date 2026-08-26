@@ -13,6 +13,7 @@ exclude = [
     "crates/vendor/slop-jagged",
     "crates/vendor/slop-multilinear",
     "crates/vendor/slop-basefold-prover",
+    "crates/vendor/p3-uni-stark",
 ]
 
 [workspace.package]

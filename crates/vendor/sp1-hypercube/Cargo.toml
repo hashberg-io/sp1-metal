@@ -224,3 +224,4 @@ slop-jagged = { path = "../slop-jagged" }
 slop-multilinear = { path = "../slop-multilinear" }
 slop-basefold-prover = { path = "../slop-basefold-prover" }
 slop-dft = { path = "../slop-dft" }
+p3-uni-stark = { path = "../p3-uni-stark" }

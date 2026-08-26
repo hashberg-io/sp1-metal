@@ -39,7 +39,7 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`knowledge/measurements.md`](knowledge/measurements.md) — what the machine can do: the two ratios that bracket the project, per-kernel results, the phase profile of a real proof.
 - [`knowledge/probes.md`](knowledge/probes.md) — the probe suite: what each probe measures and its limits.
 - [`knowledge/desiderata.md`](knowledge/desiderata.md) — the requirements this work was to meet.
-- [`crates/vendor/`](crates/vendor) — the five forked SP1 crates. Each is an unmodified release plus a `CHANGES.md` listing every file that differs and why.
+- [`crates/vendor/`](crates/vendor) — the five forked SP1 crates and one forked Plonky3 crate. Each is an unmodified release plus a `CHANGES.md` listing every file that differs and why.
 - [`crates/sp1-metal-core`](crates/sp1-metal-core) — the shared machinery every dispatching crate needs. A deliberate leaf: it depends on `metal` and nothing else.
 - [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — 14 probes over 27 kernels, packed-CPU baselines and parity tests.
 - [`crates/sp1-profile-host`](crates/sp1-profile-host) — a minimal sp1-sdk host that replays a proof under span timing, and the worked example of how to depend on this.
@@ -67,5 +67,5 @@ The five phases with a `=check` mode run both the GPU and the CPU path on every 
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option, matching the terms SP1 itself is offered under.
 
-`crates/vendor/` redistributes five SP1 crates in modified form; see [NOTICE](NOTICE) for the attribution and each crate's `CHANGES.md` for what was changed.
+`crates/vendor/` redistributes five SP1 crates and one Plonky3 crate in modified form; see [NOTICE](NOTICE) for the attribution and each crate's `CHANGES.md` for what was changed.
 Unless you state otherwise, any contribution you intentionally submit for inclusion shall be dual licensed as above, without additional terms or conditions.
