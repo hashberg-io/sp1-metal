@@ -1,0 +1,28 @@
+# Compressed-mode proving, measured 2026-08-26 on an M4 Max, machine idle.
+#
+# The first compressed measurements this project has taken. Before the
+# zerocheck fix, compressed proofs did not complete: 0 of 10 attempts.
+# Three runs an arm, both arms through one binary, 4 MiB shards.
+#
+# This is the quantity D7's bar is written against -- execute to compressed
+# proof -- and at ~3x it does not clear the 5x bar. Core proving on the same
+# machine is 5.57x, so recursion roughly halves the backend's advantage.
+guest	arm	repeat	wall_s
+fib	cpu	1	27.9931695
+fib	cpu	2	27.882739083
+fib	cpu	3	28.21637825
+fib	gpu	1	9.138134209
+fib	gpu	2	9.188494084
+fib	gpu	3	9.22482725
+sha256	cpu	1	28.406899417
+sha256	cpu	2	28.774549125
+sha256	cpu	3	29.23939175
+sha256	gpu	1	15.286569834
+sha256	gpu	2	10.097640125
+sha256	gpu	3	10.064277875
+secp256k1	cpu	1	27.817008375
+secp256k1	cpu	2	27.709391625
+secp256k1	cpu	3	25.819322083
+secp256k1	gpu	1	7.370717959
+secp256k1	gpu	2	7.455629292
+secp256k1	gpu	3	7.461256167
