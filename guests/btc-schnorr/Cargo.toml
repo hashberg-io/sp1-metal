@@ -1,0 +1,10 @@
+[package]
+name = "bench-btc-schnorr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = "=6.4.0"
+sp1-lib = "=6.4.0"
+
+[workspace]
