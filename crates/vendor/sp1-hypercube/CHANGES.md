@@ -94,8 +94,10 @@ Each phase below also has a runtime switch, and most accept `=check` to run both
   The plan for this phase assumed the generator could not live here, because enumerating chips needs `sp1-core-machine` and that depends on this crate; it does not have to enumerate anything, since the prover is handed the AIR and this crate already asks AIRs for their symbolic constraints elsewhere.
   It also assumed compilation would have to happen ahead of time: true of the elliptic-curve precompiles, which run to 178,000 constraint nodes, and false of everything else — the sixty-two core chips compile in 15.5 seconds between them, once per process.
   Emits `zc_round` per chip, plus `zc_transpose_base` and `zc_transpose_ext`.
-  A chip's kernel is compiled on a worker thread under `SP1_METAL_COMPILE_BUDGET` seconds and declined if it is not ready, with the verdict cached under `~/Library/Caches/sp1-metal`; node count does not predict compile cost, so the node bound is now only a guard against generating megabytes of source.
-  Switches: `SP1_METAL_ZEROCHECK`, `SP1_METAL_COMPILE_BUDGET`, `SP1_METAL_ZC_LAYOUT`, `SP1_METAL_ZC_ILP`, `SP1_METAL_ZC_DUMP`, `SP1_METAL_ZEROCHECK_FOLD`, `SP1_METAL_ZEROCHECK_MAX_NODES`.
+  A chip's kernel is compiled on a worker thread; a round waits `SP1_METAL_COMPILE_BUDGET` seconds for it and takes the CPU if it is not ready, and the kernel is installed whenever it arrives, so nothing is ever refused for having been slow once.
+  Node count does not predict compile cost — two chips take about ten minutes while a larger one compiles instantly — so the node bound is only a guard against generating megabytes of source.
+  Each generated kernel is checked against the CPU over a prefix of its first round before the chip is trusted, and declined for the life of the process if it disagrees.
+  Switches: `SP1_METAL_ZEROCHECK`, `SP1_METAL_COMPILE_BUDGET`, `SP1_METAL_COMPILE_LOG`, `SP1_METAL_COMPILE_OPT`, `SP1_METAL_ZC_LAYOUT`, `SP1_METAL_ZC_ILP`, `SP1_METAL_ZC_DUMP`, `SP1_METAL_ZEROCHECK_FOLD`, `SP1_METAL_ZEROCHECK_MAX_NODES`.
 
 - **`src/prover/metal_tcs.rs`.**
   `MetalMerkleProver`: the tensor commitment with its Merkle tree on the GPU.
