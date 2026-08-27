@@ -1,5 +1,5 @@
 [package]
-name = "bench-eth-groth16"
+name = "bench-eth-bls-aggregate"
 version = "0.1.0"
 edition = "2021"
 

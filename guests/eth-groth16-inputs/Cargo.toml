@@ -1,5 +1,5 @@
 [package]
-name = "bench-eth-bls"
+name = "bench-eth-groth16-inputs"
 version = "0.1.0"
 edition = "2021"
 

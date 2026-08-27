@@ -1,4 +1,8 @@
 #![no_main]
+//! **Named for what it measures, not for signature verification.** A results
+//! table shows a guest's name and not its documentation, and `eth-bls` beside a
+//! number would be read as the cost of verifying a committee's signature.
+//!
 //! Aggregating BLS12-381 public keys over a participation bitfield — the part
 //! of Ethereum sync-committee verification that grows with the committee, and
 //! the reason a light-client proof costs what it does.

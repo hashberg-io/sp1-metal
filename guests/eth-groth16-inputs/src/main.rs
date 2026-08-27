@@ -1,4 +1,8 @@
 #![no_main]
+//! **Named for what it measures, not for Groth16.** A results table shows a
+//! guest's name and not its documentation, and `eth-groth16` beside a number
+//! would be read as the cost of verifying a proof, which this is not.
+//!
 //! The public-input half of Groth16 verification on BN254 — the work a
 //! verifier does that grows with the statement, and the reason a rollup with
 //! many public inputs costs more to verify than one with few.
