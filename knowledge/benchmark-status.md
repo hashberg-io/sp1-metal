@@ -6,9 +6,10 @@
 
 | | state |
 |---|---|
-| Guests | **Done.** Fourteen in `guests/`, sources and ELFs committed. |
+| Guests | **Done.** Twenty-two in `guests/`, sources and ELFs committed: fourteen microbenchmarks and composites, and eight whole Bitcoin and Ethereum statements added 2026-08-27. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
 | Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
+| Application tier | **Run 2026-08-27.** `results/bench-apps.jsonl`, the eight Tier D guests at three sizes. |
 | Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.

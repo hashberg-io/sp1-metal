@@ -51,7 +51,7 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`crates/sp1-metal-core`](crates/sp1-metal-core) — the shared machinery every dispatching crate needs. A deliberate leaf: it depends on `metal` and nothing else.
 - [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — 14 probes over 27 kernels, packed-CPU baselines and parity tests.
 - [`crates/sp1-profile-host`](crates/sp1-profile-host) — a minimal sp1-sdk host that replays a proof under span timing, and the worked example of how to depend on this.
-- [`guests/`](guests) — the three guest programs every measurement is taken against, sources and built ELFs.
+- [`guests/`](guests) — the twenty-two guest programs every measurement is taken against, sources and built ELFs. Fourteen are microbenchmarks and composites; eight are whole Bitcoin and Ethereum statements.
 - [`results/`](results) — the measurements the documents cite.
 - [`tools/`](tools) — the quickstart, the acceptance ladder, the span profiler and the phase model.
 
