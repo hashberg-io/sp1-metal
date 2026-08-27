@@ -21,8 +21,10 @@ Add three blocks to your host program's manifest — the one at your workspace r
 ```toml
 [features]
 # Cargo unifies features across the graph, so naming these here reaches
-# sp1-sdk's copies of the same crates. slop-jagged is not listed because
-# sp1-hypercube/metal turns it on.
+# sp1-sdk's copies of the same crates. Four features against six patched
+# crates, because slop-jagged is turned on by sp1-hypercube/metal, and
+# p3-uni-stark carries a one-line fix that is not gated at all, so it has
+# no metal feature to name.
 metal = [
     "sp1-hypercube/metal",
     "slop-dft/metal",
@@ -61,7 +63,7 @@ Every runtime switch defaults to on, so there is no environment variable to set 
 
 Two details worth knowing rather than discovering:
 
-- All six crates must be patched even though your code names one or none of them, because they must resolve to the same copies the SDK uses.
+- All six crates must be patched even though your code names one or none of them, because they must resolve to the same copies the SDK uses. That includes `p3-uni-stark`, which has no GPU code in it and no `metal` feature. Its one line labels preprocessed columns as preprocessed rather than as main, which is harmless upstream — nothing there asks a variable which trace it came from — but not to something that compiles those constraints into a kernel. Without it, four recursion AIRs generate kernels that read the main trace where they meant the preprocessed one, and compressed proofs do not verify.
 - Cargo finds each crate by searching the repository, so no subdirectory needs naming. `sp1-metal-core` and `sp1-metal-probes` come along as path dependencies inside the checkout.
 
 ## Telling whether it worked

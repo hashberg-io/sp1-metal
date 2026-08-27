@@ -36,12 +36,16 @@ fi
 # A timed pair on a loaded machine measures the load. This project has one
 # recorded measurement that was corrupted exactly that way, so the check is
 # here rather than in a comment.
-cores=$(sysctl -n hw.ncpu)
-load=$(uptime | sed 's/.*load averages*: //' | awk '{print $1}' | tr -d ',')
-busy=$(python3 -c "print(1 if $load > $cores * 0.25 else 0)")
+# Gate on instantaneous idle and not on the load average: on this hardware the
+# load average is a phantom that reads 7 while top reports 96% idle with
+# nothing running, so gating on it refuses runs that were perfectly fine.
+# `top -l 2` discards its first sample, which is a since-boot average.
+idle=$(top -l 2 -n 0 -s 1 2>/dev/null | grep -oE '[0-9.]+% idle' | tail -1 | grep -oE '^[0-9.]+')
+idle=${idle:-100}
+busy=$(python3 -c "print(1 if $idle < 70 else 0)")
 if [ "$busy" = 1 ] && [ "$FORCE" = 0 ]; then
   cat >&2 <<MSG
-The machine is busy: load average $load across $cores cores.
+The machine is busy: only $idle% idle.
 
 A pair timed now would measure whatever else is running as much as it measures
 the prover. Wait until it is idle, or pass --force if you know better.
@@ -77,23 +81,29 @@ if [ -z "$cpu" ] || [ -z "$gpu" ]; then
   exit 1
 fi
 
-python3 - "$cpu" "$gpu" <<'PY'
+python3 - "$cpu" "$gpu" "$N" <<'PY'
 import sys
-cpu, gpu = float(sys.argv[1]), float(sys.argv[2])
+cpu, gpu, n = float(sys.argv[1]), float(sys.argv[2]), int(sys.argv[3])
 print()
 print(f"  CPU      {cpu:8.2f} s")
 print(f"  Metal    {gpu:8.2f} s")
 print(f"  speedup  {cpu/gpu:8.2f}x")
 print()
-lo, hi = 3.71, 5.63
+# fib's own measured band on an M4 Max, from results/bench-standard.md and
+# results/bench-full.md: 3.70x at n=250,000, 5.69-5.72x at n=2,000,000, and
+# 5.68-5.84x at n=4,000,000. The suite as a whole spans a good deal wider than
+# this, but this script proves one guest, so this is the band that applies.
+lo, hi = 3.60, 5.95
 r = cpu / gpu
 if r < lo:
-    print(f"  Below the 3.71x-5.63x envelope recorded on an M4 Max. Either this is a")
-    print(f"  smaller GPU, or something else was running. results/scaling-quiet.tsv has")
-    print(f"  the reference ladder.")
+    print(f"  Below the {lo}x-{hi}x band fib measures on an M4 Max. Either this is a")
+    print(f"  smaller GPU, or something else was running. results/bench-standard.md")
+    print(f"  has the reference table.")
 elif r > hi:
-    print(f"  Above the recorded envelope, which is good news and worth checking twice.")
+    print(f"  Above the recorded band, which is good news and worth checking twice.")
 else:
-    print(f"  Inside the {lo}x-{hi}x envelope recorded on an M4 Max.")
+    print(f"  Inside the {lo}x-{hi}x band fib measures on an M4 Max.")
+if n == 2000000:
+    print("  At this size the recorded figure is about 5.7x.")
 PY
 echo "Both proofs were verified, not merely produced."

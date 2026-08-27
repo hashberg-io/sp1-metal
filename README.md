@@ -54,9 +54,12 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`crates/sp1-metal-core`](crates/sp1-metal-core) — the shared machinery every dispatching crate needs. A deliberate leaf: it depends on `metal` and nothing else.
 - [`crates/sp1-metal-probes`](crates/sp1-metal-probes) — 13 probes over 27 kernels, packed-CPU baselines and parity tests.
 - [`crates/sp1-profile-host`](crates/sp1-profile-host) — a minimal sp1-sdk host that replays a proof under span timing, and the worked example of how to depend on this.
+- [`crates/sp1-metal-prover`](crates/sp1-metal-prover) — the harness that tests and measures the fork's GKR round from outside it. The round itself lives in `sp1-hypercube`, because that is the only place `DefaultRoundOps` can point at it.
+- [`crates/sp1-metal-transpile`](crates/sp1-metal-transpile) — the spike that turned a real chip's symbolic AIR constraints into Metal, which is the generator the zerocheck kernel now uses.
+- [`crates/sp1-metal-kernelbench`](crates/sp1-metal-kernelbench) — scores the shipped GKR round kernel against the ceilings the probes measure, timed from the command buffer's own `GPUStartTime` so the number contains execution and nothing else.
 - [`guests/`](guests) — the twenty-two guest programs every measurement is taken against, sources and built ELFs. Fourteen are microbenchmarks and composites; eight are whole Bitcoin and Ethereum statements.
 - [`results/`](results) — the measurements the documents cite.
-- [`tools/`](tools) — the quickstart, the acceptance ladder, the span profiler and the phase model.
+- [`tools/`](tools) — the quickstart, the benchmark suite and its reporter, the acceptance ladder, the span and sample profilers, and the phase model.
 
 ## Tests
 

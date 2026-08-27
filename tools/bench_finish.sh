@@ -16,12 +16,13 @@ done
 
 echo "== suite =="
 if pgrep -f bench_suite.py > /dev/null; then
-  echo "   still running: $(wc -l < results/bench-full.jsonl 2>/dev/null) rows so far"
+  running=$(pgrep -fl bench_suite.py | grep -oE '\-\-tier [a-z]+' | awk '{print $2}' | head -1)
+  echo "   still running (${running:-unknown} tier): $(cat results/bench-${running:-full}.jsonl 2>/dev/null | wc -l | tr -d ' ') rows so far"
 else
   echo "   finished"
 fi
 
-for tier in standard full; do
+for tier in standard full apps; do
   f="results/bench-$tier.jsonl"
   [ -f "$f" ] || continue
   echo "== $tier =="
