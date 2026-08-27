@@ -45,7 +45,7 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - **[USING.md](USING.md)** — how to use this from another project, and every runtime switch.
 - [`knowledge/`](knowledge) — the notes index, which says which documents are current and which are executed plans.
 - [`knowledge/verdict.md`](knowledge/verdict.md) — what was asked, what was measured, and what is still not met. **Start here.**
-- [`knowledge/backend.md`](knowledge/backend.md) — how the backend works, phase by phase.
+- [`knowledge/backend.md`](knowledge/backend.md) — how the backend works and how it got there, section by section, in the order it happened.
 - [`knowledge/next-levers.md`](knowledge/next-levers.md) — five rounds of optimisation from 3.74x to 5.56x, and eight measured negative results.
 - [`knowledge/measurements.md`](knowledge/measurements.md) — what the machine can do: the two ratios that bracket the project, per-kernel results, the phase profile of a real proof.
 - [`knowledge/probes.md`](knowledge/probes.md) — the probe suite: what each probe measures and its limits.

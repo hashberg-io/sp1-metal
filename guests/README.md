@@ -1,7 +1,7 @@
 # Benchmark guests
 
 The guest programs every measurement in this repository is taken against.
-Each reads its size from stdin as a `u32`, so a workload is made larger without changing its shape, and eighteen of the twenty-two depend on nothing beyond `sp1-zkvm`.
+Each reads its size from stdin as a `u32`, so a workload is made larger without changing its shape, and twenty of the twenty-two depend on no crate outside SP1's own — sixteen on `sp1-zkvm` alone and four on `sp1-lib` beside it.
 
 Four tiers. The first three span what the Metal backend is sensitive to rather than what zkVMs are usually benchmarked on — see [benchmark-plan.md](../knowledge/benchmark-plan.md). The fourth measures whole protocol operations that the Bitcoin and Ethereum communities actually pay for.
 

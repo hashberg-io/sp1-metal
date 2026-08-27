@@ -10,7 +10,7 @@ They are working documents kept as a record, not a tidied-up narrative, and seve
 | document | what it is |
 |---|---|
 | [verdict.md](verdict.md) | The answer: what was asked, what was measured, what is still not met. |
-| [backend.md](backend.md) | How the backend works and how it got there, in twenty-one sections, in the order they happened. |
+| [backend.md](backend.md) | How the backend works and how it got there, in seventeen sections numbered 5 to 21 — it continues the plan's numbering, and the first four steps are in the spikes. |
 | [next-levers.md](next-levers.md) | Five rounds of optimisation from 3.74x to 5.56x, every ranked list, and every negative result. |
 | [measurements.md](measurements.md) | What the machine can do: the two silicon ratios, per-kernel throughput, the phase profile of a real proof. Measured 2026-08-21. |
 | [probes.md](probes.md) | The probe suite — what each of the thirteen probes measures, how to run it, and its limits. |
