@@ -9,6 +9,8 @@
 > | 3 | secp256k1 falls off a cliff | **Not a performance defect at all** — a wrong proof, from lending overlapping pages |
 > | 4 | Eight mistranspiled chip variants | Fixed — one mislabelled line in `p3-uni-stark` |
 >
+> Three more were found while closing them, all in this project's own code rather than the backend's arithmetic: kernel validation that compared a whole round instead of a prefix and cost the large workloads up to half their advantage; a compile deadline that condemned chips on a *cold* measurement and refused them for ever; and a histogram in the reporting code that could loop a billion times over one bucket, so a proof would verify and the process would never exit. Each was found by re-running a measurement, not by reading code.
+>
 > Two things the plan got wrong are worth carrying forward. It called defect 3 a performance cliff on the strength of a timeout, when the timeout was SP1 retrying a proof that would not verify — the same disguise the zerocheck defect wore, and the second time this project has been fooled by it. And it assumed defect 4 would need a long bisection of the constraint DAG; the answer was upstream of the transpiler entirely, in what the symbolic builder calls a preprocessed column.
 
 Four defects remain in the Metal backend. None blocks a release — each is documented in [USING.md](../USING.md)'s known-issues section with a workaround — but each costs something real. This is how to close them, in the order that makes the later ones cheaper.
