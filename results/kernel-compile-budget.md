@@ -36,14 +36,27 @@ That run blocks until every kernel it asks for is built — 571.48 s for keccak 
 | | keccak, n=2000 | divrem, n=1,199,680 |
 |---|---:|---:|
 | shipped budget, shader cache cold | 6.30 s | 18.70 s, 19.25 s |
-| shipped budget, shader cache warm | **5.55 s**, 5.59 s | **14.37 s**, 14.72 s |
+| shipped budget, shader cache warm | **5.55 s**, 5.59 s | **14.27 s** |
 | the warming run itself | 571.48 s | already warm when asked |
 
 Both then match their best figures from before any of this work — divrem was 14.13 s on 2026-08-24, when that cache had been warm for days.
 
 Whether it is worth 571 seconds of somebody's time is theirs to decide, which is why it is a switch and not a default.
 
-**And it is a caution about every number in `results/bench-standard.md`.** Those two guests are measured against whatever the machine's shader cache happened to hold at the time: the tier of 2026-08-27 records divrem/standard at 3.75x because `DivRem`'s kernels were cold for it, and the same binary on the same machine gives 5.13x once they are warm. No other guest has a chip slow enough for this to matter.
+## And it is a caution about two rows of the standard tier
+
+Those two guests are measured against whatever the machine's shader cache happened to hold. Re-measured warm, same binary, same machine, two repeats an arm:
+
+| guest | size | cpu_med | gpu_med | warm | tier (cold) |
+|---|---|---:|---:|---:|---:|
+| divrem | small | 16.39 | 5.12 | **3.20x** | 2.47x |
+| divrem | standard | 72.78 | 14.27 | **5.10x** | 3.75x |
+| divrem | large | 142.35 | 28.23 | **5.04x** | 5.01x |
+| keccak | small | 9.05 | 2.87 | **3.15x** | 2.41x |
+| keccak | standard | 13.77 | 5.64 | **2.44x** | 2.07x |
+| keccak | large | 19.91 | 9.29 | **2.14x** | 1.94x |
+
+So divrem/standard is 5.10x rather than 3.75x, and the tier's worst point, keccak/large, is 2.14x rather than 1.94x. **No other guest has a chip slow enough for this to matter** — every other kernel in the machine compiles in hundredths of a second, warm or cold.
 
 ## Why the default does not wait
 

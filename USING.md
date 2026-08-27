@@ -125,7 +125,17 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ## Known issues
 
-None outstanding. What follows is what was wrong and how you would recognise it in an older copy.
+One, and it is not on the path a proof takes.
+
+### The batched layer path fails intermittently when every chip is forced through it
+
+Setting `SP1_METAL_MIN_ENTRIES` very high **while** `SP1_METAL_BATCH` is on sends every chip, however wide, through the batched small-chip dispatch — a combination the defaults never produce, because a chip over 16 KB takes the per-chip path. In that regime roughly two secp256k1 proofs in three do not finish.
+
+It does not reproduce on the default path: 204 of 204 proofs verified in the last full benchmark run, and a size ladder over secp256k1 verifies at every point. It is not the lending defect below — it fails and succeeds under every upload policy — and being intermittent under otherwise deterministic settings, it looks like a race. Undiagnosed; `results/batched-layer-intermittent.md` has the reproduction and what has been ruled out.
+
+**Workaround:** do not raise `SP1_METAL_MIN_ENTRIES` above a layer's chip sizes with batching on. Raising it to disable GPU GKR entirely also wants `SP1_METAL_BATCH=0`.
+
+### Fixed, but worth knowing
 
 ### Fixed, but worth knowing
 
@@ -135,7 +145,7 @@ A round now waits `SP1_METAL_COMPILE_BUDGET` seconds for its chip's kernel and t
 
 The one cost is that a program whose chip takes longer to compile than the proof takes to run never sees that kernel, because the process exits first — `divrem` is 18.7 s that way against 14.4 s with it.
 
-macOS caches a compiled shader against its source and its compile options, and that cache outlives the process, so the cost is payable once. `SP1_METAL_COMPILE_BUDGET=1800` on a single run blocks until every kernel is built — 571 s for keccak — and every run after it gets those kernels at the default budget. Measured: keccak 6.30 s → 5.55 s, divrem 18.7 s → 14.4 s, both back to what they were before any of this. `SP1_METAL_COMPILE_LOG=1` prints what each kernel cost and how much of it was queueing.
+macOS caches a compiled shader against its source and its compile options, and that cache outlives the process, so the cost is payable once. `SP1_METAL_COMPILE_BUDGET=1800` on a single run blocks until every kernel is built — 571 s for keccak — and every run after it gets those kernels at the default budget. Measured: keccak 6.30 s → 5.55 s, divrem 18.7 s → 14.3 s, both back to what they were before any of this. Warmed, divrem/standard is 5.10x rather than the 3.75x the benchmark table records, and keccak/large 2.14x rather than 1.94x; `results/kernel-compile-budget.md` has the pairs. `SP1_METAL_COMPILE_LOG=1` prints what each kernel cost and how much of it was queueing.
 
 `SP1_METAL_COMPILE_OPT=size` asks for a size-optimised compile. It is kept as a measured negative: the ten-minute chip takes 552 s that way against 566 s at the default, so this is not the optimiser being aggressive.
 
