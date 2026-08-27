@@ -169,7 +169,7 @@ Its manifest is the shortest complete answer to "what do I put where".
 The GPU path is not trusted on the strength of its being fast.
 
 - Proofs are verified, not merely produced; the acceptance harness reports "proved and verified".
-- Five phases have a `=check` mode that compares against upstream's own code on every call.
+- Seven switches have a `=check` mode that compares against upstream's own code on every call.
 - The forks' own test suites pass unmodified, including the four GKR tests that exist to show the CPU path is bit-identical after the seam was cut.
 
 Run the fast parity suite yourself from a clone:
