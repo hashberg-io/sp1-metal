@@ -1,28 +1,38 @@
-# Compressed-mode proving, measured 2026-08-26 on an M4 Max, machine idle.
-#
-# The first compressed measurements this project has taken. Before the
-# zerocheck fix, compressed proofs did not complete: 0 of 10 attempts.
-# Three runs an arm, both arms through one binary, 4 MiB shards.
+# Compressed-mode proving, re-measured 2026-08-27 on an M4 Max, machine idle,
+# against the backend with every defect of 2026-08-26/27 fixed.
 #
 # This is the quantity D7's bar is written against -- execute to compressed
-# proof -- and at ~3x it does not clear the 5x bar. Core proving on the same
-# machine is 5.57x, so recursion roughly halves the backend's advantage.
+# proof. At ~3.1x it does not clear the 5x bar: recursion roughly halves the
+# advantage core proving has, which is 6.0x at its best.
+#
+# Three runs an arm, both arms through one binary, 4 MiB shards. Every run
+# verified. Zero chips disagreed with the CPU, and the compile log shows all
+# sixty-one kernels building -- including all four chips the transpiler used to
+# get wrong: BaseAlu, ExtAlu, PrefixSumChecks and PublicValues, both rounds.
+#
+# Supersedes the 2026-08-26 measurement (fib 3.05x, sha256 2.85x, secp 3.72x),
+# which was taken before the transpiler fix, when those four chips declined
+# themselves and ran on the CPU.
 guest	arm	repeat	wall_s
-fib	cpu	1	27.9931695
-fib	cpu	2	27.882739083
-fib	cpu	3	28.21637825
-fib	gpu	1	9.138134209
-fib	gpu	2	9.188494084
-fib	gpu	3	9.22482725
-sha256	cpu	1	28.406899417
-sha256	cpu	2	28.774549125
-sha256	cpu	3	29.23939175
-sha256	gpu	1	15.286569834
-sha256	gpu	2	10.097640125
-sha256	gpu	3	10.064277875
-secp256k1	cpu	1	27.817008375
-secp256k1	cpu	2	27.709391625
-secp256k1	cpu	3	25.819322083
-secp256k1	gpu	1	7.370717959
-secp256k1	gpu	2	7.455629292
-secp256k1	gpu	3	7.461256167
+fib	cpu	1	27.841019791
+fib	cpu	2	28.070174833
+fib	cpu	3	28.008242958
+fib	gpu	1	8.956345833
+fib	gpu	2	9.088606167
+fib	gpu	3	9.234431833
+sha256	cpu	1	28.60903475
+sha256	cpu	2	28.523830667
+sha256	cpu	3	28.573644375
+sha256	gpu	1	9.354021417
+sha256	gpu	2	9.472782042
+sha256	gpu	3	9.404507917
+secp256k1	cpu	1	25.637721541
+secp256k1	cpu	2	25.559745125
+secp256k1	cpu	3	25.481521458
+secp256k1	gpu	1	8.737935334
+secp256k1	gpu	2	8.823033125
+secp256k1	gpu	3	8.748795167
+#
+# medians: fib 28.01 / 9.09 = 3.08x
+#          sha256 28.57 / 9.40 = 3.04x
+#          secp256k1 25.56 / 8.75 = 2.92x

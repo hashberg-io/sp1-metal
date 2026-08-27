@@ -842,25 +842,36 @@ fn compile_within(
     base_muls: usize,
     nodes: usize,
 ) -> Option<(ComputePipelineState, usize, usize)> {
-    /// Compiles that have started and not finished, anywhere in the process.
-    static OUTSTANDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    /// When the compile now running started, in milliseconds since the first
+    /// one; zero when none is running.
+    static RUNNING_SINCE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     use std::sync::atomic::Ordering;
+    fn now_ms() -> u64 {
+        static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
+        // Never zero, so that zero can mean "nothing is compiling".
+        EPOCH.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
+    }
 
     let ctx = context();
-    // One at a time, and nobody waits for the one in progress. The driver
-    // serialises pipeline creation anyway, so a second compile could only
-    // queue -- and queueing is what made the first slow chip cost every chip
-    // behind it a full budget each, turning a keccak proof into two minutes.
-    // A chip that arrives while another is compiling takes the CPU for this
-    // round and asks again on the next one, of which there are many.
-    if OUTSTANDING.load(Ordering::Acquire) > 0 {
+    // Nobody queues behind a compile that has already blown its budget. The
+    // driver serialises pipeline creation, so a second compile started while a
+    // ten-minute one holds the lock does nothing but wait for it -- and
+    // charging every chip a full budget for that is what once turned a keccak
+    // proof into two minutes.
+    //
+    // But only *those* are kept out. Refusing to start while any compile at all
+    // is running starves the small ones: a compressed proof left 251 chips
+    // without a kernel, including chips of a hundred nodes that compile in
+    // hundredths of a second, because one chip of fifteen thousand was busy.
+    let running = RUNNING_SINCE_MS.load(Ordering::Acquire);
+    if running != 0 && now_ms().saturating_sub(running) > compile_budget().as_millis() as u64 {
         return None;
     }
     // Already being compiled: this round goes to the CPU rather than queueing.
     if !ctx.compiling.lock().expect("compiling poisoned").insert(key.to_string()) {
         return None;
     }
-    OUTSTANDING.fetch_add(1, Ordering::AcqRel);
+    RUNNING_SINCE_MS.store(now_ms(), Ordering::Release);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let device = ctx.device.clone();
     let src = source.to_string();
@@ -899,7 +910,7 @@ fn compile_within(
             .expect("pipelines poisoned")
             .insert(owned_key.clone(), entry.clone());
         ctx.compiling.lock().expect("compiling poisoned").remove(&owned_key);
-        OUTSTANDING.fetch_sub(1, Ordering::AcqRel);
+        RUNNING_SINCE_MS.store(0, Ordering::Release);
         let _ = done_tx.send(entry);
     });
     let budget = compile_budget();
@@ -972,11 +983,7 @@ fn pipeline_for<Fx: PrimeField32>(
         } else {
             let entry = compile_within(key, &source, base_muls, nodes);
             if entry.is_none() {
-                crate::prover::zerocheck::counters::note_no_pipeline(
-                    key,
-                    "still compiling",
-                    nodes,
-                );
+                crate::prover::zerocheck::counters::note_awaiting_kernel();
                 // Deliberately not recorded as a decision: the compiling thread
                 // installs the kernel when it has one, and until then this chip
                 // takes the CPU path it would have taken anyway.

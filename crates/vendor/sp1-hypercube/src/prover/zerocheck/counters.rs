@@ -161,6 +161,21 @@ static NO_PIPELINE: Mutex<Vec<(String, &'static str, usize)>> = Mutex::new(Vec::
 /// Records that a chip will run its rounds on the CPU, and why.
 ///
 /// Called once per chip, from behind the pipeline cache.
+/// Rounds that took the CPU because their chip's kernel had not finished
+/// compiling yet.
+///
+/// Counted apart from the refusals below, and deliberately: it is not a
+/// decision about the chip, it is a moment in the life of one. Recording it as
+/// a chip with no kernel made a compressed proof report 251 of them while the
+/// compile log showed all sixty-one kernels building in hundredths of a second
+/// and every chip on the GPU immediately after.
+pub static AWAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One round that went to the CPU while its kernel was being built.
+pub fn note_awaiting_kernel() {
+    AWAITING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn note_no_pipeline(key: &str, reason: &'static str, nodes: usize) {
     NO_PIPELINE.lock().expect("poisoned").push((key.to_string(), reason, nodes));
 }
@@ -170,9 +185,20 @@ pub fn note_no_pipeline(key: &str, reason: &'static str, nodes: usize) {
 pub fn no_pipeline_report() -> String {
     let chips = NO_PIPELINE.lock().expect("poisoned");
     if chips.is_empty() {
-        return String::new();
+        let awaiting = AWAITING.load(std::sync::atomic::Ordering::Relaxed);
+        return if awaiting > 0 {
+            format!("\n{awaiting} rounds took the CPU while a kernel was still compiling\n")
+        } else {
+            String::new()
+        };
     }
+    let awaiting = AWAITING.load(std::sync::atomic::Ordering::Relaxed);
     let mut out = format!("\n{} chips have no zerocheck kernel:\n", chips.len());
+    if awaiting > 0 {
+        out = format!(
+            "\n{awaiting} rounds took the CPU while a kernel was still compiling\n{out}"
+        );
+    }
     for (key, reason, nodes) in chips.iter() {
         out.push_str(&format!("  {key:<44} {reason} ({nodes} nodes)\n"));
     }
