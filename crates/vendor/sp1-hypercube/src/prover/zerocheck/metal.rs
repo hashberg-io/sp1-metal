@@ -791,6 +791,31 @@ fn compile_budget() -> std::time::Duration {
     })
 }
 
+/// The compile options a chip's kernel is built with.
+///
+/// `SP1_METAL_COMPILE_OPT=size` asks the Metal compiler to optimise for size
+/// rather than speed. It is here because two chips in the machine take about
+/// ten minutes to compile, which for a few thousand nodes of straight-line
+/// arithmetic looks like the optimiser going superlinear rather than the work
+/// being large -- and if it is, asking for less optimisation is a fix rather
+/// than a workaround.
+///
+/// `optimizationLevel` is macOS 13 and metal-rs 0.29 does not wrap it, so it is
+/// set by message send. Whatever it produces is still checked against the CPU
+/// before the chip is trusted, so this cannot trade correctness for time.
+fn compile_options() -> metal::CompileOptions {
+    let options = metal::CompileOptions::new();
+    if std::env::var("SP1_METAL_COMPILE_OPT").is_ok_and(|v| v == "size") {
+        // MTLLibraryOptimizationLevelSize == 1.
+        use metal::objc::{msg_send, sel, sel_impl};
+        let level: u64 = 1;
+        unsafe {
+            let _: () = msg_send![&*options, setOptimizationLevel: level];
+        }
+    }
+    options
+}
+
 /// Starts this chip's kernel compiling, and waits only as long as it is worth
 /// waiting.
 ///
@@ -841,13 +866,28 @@ fn compile_within(
     let src = source.to_string();
     let owned_key = key.to_string();
     std::thread::spawn(move || {
+        let started = std::time::Instant::now();
         let built = {
             let _compiling = sp1_metal_probes::compile::lock();
-            device
-                .new_library_with_source(&src, &metal::CompileOptions::new())
+            let waited = started.elapsed();
+            let compiling = std::time::Instant::now();
+            let out = device
+                .new_library_with_source(&src, &compile_options())
                 .ok()
                 .and_then(|library| library.get_function("zc_round", None).ok())
-                .and_then(|f| device.new_compute_pipeline_state_with_function(&f).ok())
+                .and_then(|f| device.new_compute_pipeline_state_with_function(&f).ok());
+            // `SP1_METAL_COMPILE_LOG=1` says what each kernel cost and how much
+            // of that was queueing, which is the only way to tell a chip that
+            // compiles slowly from one that waited for a chip that does.
+            if std::env::var("SP1_METAL_COMPILE_LOG").is_ok_and(|v| v == "1") {
+                eprintln!(
+                    "zc compile {owned_key:<32} {:>8.2}s compiling {:>8.2}s queued {}",
+                    compiling.elapsed().as_secs_f64(),
+                    waited.as_secs_f64(),
+                    if out.is_some() { "ok" } else { "FAILED" },
+                );
+            }
+            out
         };
         let entry = built.map(|p| (p, base_muls, nodes));
         // Installed whether or not anybody is still waiting: a kernel that took

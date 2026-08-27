@@ -107,6 +107,8 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |
 | `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip's kernel is not even generated | 65536 |
 | `SP1_METAL_COMPILE_BUDGET` | seconds a round will wait for its chip's kernel to compile | 1 |
+| `SP1_METAL_COMPILE_LOG` | prints each kernel's compile time and how much of it was queueing | off |
+| `SP1_METAL_COMPILE_OPT` | `size` asks the Metal compiler to optimise for size | off — measured, no help |
 | `SP1_METAL_PERMITS` | shards proved at once, where the cap is above one | as the caller set it |
 | `SP1_METAL_ZC_LAYOUT` | column-major zerocheck layout | **off** — measured 21% slower |
 | `SP1_METAL_DEFER` | deferred command-buffer submission | **off** — produces wrong proofs |
@@ -131,7 +133,11 @@ None outstanding. What follows is what was wrong and how you would recognise it 
 
 A round now waits `SP1_METAL_COMPILE_BUDGET` seconds for its chip's kernel and takes the CPU if it is not ready — but the kernel is **installed whenever it arrives**, so nothing is refused for having been slow once, and a chip whose kernel lands mid-proof is on the GPU for the rest of it. A keccak proof is 6.3 s with no workaround set, where its first used to stall for ten minutes.
 
-The one cost is that a program whose chip takes longer to compile than the proof takes to run never sees that kernel, because the process exits first: `divrem` settles at 18.7 s against 14.1 s when the kernel is present. macOS caches a compiled shader against its source, so `SP1_METAL_COMPILE_BUDGET=900` on a single run pays for it once and every run after that gets the kernel immediately.
+The one cost is that a program whose chip takes longer to compile than the proof takes to run never sees that kernel, because the process exits first — `divrem` is 18.7 s that way against 14.4 s with it.
+
+macOS caches a compiled shader against its source and its compile options, and that cache outlives the process, so the cost is payable once. `SP1_METAL_COMPILE_BUDGET=1800` on a single run blocks until every kernel is built — 571 s for keccak — and every run after it gets those kernels at the default budget. Measured: keccak 6.30 s → 5.55 s, divrem 18.7 s → 14.4 s, both back to what they were before any of this. `SP1_METAL_COMPILE_LOG=1` prints what each kernel cost and how much of it was queueing.
+
+`SP1_METAL_COMPILE_OPT=size` asks for a size-optimised compile. It is kept as a measured negative: the ten-minute chip takes 552 s that way against 566 s at the default, so this is not the optimiser being aggressive.
 
 Two proofs that did not verify, both fixed on 2026-08-26, and both of which presented as a hang: SP1 retries a failed shard silently and leaves every thread parked, so nothing but `RUST_LOG=error` says what happened.
 
