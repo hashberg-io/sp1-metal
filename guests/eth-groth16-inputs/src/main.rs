@@ -14,15 +14,15 @@
 //! `INPUTS` public inputs each, on the same curve Ethereum's `ecPairing`
 //! precompile uses.
 //!
-//! **The three pairings are not here, and the guest does not pretend
-//! otherwise.** SP1 6.4.0 gives a guest BN254 point operations and Fp/Fp2
-//! arithmetic but no G2 type and no pairing, so a Miller loop and a final
-//! exponentiation over the Fp12 tower would have to be built on the Fp2
-//! precompiles — several hundred lines resting on Frobenius constants that
-//! have to be right to the bit. That is worth doing and worth doing carefully;
-//! it is not worth guessing at. Until then this guest measures the part that
-//! scales and names the part it leaves out, rather than quietly reporting a
-//! fraction of Groth16 as though it were all of it.
+//! **The pairings are not here; they are in `eth-pairing-check`.** `sp1-lib`
+//! gives a guest BN254 point operations and Fp/Fp2 arithmetic but no G2 type
+//! and no pairing, so the Miller loop and the final exponentiation come from
+//! the patched `substrate-bn` instead, and they are measured in a guest of
+//! their own. The two are kept apart because their costs scale with different
+//! things: this one grows with the number of public inputs, and the pairing
+//! check does not grow at all. Between them they cover a whole on-chain
+//! Groth16 verification, and neither reports a fraction of it as though it
+//! were all of it.
 //!
 //! The verifying key and the inputs are derived from the index. A verifier's
 //! cost does not depend on which statement it is checking, only on how many

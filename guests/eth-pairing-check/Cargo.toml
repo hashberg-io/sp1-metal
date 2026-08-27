@@ -1,0 +1,18 @@
+[package]
+name = "bench-eth-pairing-check"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = "=6.4.0"
+substrate-bn = { version = "0.6.0", default-features = false }
+
+# The pairing must run on SP1's precompiles or the number means nothing: the
+# same probe costs 3.59 million cycles patched and 64.6 million unpatched, and
+# nobody deploying this would ship the unpatched arithmetic. The newest tag is
+# pinned to SP1 6.2.0 while this project is on 6.4.0; the self-test in `main.rs`
+# is what makes an ABI drift between them loud rather than silent.
+[patch.crates-io]
+substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.2.0-substrate-bn" }
+
+[workspace]

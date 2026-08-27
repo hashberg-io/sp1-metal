@@ -415,6 +415,17 @@ guest("eth-groth16-inputs", "bench-eth-groth16-inputs", 2, 8, 16, "D",
 guest("eth-bls-aggregate", "bench-eth-bls-aggregate", 8, 16, 32, "D",
       "BLS12-381 G1 aggregation")
 
+# The two that end in a pairing, on the patched `substrate-bn` and `bls12_381`
+# so the pairing runs on the precompiles: unpatched it costs eighteen and ten
+# times as much, and nobody would deploy that. These are the heaviest workloads
+# in the suite -- eight to seventeen shards where nothing else passes eight --
+# so their sizes are small integers, and each one still takes longer than any
+# other guest's large.
+guest("eth-pairing-check", "bench-eth-pairing-check", 1, 4, 8, "D",
+      "bn254 pairing, EIP-197 shape")
+guest("eth-bls-verify", "bench-eth-bls-verify", 1, 2, 4, "D",
+      "BLS12-381 pairing and hash-to-curve")
+
 
 if __name__ == "__main__":
     main()

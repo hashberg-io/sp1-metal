@@ -1,0 +1,21 @@
+[package]
+name = "bench-eth-bls-verify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = "=6.4.0"
+bls12_381 = { version = "0.8.0", default-features = false, features = ["groups", "pairings", "alloc", "experimental"] }
+sha2 = { version = "0.10", default-features = false }
+
+# Both of these must run on SP1's precompiles or the number means nothing. The
+# same pairing probe costs 9.46 million cycles patched and 92.4 million
+# unpatched, and nobody verifying a sync committee on chain would ship the
+# unpatched arithmetic. Both tags are pinned to SP1 6.2.0 while this project is
+# on 6.4.0; the self-test in `main.rs` is what makes an ABI drift between them
+# loud rather than silent.
+[patch.crates-io]
+bls12_381 = { git = "https://github.com/sp1-patches/bls12_381", tag = "patch-0.8.0-sp1-6.2.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.2.0" }
+
+[workspace]

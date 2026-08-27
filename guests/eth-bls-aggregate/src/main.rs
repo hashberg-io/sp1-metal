@@ -14,13 +14,14 @@
 //! of participants, and that is what this measures: `n` committees, each
 //! aggregating the keys named by a bitfield and checking the result.
 //!
-//! **The pairing is not here, and the guest does not pretend otherwise.**
-//! SP1 6.4.0 gives a guest BLS12-381 point operations and Fp/Fp2 arithmetic —
-//! `syscall_bls12381_add`, `_double`, `_fp2_mulmod` and the rest — but no G2
-//! type and no pairing, so the Miller loop and the final exponentiation would
-//! have to be written on top of the Fp2 precompiles. That is a much larger
-//! piece of work and a separate question; this guest measures the part that
-//! scales, and the fixed part is named rather than folded in.
+//! **The pairing is not here; it is in `eth-bls-verify`, which measures the
+//! whole statement.** `sp1-lib` gives a guest BLS12-381 point operations and
+//! Fp/Fp2 arithmetic — `syscall_bls12381_add`, `_double`, `_fp2_mulmod` and the
+//! rest — but no G2 type and no pairing, so the Miller loop and the final
+//! exponentiation come from the patched `bls12_381` instead. Keeping the two
+//! apart is the point rather than a shortcut: this guest's cost moves with the
+//! committee and the other's does not, and one number covering both would hide
+//! which half a larger committee actually pays for.
 //!
 //! Keys are derived from the index, which stands in for a committee's keys
 //! being read from a beacon state. Aggregation is what it costs to add them up

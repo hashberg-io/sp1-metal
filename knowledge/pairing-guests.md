@@ -1,6 +1,19 @@
 # Whether to build pairing-based guests, and the one test that decides it
 
-> **Queued, 2026-08-27.** Not started: the machine is running the full tier and this needs a build. Everything needed to carry it out is here.
+> **Carried out 2026-08-27: the test passed, and both guests are built.** Outcome 3 of the three below. `guests/eth-pairing-check` and `guests/eth-bls-verify` are the result; the record of what was decided and why is kept below as it was written.
+>
+> What the test showed, for both curves:
+>
+> | crate | tag | patched | unpatched | ratio |
+> |---|---|---|---|---|
+> | `substrate-bn` | `patch-0.6.0-sp1-6.2.0-substrate-bn` | 3.59 M cycles | 64.6 M | 18.0x |
+> | `bls12_381` | `patch-0.8.0-sp1-6.2.0` | 9.46 M cycles | 92.4 M | 9.8x |
+>
+> The unpatched column is the control, and it is the reason the ratio settles the question: a patch that resolved but did not route through the precompiles would have matched it. Both resolved against SP1 6.4.0 despite being tagged for 6.2.0 — cargo pulls `sp1-lib` 6.5.0 for them, and the syscall ABI did not move — and both passed bilinearity and non-degeneracy under the 6.4.0 executor.
+>
+> `sha2` is patched too, at `patch-sha2-0.10.9-sp1-6.2.0`, because Ethereum's hash-to-curve expands the message with SHA-256 and an unpatched hash there would have the same defect on a smaller scale.
+>
+> Each guest also self-tests a whole statement that must hold beside one that must not: a sound four-pair instance and a tampered one, and an honest aggregate signature checked against the right committee and the wrong one. That is what the third bullet below asked for, met without a host-side prover: the instances are constructed from their own trapdoors, so the algebra is genuine rather than fixture-shaped.
 
 Two statements the Ethereum community would care about most — verifying a Groth16 proof, and verifying a sync committee's BLS signature — both end in a pairing. `guests/eth-groth16-inputs` and `guests/eth-bls-aggregate` measure the parts that *scale* and deliberately stop short of it.
 
