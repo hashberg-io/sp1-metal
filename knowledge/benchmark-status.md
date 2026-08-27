@@ -9,7 +9,7 @@
 | Guests | **Done.** Twenty-two in `guests/`, sources and ELFs committed: fourteen microbenchmarks and composites, and eight whole Bitcoin and Ethereum statements added 2026-08-27. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
 | Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
-| Application tier | **Run 2026-08-27.** `results/bench-apps.jsonl`, the eight Tier D guests at three sizes. |
+| Application tier | **Done, 2026-08-27.** `results/bench-apps.jsonl` and `.md`, 144 timed runs, 24 points, no failures. |
 | Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
@@ -35,6 +35,7 @@ nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
 
 - **Orphaned provers.** A hung run holds its memory. Four of them once held 28.8 GB with only 10.3 GB free, which would have made the large runs swap and corrupted them. The harness now puts each run in its own process group and kills the group on timeout, but check anyway:
   `ps -Ao pid,etime,%cpu,rss,command | grep '[s]p1-profile-host'` — anything at 0.0% CPU and older than half an hour is dead weight, kill it.
+- **A `pgrep -f` waiter matches its own command line.** `until ! pgrep -f "bench_suite.py --tier apps"; do sleep 180; done` never exits, because the waiting shell's own command line contains the pattern. The application tier sat finished and unnoticed for three and a half hours. Match on something the waiter does not itself contain, or check for the process by pid.
 - **The load average on this machine is a phantom.** It reads 7 while `top` reports 96% idle and nothing is running. Gate on `top -l 2 -n 0 -s 1` idle, never on load. The harness does this and records both per run.
 
 ## What the standard tier found
@@ -61,6 +62,29 @@ Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `result
 2. **The node bound does not predict compile cost.** `KeccakPermuteControl` (8,234 / 12,351 nodes) and `DivRem` (7,624 / 11,436) each cost about ten minutes to compile, while `Global:true` at **15,196** compiles instantly. Cached afterwards, so it is one-time per program — but it lands on a user's first proof, which appears to hang. It buys nothing: keccak's warm wall is 2.77 s with those kernels and 2.79-2.85 s without. Workaround `SP1_METAL_ZEROCHECK_MAX_NODES=8000`; the real fix is a better predictor than node count.
 3. **A scaling cliff on secp256k1 that is ours.** Between n=1000 and n=1500, same shard count, the CPU arm is flat (7.73 -> 7.79 s) and the Metal arm goes from 2.15 s to not finishing in 900. At n=1000 Metal is 3.6x faster; at n=1500 it is >115x slower. `Secp256k1DoubleAssign` is 167,376 / 251,064 nodes, far over the bound, so it never gets a kernel and its zerocheck falls back to the CPU — and it is the widest chip in the machine.
 4. **Timeouts leaked processes** (fixed). `subprocess.run(timeout=)` kills only the direct child, so a hung prover under `/usr/bin/time` survived and held its memory.
+
+## What the application tier found
+
+144 timed runs, 24 points, **every proof verified.** Median **2.98x**, range 2.48x–5.75x. Full table: `results/bench-apps.md`.
+
+**A real statement scores below a tight precompile loop, by about a fifth.** 2.98x here against 3.59x for the microbenchmarks, measured on the same machine the same day. That was the prediction written down when these guests were designed, and it is the number someone in those communities would actually get.
+
+**It qualifies the microbenchmarks' main finding.** Across Tiers A, B and C a larger workload always scored better and size mattered more than chip mix. Here only `btc-headers` behaves that way:
+
+| guest | small | standard | large |
+|---|---|---|---|
+| btc-headers | 3.44x | 5.55x | 5.75x |
+| eth-ecrecover | 3.69x | 3.14x | 2.89x |
+| btc-schnorr | 3.56x | 3.10x | 2.85x |
+| eth-groth16-inputs | 3.27x | 2.82x | 2.48x |
+| eth-bls-aggregate | 3.03x | 2.84x | 2.68x |
+| eth-mpt | 2.68x | 2.48x | 2.69x |
+| eth-pairing-check | 2.80x | 2.93x | 2.88x |
+| eth-bls-verify | 3.09x | 3.02x | 3.05x |
+
+Six of the eight are flat or *falling* with size. What separates `btc-headers` is that it has ordinary RISC-V work around its precompile — a header chain is three SHA-256 compressions and a great deal of byte handling — where the others are saturated with precompile rows. **Size lifts the ratio only when there is non-precompile work for it to lift.** A workload that is already all precompile gains nothing from being bigger, which is the honest reading of the earlier "size dominates chip mix": size was a proxy for how much ordinary work there was to spread over a shard.
+
+**The two pairing guests are the largest workloads this project has proved** — sixteen and seventeen shards, where nothing else in the suite passes eight, and a CPU arm running to 287 s. They are also the flattest, which is the same finding at the extreme.
 
 ## What the full tier found
 

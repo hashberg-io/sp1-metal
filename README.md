@@ -8,13 +8,16 @@ This closes part of that gap: four phases of a shard proof run on the GPU, and a
 
 That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **1.94x to 6.01x** with a median of 3.6x, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **2.9x to 3.1x** across three guests, so recursion roughly halves the advantage and the 5x bar is not met.
 
-Every workload above has been measured twice, ten hours apart on the same machine — once on its own, once inside the larger matrix that adds the shard-size, thread-count, ablation and compressed-mode sweeps.
-That is 570 timed runs, of which 564 verified.
+Those are microbenchmarks. **Eight whole statements from Bitcoin and Ethereum — a mined header chain, Merkle-Patricia proofs, `ecrecover`, BIP-340, the public-input and pairing halves of a Groth16 verification, and a sync-committee BLS signature — measure 2.48x to 5.75x with a median of 2.98x**, about a fifth below the microbenchmarks taken on the same machine the same day. That gap is the point of measuring them: it is what someone deploying one of these would actually get.
+
+They also invert the size effect. Only the header chain climbs as it grows, and it is the only one of the eight with much ordinary work around its precompile; the rest are flat or fall. A workload already saturated with precompile rows gains nothing from being bigger, which is what the microbenchmarks' "bigger is better" was really measuring. Full table: [`results/bench-apps.md`](results/bench-apps.md).
+
+The fourteen microbenchmarks have each been measured twice, ten hours apart on the same machine — once on their own, once inside the larger matrix that adds the shard-size, thread-count, ablation and compressed-mode sweeps.
+That is 570 timed runs, of which 564 verified, and the application statements add 144 more with no failures at all.
 The six that did not are one configuration, deliberately out of range — it raises the zerocheck node bound until a chip becomes eligible whose kernel takes longer to compile than a run is allowed to take.
 Of the thirty-three workloads the two matrices share, twenty-nine agree to within 0.25x.
 The four that do not are keccak and divrem, and they differ only in the GPU arm: macOS caches a compiled kernel across runs, so those two are slower the first time a machine ever proves them and settle afterwards — divrem/standard at 5.14x rather than 3.75x, keccak/small at 3.19x rather than 2.41x.
-The 1.94x floor quoted above is keccak on a large workload against a cold cache; warm, it is 2.16x.
-The bottom of the range above is therefore a first-run cost, not a steady state; [USING.md](USING.md) says how to pay it once, up front.
+The 1.94x floor quoted above is keccak on a large workload against a cold cache; warm it is 2.16x, so that floor is a first-run cost rather than a steady state, and [USING.md](USING.md) says how to pay it once, up front.
 
 Every figure here comes from [`results/`](results); [the verdict](knowledge/verdict.md) says which of this project's earlier claims survived and which did not.
 
