@@ -9,7 +9,7 @@
 | Guests | **Done.** Fourteen in `guests/`, sources and ELFs committed. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
 | Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
-| Full tier | **Done.** `results/bench-full.jsonl`, 406 runs, 53 points. Committed. |
+| Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
 
@@ -62,6 +62,15 @@ Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `result
 4. **Timeouts leaked processes** (fixed). `subprocess.run(timeout=)` kills only the direct child, so a hung prover under `/usr/bin/time` survived and held its memory.
 
 ## What the full tier found
+
+> **Re-measured 2026-08-27 against the fixed backend.** `results/bench-full.md`: 366 timed runs, 64 points, and the only failures left are the six that raise the node bound.
+> The section below is kept as written, because what it got wrong is the useful part. Here is what the re-run changed.
+>
+> - **The ablation still does not sum, and still refutes the prediction in direction.** Against a 10.33 s baseline: MERKLE 23.86 (+13.53), ZEROCHECK 17.19 (+6.86), JAGGED 14.32 (+3.99), TRANSITION 12.74 (+2.41), ENCODE 12.24 (+1.91), FIRST_LAYER 11.51 (+1.18). Those sum to 29.88 s against a whole path worth 48.74 s — 61% of it, against 54% before, and the same conclusion. Merkle is still the largest single thing this backend does. The one row that moved is FIRST_LAYER: it was +0.17 s and is now +1.18 s, because the first layer now has kernels it used to decline.
+> - **Shard size is still flat.** fib 5.61x / 5.54x / 5.72x / 5.75x / 5.85x and sha256 4.16x / 4.15x / 4.16x / 4.17x / 4.39x at 1, 2, 4, 8 and 16 MiB. Both guests now drift mildly upward at 16 MiB, but by less than the spread between repeats; there is still no trend worth naming.
+> - **Concurrency still matters, and still only below four.** fib 3.99x / 4.98x / 5.72x / 5.64x and sha256 3.46x / 3.94x / 4.16x / 4.13x at 1, 2, 4 and 8 permits. Four in flight is where the advantage arrives and eight adds nothing.
+> - **The raised node bound is still catastrophic, and now explained.** It admits `Global:false`, whose kernel needs on the order of half an hour in the Metal compiler, so no 900 s run can finish. 0 of 3 GPU runs completed for either curve guest while their CPU arms were unmoved at 7.61 and 7.59 s. This is why the bound stays at 16,384.
+> - **Compressed mode is measurable, and measured.** It was never recursion that made it fail: those runs were producing wrong proofs, which SP1 retries silently. fib 3.09x, sha256 2.99x, secp256k1 2.90x, every run verified. **D7 is therefore answered, and not met** — its bar is 5x on execute-to-compressed and the backend delivers about 3x, so recursion roughly halves the advantage core proving has.
 
 406 runs, 53 points, 18 failures — every failure a timeout, and every timeout the hang.
 
@@ -121,7 +130,9 @@ Predictions recorded in advance, so the results can be scored rather than ration
 
 ## Next actions, in order
 
-1. Fix the keccak hang. It is the only defect that produces no output at all.
-2. Replace the node-count bound with something that predicts compile cost.
-3. Diagnose the secp256k1 cliff.
-4. Fold the results into `verdict.md` — in particular, that the headline 5.56x is a *large-workload* figure and small workloads get about 3.5x whatever they compute.
+The first three of these are closed; they are kept so the order they were written in can be read against what they turned out to be.
+
+1. ~~Fix the keccak hang.~~ Closed 2026-08-26. It was not a hang: the proof was wrong, and SP1's silent shard retry left every thread parked, which reads as one.
+2. ~~Replace the node-count bound with something that predicts compile cost.~~ Closed by a different fix. Node count still does not predict compile cost and probably cannot, so the bound is no longer asked to: a round waits a second for its kernel, takes the CPU if it is not ready, and installs the kernel whenever it arrives. Nothing is refused for having been slow once.
+3. ~~Diagnose the secp256k1 cliff.~~ Closed 2026-08-26. Also a wrong proof, from two no-copy Metal buffers lent over one shared page.
+4. Fold the results into `verdict.md` — in particular, that the headline figure is a *large-workload* one and small workloads get about 3.5x whatever they compute.
