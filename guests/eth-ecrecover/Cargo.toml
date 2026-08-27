@@ -1,0 +1,13 @@
+[package]
+name = "bench-eth-ecrecover"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = "=6.4.0"
+# From crates.io and pinned to the same version as the zkVM, not a git patch:
+# it carries SP1's own precompiled curve arithmetic, so the guest gets the
+# accelerated point operations without depending on a fork.
+sp1-lib = "=6.4.0"
+
+[workspace]
