@@ -36,6 +36,14 @@ Implemented 2026-08-19 and first run in full on 2026-08-21; the results and what
    It times that fold four ways — challenger on the host or on the device, one fold at a time or several in flight — because the round-trip cost `probes launch` measures is a latency, and a prover with many folds available need not pay it once per fold.
    Parity is against slop's own `DuplexChallenger<KoalaBear, KoalaPerm, 16, 8>`: a scripted observe/sample sequence that crosses the sponge's rate boundary in both directions, and then the challenges and final value of the whole fold, for both the host-driven and device-driven paths.
 11. `probes zerocheck` — a synthetic zerocheck first round (T degree-3 monomials per row over a column-major trace, α-combination, eq-weighting, full reduction); prices the constraint-evaluation shape without a per-chip constraint transpiler, which is backend-phase work.
+12. `probes merkle` — the Merkle tree half of a BaseFold commitment, which is what `commit traces` does after the encode: rows of the codeword hashed with `PaddingFreeSponge<KoalaPerm, 16, 8, 8>` and pairs compressed up the tree with `TruncatedPermutation<KoalaPerm, 2, 8, 16>`.
+   Parity is against slop's own `Poseidon2KoalaBear16Prover`, so the root is the commitment SP1's verifier would accept rather than a tree of the right shape.
+13. `probes sumcheck` — slop's own `reduce_sumcheck_to_evaluation` driver running unmodified with GPU kernels underneath it.
+   The driver is generic over three traits in `slop_sumcheck::backend`, which is the designed extension point for a device backend; this implements them for `MetalBackend` and checks the driver produces the identical proof — the same univariate messages, the same challenges — as it does over slop's `Mle` on the CPU.
+   It is the probe that establishes the seam exists before anything is built on it.
+14. `probes backend` — what slop's device seam costs on unified memory.
+   A real `slop_alloc::Buffer<T, MetalBackend>` is allocated by slop, filled through its host pointer, handed to a kernel by looking up the `MTLBuffer` behind that pointer, and read back through the pointer; nothing is copied at any point.
+   The benchmark prices the copy that *did not* happen, which is what a backend with separate device memory would have to move before the same kernel could run.
 
 ## The acceptance study
 
