@@ -65,6 +65,7 @@ Two details worth knowing rather than discovering:
 
 - All six crates must be patched even though your code names one or none of them, because they must resolve to the same copies the SDK uses. That includes `p3-uni-stark`, which has no GPU code in it and no `metal` feature. Its one line labels preprocessed columns as preprocessed rather than as main, which is harmless upstream — nothing there asks a variable which trace it came from — but not to something that compiles those constraints into a kernel. Without it, four recursion AIRs generate kernels that read the main trace where they meant the preprocessed one, and compressed proofs do not verify.
 - Cargo finds each crate by searching the repository, so no subdirectory needs naming. `sp1-metal-core` and `sp1-metal-probes` come along as path dependencies inside the checkout.
+- If resolving the patches fails with *"failed to authenticate when downloading repository"* on what is a public repository, that is cargo's bundled git rather than anything here. `CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build` makes it shell out to `git` instead, or set `net.git-fetch-with-cli = true` in `.cargo/config.toml`. Verified against this tag from a clean checkout: all six patches then resolve to it.
 
 ## Telling whether it worked
 
