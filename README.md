@@ -59,13 +59,14 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`crates/sp1-metal-kernelbench`](crates/sp1-metal-kernelbench) — scores the shipped GKR round kernel against the ceilings the probes measure, timed from the command buffer's own `GPUStartTime` so the number contains execution and nothing else.
 - [`guests/`](guests) — the twenty-two guest programs every measurement is taken against, sources and built ELFs. Fourteen are microbenchmarks and composites; eight are whole Bitcoin and Ethereum statements.
 - [`results/`](results) — the measurements the documents cite.
-- [`tools/`](tools) — the quickstart, the benchmark suite and its reporter, the acceptance ladder, the span and sample profilers, and the phase model.
+- [`tools/`](tools) — the quickstart, the benchmark suite and its reporter, the acceptance ladder, the span and sample profilers, the phase model, and the consistency checker that holds these documents to what the code says.
 
 ## Tests
 
 There is no CI. The tests worth running need a real GPU, which hosted runners do not reliably provide, and a badge covering only the rest would claim more than it checks. They are run by hand:
 
 ```sh
+python3 tools/check_consistency.py                       # the docs against the code
 cargo test --workspace --release                         # 20, includes GPU parity
 cargo run --release --bin probes -- check                # every kernel against a packed CPU
 ( cd crates/sp1-metal-prover  && cargo test --release )  # 8, the GKR and transition kernels
