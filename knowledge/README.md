@@ -46,7 +46,7 @@ Each records its own result at the end; do not read the opening as a live statem
 
 Ratios in these documents are not all against the same baseline, and the difference matters more than any single figure.
 
-- **Against the prover as it ships** — scalar, which is what SP1 6.4.0 actually runs. This is the D7 reading and the source of the headline 5.56x.
+- **Against the prover as it ships** — scalar, which is what SP1 6.4.0 actually runs. This is the D7 reading and the source of the headline figure, now 6.0x at its best.
 - **Against a packed CPU baseline** — the same algorithms using this machine's vector units. The fair silicon-to-silicon comparison, and about 3x smaller.
 
 The CPU prover is still scalar, so both readings remain true of different questions. Any figure quoted without its baseline is a figure to distrust, including in these documents.

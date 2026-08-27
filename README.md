@@ -6,7 +6,7 @@ This closes part of that gap: four phases of a shard proof run on the GPU, and a
 
 **On an M4 Max, core shard proving is 6.0x faster than the same machine's CPU prover** on a large workload — 15.04 s against 90.39 s, both arms through one binary.
 
-That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **1.94x to 6.01x** with a median of 3.60x, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **3.12x**, so recursion roughly halves the advantage and the 5x bar is not met.
+That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **1.94x to 6.01x** with a median of 3.60x, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **2.92x to 3.08x** across three guests, so recursion roughly halves the advantage and the 5x bar is not met.
 
 In the last full run, all 204 proofs verified.
 

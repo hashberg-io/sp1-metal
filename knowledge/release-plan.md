@@ -119,7 +119,7 @@ The README update belongs to the merge rather than to the branch, which is the s
 Honest about cost in its own output: the first build is about eight minutes, the pair about two on an M4 Max.
 It should refuse to run, rather than produce a misleading number, if the machine is busy — the project has already recorded one corrupted measurement taken during a competing build.
 
-*Verified by:* running it on a quiet machine and getting a ratio inside the 3.71x-5.63x envelope.
+*Verified by:* running it on a quiet machine and getting a ratio inside the measured envelope, which is 1.94x-6.01x as of 2026-08-27; `results/bench-standard.md` is the current table.
 
 ### 6. Release hygiene
 
