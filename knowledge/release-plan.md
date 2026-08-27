@@ -137,8 +137,10 @@ Say in the README that the suites are run by hand, and say which ones.
 Tag `v0.1.0` on `main`.
 Push, once, with explicit authorisation.
 
-This repository has never been pushed: `origin/main` holds a single seed commit and 115 commits of work are local to one machine.
-That is itself a risk, and it ends here.
+This repository had never been pushed: `origin/main` held a single seed commit while every commit of work was local to one machine.
+That was itself a risk, and it ends here.
+
+The tag is what `USING.md` tells a consumer to patch, so it has to point at the release and not at a snapshot of it — it was left eighteen commits behind once, which would have handed people a build whose compile policy declined every chip while any kernel was compiling.
 
 ## Out of scope
 
