@@ -124,8 +124,8 @@ It should refuse to run, rather than produce a misleading number, if the machine
 ### 6. Release hygiene
 
 - **Prerequisites**, stated plainly: Apple Silicon, Rust 1.88 or later, macOS with Metal 3.
-  Whether runtime shader compilation needs the Xcode Command Line Tools is *not yet known* and must be checked rather than guessed; see the risks below.
-- **An affiliation line.** This repository carries Succinct's project name and forks five of their crates while saying nothing about being independent. One sentence: an independent fork, not affiliated with or endorsed by Succinct Labs.
+  Runtime shader compilation does **not** need the Xcode Command Line Tools — checked, not guessed: the Metal framework compiles MSL from source at runtime and only offline `metal`/`metallib` tooling ships with Xcode.
+- **An affiliation line.** This repository carries Succinct's project name and forks five of their crates, and one of Plonky3's, while saying nothing about being independent. One sentence: an independent fork, not affiliated with or endorsed by Succinct Labs.
 - **Workspace hygiene.** Add `crates/vendor/slop-*` to the root workspace's `exclude` list, with matching `.gitignore` entries, so `cargo test` works inside them; today it fails with "believes it's in a workspace when it's not".
 
 No CI.
