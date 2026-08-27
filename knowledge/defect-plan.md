@@ -5,7 +5,7 @@
 > | # | Defect | Outcome |
 > |---|---|---|
 > | 1 | Ten-minute kernel compiles | Fixed by a compile deadline, as planned |
-> | 2 | The node bound cannot be raised | Fixed with it, and raised to 65,536 |
+> | 2 | The node bound cannot be raised | Fixed with it — but raising it buys nothing, so it stays at 16,384 |
 > | 3 | secp256k1 falls off a cliff | **Not a performance defect at all** — a wrong proof, from lending overlapping pages |
 > | 4 | Eight mistranspiled chip variants | Fixed — one mislabelled line in `p3-uni-stark` |
 >

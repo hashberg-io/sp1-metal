@@ -105,7 +105,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_ZC_ILP` | interleaved constraint bodies in the generated kernel | on |
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |
-| `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip's kernel is not even generated | 65536 |
+| `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip's kernel is not even generated | 16384 |
 | `SP1_METAL_COMPILE_BUDGET` | seconds a round will wait for its chip's kernel to compile | 1 |
 | `SP1_METAL_COMPILE_LOG` | prints each kernel's compile time and how much of it was queueing | off |
 | `SP1_METAL_COMPILE_OPT` | `size` asks the Metal compiler to optimise for size | off — measured, no help |
@@ -114,6 +114,8 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_DEFER` | deferred command-buffer submission | **off** — produces wrong proofs |
 
 The last two are switches for negative results, kept so that neither question gets asked twice.
+
+**Raising `SP1_METAL_ZEROCHECK_MAX_NODES` is not the optimisation it looks like.** Above about 20,000 nodes it admits `Global:false`, whose kernel needs on the order of half an hour in the Metal compiler; the benchmark matrix runs it at 10^6 and no proof completes in fifteen minutes while the CPU arm is unmoved. The bound is not what decides whether a chip reaches the GPU any more — the compile budget is, and a kernel is installed whenever it arrives — so what the bound still does is stop the generator emitting a kernel nobody will wait for.
 
 Seven of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST`, `ZEROCHECK` and `GKR_ROUND`.
 In that mode both paths run on every call of a real proof and their results are compared element for element.

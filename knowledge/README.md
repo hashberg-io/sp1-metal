@@ -32,7 +32,7 @@ Each records its own result at the end; do not read the opening as a live statem
 
 | document | what it is |
 |---|---|
-| [defect-plan.md](defect-plan.md) | How to close the four open defects, in the order that makes the later ones cheaper. Includes what has already been ruled out. |
+| [defect-plan.md](defect-plan.md) | The four defects and how each was closed — two were not what the plan thought they were, and three more were found while closing them. |
 | [benchmark-status.md](benchmark-status.md) | Where the benchmark work stands, what it found, how to check on the running suite and how to resume it. **Read this first if picking the work back up.** |
 | [benchmark-plan.md](benchmark-plan.md) | Why the suite measures the regimes it does, and how its sizes were calibrated. The design note the built suite came from. |
 | [pairing-guests.md](pairing-guests.md) | Whether a pairing can be measured through SP1's precompiles, the one test that decided it, and the rule that a number nobody would deploy is worse than no number. |
