@@ -19,7 +19,7 @@
 sp1_zkvm::entrypoint!(main);
 use sp1_lib::secp256k1::Secp256k1Point;
 use sp1_lib::utils::{AffinePoint, WeierstrassAffinePoint};
-use sp1_lib::{sys_bigint, syscall_secp256k1_decompress};
+use sp1_lib::sys_bigint;
 use sp1_zkvm::syscalls::{syscall_sha256_compress, syscall_sha256_extend};
 
 /// The order of the secp256k1 group, little-endian by 64-bit limb.
@@ -171,6 +171,95 @@ fn from_be(bytes: &[u8; 32]) -> [u64; 4] {
     out
 }
 
+/// The secp256k1 field prime, little-endian by 64-bit limb. Coordinates live
+/// modulo this one; scalars live modulo `ORDER`.
+const PRIME: [u64; 4] = [
+    0xFFFF_FFFE_FFFF_FC2F,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0xFFFF_FFFF_FFFF_FFFF,
+];
+
+/// `(prime + 1) / 4`. The prime is 3 modulo 4, so raising a square to this
+/// power is a square root of it.
+const SQRT_EXPONENT: [u64; 4] = [
+    0xFFFF_FFFF_BFFF_FF0C,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0x3FFF_FFFF_FFFF_FFFF,
+];
+
+/// `a * b` modulo the field prime.
+fn mulmod_p(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    unsafe {
+        sys_bigint(&mut out, 0, a, b, &PRIME);
+    }
+    out
+}
+
+/// `a + b` modulo the field prime.
+fn addmod_p(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    let mut carry = 0u64;
+    for i in 0..4 {
+        let (s, c1) = a[i].overflowing_add(b[i]);
+        let (s, c2) = s.overflowing_add(carry);
+        out[i] = s;
+        carry = u64::from(c1 || c2);
+    }
+    if carry == 1 || ge(&out, &PRIME) {
+        sub_in_place(&mut out, &PRIME);
+    }
+    out
+}
+
+/// `base` to the `exponent` modulo the field prime, square and multiply from
+/// the least significant bit up.
+fn powmod_p(base: &[u64; 4], exponent: &[u64; 4]) -> [u64; 4] {
+    let mut result = [1u64, 0, 0, 0];
+    let mut b = *base;
+    for limb in 0..4 {
+        for bit in 0..64 {
+            if (exponent[limb] >> bit) & 1 == 1 {
+                result = mulmod_p(&result, &b);
+            }
+            b = mulmod_p(&b, &b);
+        }
+    }
+    result
+}
+
+/// The point with this x coordinate and a y of the parity asked for.
+///
+/// SP1 6.4.0 has no Weierstrass decompression precompile. The only
+/// implementation left in its executor panics on sight, and nothing else
+/// implements the syscall, so this does the work in guest code:
+/// `y = (x^3 + 7)^((prime + 1) / 4)`, which is a square root because the prime
+/// is 3 modulo 4, negated when its parity is not the one wanted. Squaring the
+/// root back and comparing rejects an x that is not on the curve, which is the
+/// check the precompile also owed its caller.
+///
+/// The cost is about 380 modular multiplies, each one a `sys_bigint` call. That
+/// is real work rather than a stub, and it is what any guest on this version of
+/// SP1 must pay to turn an x coordinate into a point.
+fn decompress(x: &[u64; 4], y_is_odd: bool) -> Secp256k1Point {
+    assert!(!ge(x, &PRIME), "x is not a field element");
+    let x3 = mulmod_p(&mulmod_p(x, x), x);
+    let square = addmod_p(&x3, &[7, 0, 0, 0]);
+    let mut y = powmod_p(&square, &SQRT_EXPONENT);
+    assert!(mulmod_p(&y, &y) == square, "x is not on the curve");
+    if !is_zero(&y) && (y[0] & 1 == 1) != y_is_odd {
+        let mut negated = PRIME;
+        sub_in_place(&mut negated, &y);
+        y = negated;
+    }
+    let mut limbs = [0u64; 8];
+    limbs[0..4].copy_from_slice(x);
+    limbs[4..8].copy_from_slice(&y);
+    Secp256k1Point::new(limbs)
+}
+
 fn generator() -> Secp256k1Point {
     Secp256k1Point::new(<Secp256k1Point as AffinePoint<8>>::GENERATOR)
 }
@@ -194,12 +283,7 @@ fn coords(p: &Secp256k1Point) -> ([u64; 4], [u64; 4]) {
 /// one BIP-340 will accept. A thirty-two byte public key names a point this way
 /// rather than carrying a parity bit.
 fn lift_x(x: &[u64; 4]) -> Secp256k1Point {
-    let mut limbs = [0u64; 8];
-    limbs[0..4].copy_from_slice(x);
-    unsafe {
-        syscall_secp256k1_decompress(&mut limbs, false);
-    }
-    Secp256k1Point::new(limbs)
+    decompress(x, false)
 }
 
 fn scalar_from(seed: &[u8]) -> [u64; 4] {

@@ -11,8 +11,17 @@
 //! cost does not depend on difficulty — difficulty is what the *miner* pays, and
 //! the verifier compares one 256-bit number either way — so a chain at
 //! `0x207fffff`, which is the real parameter Bitcoin's own regtest network uses,
-//! costs exactly what a mainnet chain costs to check. What it saves is having to
-//! mine, which would otherwise dwarf the thing being measured.
+//! costs exactly what a mainnet chain costs to check.
+//!
+//! Each header is mined rather than asserted, because a header that does not
+//! meet its own target is not a Bitcoin header and a chain of them would prove
+//! nothing. Regtest's target admits a little under half of all hashes, so a
+//! nonce is found in two tries on average: mining costs about two double hashes
+//! per header and the verification that follows costs one, which puts roughly a
+//! third of this guest's work on the verifier's side of the line. Reading the
+//! numbers as a light client's cost means dividing by about three; at mainnet
+//! difficulty the mining would be impossible, which is the whole reason regtest
+//! exists.
 //!
 //! The SHA-256 built on the precompiles is checked against two published
 //! vectors before any of that: `sha256("abc")`, and the double hash of the real
@@ -107,11 +116,14 @@ fn meets_target(hash: &[u8; 32], target: &[u8; 32]) -> bool {
     true
 }
 
-/// A synthetic header at regtest difficulty, naming `prev`.
+/// A synthetic header at regtest difficulty, naming `prev`, with a nonce ground
+/// until the header meets the target its own `bits` field encodes.
 ///
 /// Every field is where Bitcoin puts it and is the width Bitcoin gives it, so
-/// the bytes a verifier hashes are laid out exactly as a real header's are.
-fn header(index: u32, prev: &[u8; 32], bits: u32) -> [u8; 80] {
+/// the bytes a verifier hashes are laid out exactly as a real header's are, and
+/// the proof of work is genuine rather than assumed. The search is the miner's
+/// loop, and at this difficulty it ends after two tries on average.
+fn header(index: u32, prev: &[u8; 32], bits: u32, target: &[u8; 32]) -> [u8; 80] {
     let mut h = [0u8; 80];
     h[0..4].copy_from_slice(&1u32.to_le_bytes());
     h[4..36].copy_from_slice(prev);
@@ -121,8 +133,13 @@ fn header(index: u32, prev: &[u8; 32], bits: u32) -> [u8; 80] {
     h[36..68].copy_from_slice(&root);
     h[68..72].copy_from_slice(&(1_231_006_505u32 + index * 600).to_le_bytes());
     h[72..76].copy_from_slice(&bits.to_le_bytes());
-    h[76..80].copy_from_slice(&index.to_le_bytes());
-    h
+    for nonce in 0..=u32::MAX {
+        h[76..80].copy_from_slice(&nonce.to_le_bytes());
+        if meets_target(&double_sha256(&h), target) {
+            return h;
+        }
+    }
+    panic!("no nonce meets the target");
 }
 
 /// The real mainnet genesis header, as 80 bytes.
@@ -174,15 +191,16 @@ fn main() {
     let n: u32 = sp1_zkvm::io::read();
     self_test();
 
-    // Regtest's own difficulty parameter: a target so high that any header
-    // meets it, which is what makes a synthetic chain possible without mining.
+    // Regtest's own difficulty parameter: a target so high that mining a header
+    // takes two tries rather than an epoch, which is what makes a synthetic
+    // chain possible inside a guest at all.
     const BITS: u32 = 0x207f_ffff;
     let target = target_from_bits(BITS);
 
     let mut prev = [0u8; 32];
     let mut work: u64 = 0;
     for i in 0..n {
-        let h = header(i, &prev, BITS);
+        let h = header(i, &prev, BITS, &target);
         let hash = double_sha256(&h);
         assert!(meets_target(&hash, &target), "header {i} proof of work");
         // What a light client actually checks: that this header names the one

@@ -88,10 +88,24 @@ fn small_scalar(seed: &[u8]) -> [u64; 4] {
     out
 }
 
-fn key(index: u32) -> Bls12381Point {
-    let mut p = generator();
-    p.mul_assign(&small_scalar(&index.to_le_bytes()));
-    p
+/// One committee's five hundred and twelve keys, each a distinct point of G1.
+///
+/// Every key after the first is the one before it plus the generator, rather
+/// than its own scalar multiplication. That is deliberate: multiplying five
+/// hundred and twelve times costs more than all the aggregation this guest then
+/// measures, so the figure would be a key-derivation figure wearing an
+/// aggregation label. A beacon client does not derive these at all — it reads
+/// them out of the beacon state — so the cheapest construction that yields
+/// distinct valid points is the honest one.
+fn committee() -> [Bls12381Point; COMMITTEE] {
+    let mut current = generator();
+    current.mul_assign(&small_scalar(b"committee"));
+    let step = generator();
+    core::array::from_fn(|_| {
+        let out = current;
+        current.complete_add_assign(&step);
+        out
+    })
 }
 
 /// Aggregates the keys the bitfield names, as a light client does before it
@@ -143,7 +157,7 @@ fn main() {
     self_test();
 
     // One committee's keys, built once as a beacon client would hold them.
-    let keys: [Bls12381Point; COMMITTEE] = core::array::from_fn(|i| key(i as u32));
+    let keys = committee();
 
     let mut total = 0u32;
     let mut acc = 0u64;

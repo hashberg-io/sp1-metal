@@ -288,7 +288,7 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tier", default="smoke", choices=["smoke", "standard", "full"])
+    ap.add_argument("--tier", default="smoke", choices=["smoke", "standard", "full", "apps"])
     ap.add_argument("--out", default=None)
     ap.add_argument("--repeats", type=int, default=None)
     ap.add_argument("--force", action="store_true")
@@ -320,6 +320,18 @@ def run_tier(tier: str, repeats: int, fh, force: bool) -> None:
         for nm in names:
             g = GUESTS[nm]
             pair(nm, "standard", g["sizes"]["standard"], 4 << 20, "core", repeats, None, "baseline", fh, force)
+        return
+
+    if tier == "apps":
+        # The application statements, which measure whole protocol operations
+        # rather than a chip. They are their own tier because their sizes are
+        # calibrated against each other's wall clock rather than against the
+        # acceptance point's shard count: several of them saturate at five or
+        # six shards whatever `n` is, so shard count cannot order them.
+        for nm in [n for n, g in GUESTS.items() if g["tier"] == "D"]:
+            for label in ("small", "standard", "large"):
+                pair(nm, label, GUESTS[nm]["sizes"][label], 4 << 20, "core",
+                     repeats, None, "baseline", fh, force)
         return
 
     # standard: every Tier A and B guest, three sizes, core mode.
@@ -384,6 +396,24 @@ guest("uint256", "bench-uint256", 250, 500, 1_000, "B", "Uint256Mul", timeout=90
 guest("sort", "bench-sort", 15_000, 123_941, 250_000, "C", "memory and compare")
 guest("matmul", "bench-matmul", 57, 114, 160, "C", "dense regular arithmetic")
 guest("merkle", "bench-merkle", 1_024, 4_096, 8_192, "C", "sha256 + addressing")
+
+# The application statements. Sizes come from the wall clock of a GPU proof, not
+# from shard count: `eth-ecrecover`, `btc-schnorr`, `eth-groth16-inputs` and
+# `eth-bls-aggregate` sit at five or six shards for every `n` that finishes in a
+# sane time, because their widest chip fixes the count. Each standard size was
+# chosen to land near the ten seconds the acceptance point takes, with small at
+# about half and large at about double; every size below was proved and verified
+# before it was written down.
+guest("btc-headers", "bench-btc-headers", 400, 1_600, 3_000, "D",
+      "sha256, mined and verified")
+guest("eth-mpt", "bench-eth-mpt", 10, 20, 40, "D", "keccak over trie nodes")
+guest("eth-ecrecover", "bench-eth-ecrecover", 2, 8, 16, "D",
+      "secp256k1 sign and recover")
+guest("btc-schnorr", "bench-btc-schnorr", 2, 10, 20, "D", "BIP-340 sign and verify")
+guest("eth-groth16-inputs", "bench-eth-groth16-inputs", 2, 8, 16, "D",
+      "bn254 MSM over public inputs")
+guest("eth-bls-aggregate", "bench-eth-bls-aggregate", 8, 16, 32, "D",
+      "BLS12-381 G1 aggregation")
 
 
 if __name__ == "__main__":
