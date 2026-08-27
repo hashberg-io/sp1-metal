@@ -208,11 +208,21 @@ def run_once(name: str, n: int, arm: str, shard_size: int, mode: str,
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             proc.kill()
+        # Keep whatever the run had already written. A killed run's output was
+        # being thrown away, and once that hid the fact that a "hang" had
+        # already printed `proved and verified`: the proof was fine and the
+        # report afterwards was looping. A timeout says nothing about which.
         try:
-            proc.communicate(timeout=30)
+            out = proc.communicate(timeout=30)[0] or ""
         except subprocess.TimeoutExpired:
-            pass
-        return {"verified": False, "error": "timeout", "elapsed_s": round(time.time() - t0, 1)}
+            out = ""
+        row = {"verified": False, "error": "timeout",
+               "elapsed_s": round(time.time() - t0, 1)}
+        if out:
+            row["tail"] = out[-1500:]
+            if "proved and verified" in out:
+                row["error"] = "timeout after proving"
+        return row
 
     row = parse(out)
     row["returncode"] = rc

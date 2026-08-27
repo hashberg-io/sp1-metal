@@ -438,14 +438,24 @@ pub fn busy_histogram(buckets: usize) -> Vec<f64> {
         }
     }
     let mut out = vec![0.0; buckets];
+    // Walked by bucket rather than by cursor. Advancing a cursor through the
+    // span looks equivalent and is not: the two ways of naming a bucket
+    // boundary -- dividing to get the index and multiplying to get the edge --
+    // do not always round to the same place, so the edge can land at or just
+    // below the cursor. The share taken is then zero or negative and the step
+    // that was there to guarantee progress, a billionth of a bucket, needs a
+    // billion iterations to cross one. That is a report which never finishes
+    // after a proof that did: the process printed every table and then span,
+    // and it took a `sample` to see that the main thread was in here.
     for (s, e) in merged {
-        let (mut lo, hi) = (s, e);
-        while lo < hi {
-            let b = (((lo - start) / width) as usize).min(buckets - 1);
-            let edge = start + (b + 1) as f64 * width;
-            let take = hi.min(edge) - lo;
-            out[b] += take / width;
-            lo += take.max(width * 1e-9);
+        let first = (((s - start) / width) as usize).min(buckets - 1);
+        let last = (((e - start) / width) as usize).min(buckets - 1);
+        for (b, slot) in out.iter_mut().enumerate().take(last + 1).skip(first) {
+            let lo = start + b as f64 * width;
+            let take = e.min(lo + width) - s.max(lo);
+            if take > 0.0 {
+                *slot += take / width;
+            }
         }
     }
     out

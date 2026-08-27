@@ -125,15 +125,7 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ## Known issues
 
-One, and it is not on the path a proof takes.
-
-### The batched layer path fails intermittently when every chip is forced through it
-
-Setting `SP1_METAL_MIN_ENTRIES` very high **while** `SP1_METAL_BATCH` is on sends every chip, however wide, through the batched small-chip dispatch — a combination the defaults never produce, because a chip over 16 KB takes the per-chip path. In that regime roughly two secp256k1 proofs in three do not finish.
-
-It does not reproduce on the default path: 204 of 204 proofs verified in the last full benchmark run, and a size ladder over secp256k1 verifies at every point. It is not the lending defect below — it fails and succeeds under every upload policy — and being intermittent under otherwise deterministic settings, it looks like a race. Undiagnosed; `results/batched-layer-intermittent.md` has the reproduction and what has been ruled out.
-
-**Workaround:** do not raise `SP1_METAL_MIN_ENTRIES` above a layer's chip sizes with batching on. Raising it to disable GPU GKR entirely also wants `SP1_METAL_BATCH=0`.
+None outstanding. What follows is what was wrong and how you would recognise it in an older copy.
 
 ### Fixed, but worth knowing
 
