@@ -59,9 +59,14 @@ def diff(a: set, b: set) -> str:
 def check_hygiene() -> None:
     """Nothing machine-specific, and nothing that was never meant to ship."""
     print("machine independence and hygiene")
-    check("no absolute /Users paths are tracked", sh("git grep -lI '/Users/' -- .") == "",
-          sh("git grep -lI '/Users/' -- ."))
-    check("no scratch-directory paths are tracked", sh("git grep -lI 'CLAUDE_JOB_DIR' -- .") == "")
+    # Excluding this file: the patterns are string literals in it, so without
+    # that the checker is the one thing it always reports. That is the same
+    # self-match that made a `pgrep -f` waiter here wait on itself for hours.
+    me = ":(exclude)tools/check_consistency.py"
+    home = sh(f"git grep -lI '/Users/' -- . '{me}'")
+    check("no absolute home-directory paths are tracked", home == "", home)
+    scratch = sh(f"git grep -lI 'CLAUDE_JOB' -- . '{me}'")
+    check("no scratch-directory paths are tracked", scratch == "", scratch)
     files = set(tracked())
     strays = {f for f in files if re.fullmatch(r"[^/]+\.(log|json)", f) and f != "Cargo.lock"}
     check("no stray logs or dumps at the repository root", not strays, str(sorted(strays)))
