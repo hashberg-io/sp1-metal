@@ -94,7 +94,11 @@ def main() -> None:
         print("| " + " | ".join(hdr) + " |")
         print("|" + "|".join("---" for _ in hdr) + "|")
     else:
-        print(f"{'guest':<11}{'size':<9}{'config':<20}{'cyc':>10}{'shd':>4}"
+        # Widened to the longest name present: the application guests have names
+        # half again as long as the microbenchmarks', and a fixed width ran them
+        # into the size column.
+        gw = max(6, max((len(r["guest"]) for r in recs), default=6)) + 1
+        print(f"{'guest':<{gw}}{'size':<9}{'config':<20}{'cyc':>10}{'shd':>4}"
               f"{'cpu_med':>9}{'gpu_med':>9}{'speedup':>9}{'cpu_GB':>8}{'gpu_GB':>8}")
     for r in recs:
         cells = [r["guest"], r["size"], r["config"],
@@ -106,7 +110,7 @@ def main() -> None:
         if args.md:
             print("| " + " | ".join(cells) + " |")
         else:
-            print(f"{cells[0]:<11}{cells[1]:<9}{cells[2]:<20}{cells[3]:>10}{cells[4]:>4}"
+            print(f"{cells[0]:<{gw}}{cells[1]:<9}{cells[2]:<20}{cells[3]:>10}{cells[4]:>4}"
                   f"{cells[5]:>9}{cells[6]:>9}{cells[7]:>9}{cells[8]:>8}{cells[9]:>8}")
 
     ok = [r for r in recs if r.get("speedup")]
