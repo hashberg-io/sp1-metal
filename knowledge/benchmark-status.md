@@ -8,7 +8,7 @@
 |---|---|
 | Guests | **Done.** Fourteen in `guests/`, sources and ELFs committed. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
-| Standard tier | **Done.** `results/bench-standard.jsonl`, 198 runs, 33 points. Committed. |
+| Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
 | Full tier | **Done.** `results/bench-full.jsonl`, 406 runs, 53 points. Committed. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
@@ -38,6 +38,8 @@ nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
 
 ## What the standard tier found
 
+> The numbers below are from the 2026-08-24 run. The **2026-08-27 re-run against the fixed backend** is `results/bench-standard.md`: 204 runs, 34 points, **every proof verified**, median 3.60x over a range of 1.94x to 6.01x, with the compressed point at 3.12x. Its findings about *shape* — that size dominates chip mix, and that the memory advantage is flat — are unchanged; the differences are that keccak's large size is measured at all rather than timing out, that fib/large rose from 4.89x to 5.84x, and that divrem and keccak gave up some of their advantage because their slowest kernels no longer block a proof waiting to compile.
+
 198 paired runs, 33 points, every proof verified except the keccak hangs below.
 
 **Median 3.73x, range 2.52x - 5.73x.** `fib/standard` reached 5.70x, reproducing the 5.56x acceptance figure.
@@ -48,9 +50,11 @@ nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
 
 Full table: `results/bench-standard.md`.
 
-## Four defects, none fixed
+## Four defects, all closed on 2026-08-26
 
-Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `results/precompile-scaling.tsv`, `results/keccak-hang.md`.
+> Closed. See `knowledge/defect-plan.md` for what each turned out to be — two of the four were not what this section says they were. Defect 1, the "intermittent hang", and defect 3, the "scaling cliff", were both **wrong proofs**: SP1 retries a failed shard silently and leaves every thread parked, which reads as a hang. The section is kept as it was written because what it got wrong is the useful part.
+
+Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `results/precompile-scaling.tsv`, `results/keccak-hang.md`, `results/gkr-overlapping-lends.md`, `results/zerocheck-invalid-proofs.md`.
 
 1. **An intermittent hang.** `guests/keccak` at n>=2000 on the Metal arm sometimes stops dead at **0.0% CPU** with the machine idle. Roughly two runs in three, but genuinely intermittent — a point that hung in one tier completed in 8.86 s in the next. The CPU arm proves the same input in 13.3 s every time. Verification catches wrong answers; nothing catches this. **Fix this first.** The shape resembles the deferral hang in `backend.md` — threads parked with nothing outstanding in Metal — so a lost wakeup between a command buffer's completion handler and the thread waiting on it is the first suspect. `SP1_METAL_DEFER` is off, so that is not the cause.
 2. **The node bound does not predict compile cost.** `KeccakPermuteControl` (8,234 / 12,351 nodes) and `DivRem` (7,624 / 11,436) each cost about ten minutes to compile, while `Global:true` at **15,196** compiles instantly. Cached afterwards, so it is one-time per program — but it lands on a user's first proof, which appears to hang. It buys nothing: keccak's warm wall is 2.77 s with those kernels and 2.79-2.85 s without. Workaround `SP1_METAL_ZEROCHECK_MAX_NODES=8000`; the real fix is a better predictor than node count.
