@@ -637,6 +637,10 @@ struct Context {
     /// The pipeline for a chip and how many DAG nodes its body evaluates,
     /// which is what the reduction's cost is proportional to.
     pipelines: Mutex<HashMap<String, Option<(ComputePipelineState, usize, usize)>>>,
+    /// Chips whose kernel is being compiled right now, so a second thread --
+    /// or a second round of the same chip -- neither waits for it nor starts
+    /// it again.
+    compiling: Mutex<std::collections::HashSet<String>>,
     /// Row-major to column-major, for the trace the round is about to read.
     transpose_base: Option<ComputePipelineState>,
     transpose_ext: Option<ComputePipelineState>,
@@ -670,6 +674,7 @@ fn context() -> &'static Context {
             transpose_ext,
             device,
             pipelines: Mutex::new(HashMap::new()),
+            compiling: Mutex::new(std::collections::HashSet::new()),
         }
     })
 }
@@ -732,20 +737,21 @@ pub(crate) fn checking() -> bool {
 /// source, and building that DAG and walking it into text is paid on the
 /// calling thread with no deadline over it.
 ///
-/// So it is now what it should always have been: a cheap pre-filter against
-/// pathological source size, set well above every chip in the machine except
-/// those precompiles, rather than the edge of a cliff it was drawn on top of.
-const MAX_NODES: usize = 65_536;
+/// It stays where it was measured, at 16,384. Raising it was tried once the
+/// deadline made it *safe* and it turned out not to be *worth* it: the one core
+/// chip past the bound, `Global` at 22,794 nodes, takes on the order of half an
+/// hour to compile cold, so a raised bound abandons it on every cold machine
+/// after stalling every chip queued behind it, and accelerates it on none.
+const MAX_NODES: usize = 16_384;
 
 /// The node bound in force, which `SP1_METAL_ZEROCHECK_MAX_NODES` overrides.
 ///
-/// The old default of 16,384 caught exactly one core chip -- `Global`, at
-/// 22,794 nodes -- and raising it was measured at **1,814 seconds of kernel
-/// compilation**, taking the acceptance proof from 12.0 seconds to 463.6,
-/// while the other sixty-one kernels compiled in 0.04 seconds between them.
-/// That is why the bound could not be raised. With a deadline it can: `Global`
-/// is now offered to the compiler, declined when it does not finish in time,
-/// and remembered as declined.
+/// It catches exactly one core chip -- `Global`, at 22,794 nodes -- and letting
+/// it through was measured at **1,814 seconds of kernel compilation**, taking
+/// the acceptance proof from 12.0 seconds to 463.6, while the other sixty-one
+/// kernels compiled in 0.04 seconds between them. The deadline makes raising
+/// this safe rather than catastrophic, which is worth having; it does not make
+/// it useful.
 fn max_nodes() -> usize {
     static MAX: OnceLock<usize> = OnceLock::new();
     *MAX.get_or_init(|| {
@@ -765,94 +771,102 @@ fn max_nodes() -> usize {
 /// no bound drawn on it can. A deadline needs no prediction: a chip that compiles
 /// quickly is accepted whatever its size, and one that does not is declined
 /// whatever its size.
+///
+/// **A second, because waiting is no longer how a chip is judged.** Since the
+/// kernel is installed whenever it arrives, the only thing this budget buys is
+/// serving the round that asked: a warm compile takes hundredths of a second
+/// and is served, a cold one takes seconds to minutes and is not, and either
+/// way the chip ends up on the GPU. Longer budgets were tried and each one
+/// simply added its own length to the first proof of a program that has a slow
+/// chip -- sixty seconds of it, for nothing that was not going to arrive
+/// anyway.
 fn compile_budget() -> std::time::Duration {
     static BUDGET: OnceLock<std::time::Duration> = OnceLock::new();
     *BUDGET.get_or_init(|| {
         let secs = std::env::var("SP1_METAL_COMPILE_BUDGET")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0);
+            .unwrap_or(1.0);
         std::time::Duration::from_secs_f64(secs.max(0.0))
     })
 }
 
-/// Where the record of what has already blown the budget is kept.
+/// Starts this chip's kernel compiling, and waits only as long as it is worth
+/// waiting.
 ///
-/// The deadline has to be paid to be learnt, and a process learns nothing from
-/// the last one. macOS keys its own shader cache on the source text, so this
-/// does the same: a chip declined once is declined immediately ever after on
-/// this machine, and a chip that compiled is compiled again from a cache that
-/// is by then warm.
-fn budget_verdict_path(source: &str) -> Option<std::path::PathBuf> {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for b in source.as_bytes() {
-        hash ^= u64::from(*b);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    let home = std::env::var_os("HOME")?;
-    let dir = std::path::PathBuf::from(home).join("Library/Caches/sp1-metal/zerocheck");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join(format!("{hash:016x}")))
-}
-
-/// Compiles `source`, or gives up on it.
+/// Returns `Some(pipeline)` if the compiler finished inside the budget. It
+/// returns `None` both for a kernel that failed to build and for one that is
+/// still being built — the difference is that a kernel still being built is
+/// **installed when it arrives**, so the chip runs on the CPU until then and on
+/// the GPU afterwards, and nothing is ever denied for having been slow once.
 ///
-/// The compiler is synchronous and cannot be cancelled, so the work goes to a
-/// thread and this waits with a deadline; on expiry the chip is declined and
-/// the thread is left to finish and drop what it built, which costs nothing but
-/// its own completion.
+/// That matters more than it sounds. Two chips in the machine take about ten
+/// minutes to compile and it is worth almost nothing to compile them; a third,
+/// `ShaCompress`, takes over a minute and is worth **five times** on the guest
+/// that uses it. A deadline that declines permanently cannot tell those apart
+/// and gets the second one badly wrong. A deadline that only stops *waiting*
+/// does not have to tell them apart at all.
 ///
-/// The thread takes the process-wide compile lock rather than the caller,
-/// because the caller lets go when the deadline expires: holding it here would
-/// release it while a compile was still running, which is exactly the
-/// concurrent pipeline creation that deadlocks in the driver.
-///
-/// **An abandoned compile keeps that lock until it finishes**, which for the
-/// chips this exists to catch is another ten minutes. So nothing waits for it:
-/// while one is outstanding every other chip declines on the spot and goes to
-/// the CPU, rather than queueing behind a compile whose result nobody wants.
-/// Waiting for the lock instead -- even without charging it to the budget --
-/// makes the first slow chip block every chip after it, which is worse than
-/// the pathology it was meant to fix and is how the first version of this
-/// behaved.
-fn compile_within(device: &Device, source: &str) -> Option<ComputePipelineState> {
-    /// Compiles that blew their budget and are still running.
-    static ABANDONED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The compiling thread takes the process-wide compile lock rather than the
+/// caller, because the caller lets go: holding it here would release it while a
+/// compile was still running, which is exactly the concurrent pipeline creation
+/// that deadlocks in the driver.
+fn compile_within(
+    key: &str,
+    source: &str,
+    base_muls: usize,
+    nodes: usize,
+) -> Option<(ComputePipelineState, usize, usize)> {
+    /// Compiles that have started and not finished, anywhere in the process.
+    static OUTSTANDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     use std::sync::atomic::Ordering;
 
-    let verdict = budget_verdict_path(source);
-    if let Some(path) = verdict.as_ref() {
-        if std::fs::read_to_string(path).is_ok_and(|v| v.starts_with("slow")) {
-            return None;
-        }
-    }
-    if ABANDONED.load(Ordering::Acquire) > 0 {
+    let ctx = context();
+    // One at a time, and nobody waits for the one in progress. The driver
+    // serialises pipeline creation anyway, so a second compile could only
+    // queue -- and queueing is what made the first slow chip cost every chip
+    // behind it a full budget each, turning a keccak proof into two minutes.
+    // A chip that arrives while another is compiling takes the CPU for this
+    // round and asks again on the next one, of which there are many.
+    if OUTSTANDING.load(Ordering::Acquire) > 0 {
         return None;
     }
+    // Already being compiled: this round goes to the CPU rather than queueing.
+    if !ctx.compiling.lock().expect("compiling poisoned").insert(key.to_string()) {
+        return None;
+    }
+    OUTSTANDING.fetch_add(1, Ordering::AcqRel);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let device = device.clone();
+    let device = ctx.device.clone();
     let src = source.to_string();
-    ABANDONED.fetch_add(1, Ordering::AcqRel);
+    let owned_key = key.to_string();
     std::thread::spawn(move || {
-        let _compiling = sp1_metal_probes::compile::lock();
-        let pso = device
-            .new_library_with_source(&src, &metal::CompileOptions::new())
-            .ok()
-            .and_then(|library| library.get_function("zc_round", None).ok())
-            .and_then(|f| device.new_compute_pipeline_state_with_function(&f).ok());
-        ABANDONED.fetch_sub(1, Ordering::AcqRel);
-        let _ = done_tx.send(pso);
+        let built = {
+            let _compiling = sp1_metal_probes::compile::lock();
+            device
+                .new_library_with_source(&src, &metal::CompileOptions::new())
+                .ok()
+                .and_then(|library| library.get_function("zc_round", None).ok())
+                .and_then(|f| device.new_compute_pipeline_state_with_function(&f).ok())
+        };
+        let entry = built.map(|p| (p, base_muls, nodes));
+        // Installed whether or not anybody is still waiting: a kernel that took
+        // ten minutes is of no use to the round that asked for it and every use
+        // to the next proof in the process.
+        let ctx = context();
+        ctx.pipelines
+            .lock()
+            .expect("pipelines poisoned")
+            .insert(owned_key.clone(), entry.clone());
+        ctx.compiling.lock().expect("compiling poisoned").remove(&owned_key);
+        OUTSTANDING.fetch_sub(1, Ordering::AcqRel);
+        let _ = done_tx.send(entry);
     });
     let budget = compile_budget();
-    let out = if budget.is_zero() {
-        done_rx.recv().ok().flatten()
-    } else {
-        done_rx.recv_timeout(budget).ok().flatten()
-    };
-    if let Some(path) = verdict.as_ref() {
-        let _ = std::fs::write(path, if out.is_some() { "ok" } else { "slow" });
+    if budget.is_zero() {
+        return done_rx.recv().ok().flatten();
     }
-    out
+    done_rx.recv_timeout(budget).ok().flatten()
 }
 
 /// The pipeline for a chip, generated and compiled on first sight.
@@ -916,14 +930,20 @@ fn pipeline_for<Fx: PrimeField32>(
             crate::prover::zerocheck::counters::note_no_pipeline(key, "over the node bound", nodes);
             None
         } else {
-            let pso = compile_within(&ctx.device, &source);
-            if pso.is_none() {
+            let entry = compile_within(key, &source, base_muls, nodes);
+            if entry.is_none() {
                 crate::prover::zerocheck::counters::note_no_pipeline(
                     key,
-                    "did not compile within the budget",
+                    "still compiling",
                     nodes,
                 );
+                // Deliberately not recorded as a decision: the compiling thread
+                // installs the kernel when it has one, and until then this chip
+                // takes the CPU path it would have taken anyway.
+                stats::record_compile(compile_start.elapsed().as_secs_f64());
+                return None;
             }
+            let pso = entry.map(|(p, _, _)| p);
             // What the compiler will actually let this kernel run. A generated
             // body of hundreds of live extension values can need more registers
             // than a threadgroup of 256 has, and the driver says so here rather

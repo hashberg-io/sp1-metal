@@ -106,7 +106,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |
 | `SP1_METAL_ZEROCHECK_MAX_NODES` | constraint-DAG nodes above which a chip's kernel is not even generated | 65536 |
-| `SP1_METAL_COMPILE_BUDGET` | seconds a chip's kernel may spend in the Metal compiler | 5 |
+| `SP1_METAL_COMPILE_BUDGET` | seconds a round will wait for its chip's kernel to compile | 1 |
 | `SP1_METAL_PERMITS` | shards proved at once, where the cap is above one | as the caller set it |
 | `SP1_METAL_ZC_LAYOUT` | column-major zerocheck layout | **off** — measured 21% slower |
 | `SP1_METAL_DEFER` | deferred command-buffer submission | **off** — produces wrong proofs |
@@ -129,7 +129,9 @@ None outstanding. What follows is what was wrong and how you would recognise it 
 
 **A Keccak or division program's first proof appeared to hang for ten minutes.** `KeccakPermuteControl` and `DivRem` each take about that long in the Metal compiler, paid on the first proof with no output. Node count never predicted it — `Global:true` at 15,196 nodes compiles instantly while `KeccakPermuteControl` at 12,351 does not — so the bound drawn on node count could neither catch them nor be raised past them.
 
-A chip's kernel now gets `SP1_METAL_COMPILE_BUDGET` seconds and is declined if it is not ready, and the verdict is remembered under `~/Library/Caches/sp1-metal/` so the wait is paid once per source per machine rather than once per process. A keccak proof's first run is 10.6 s and its second 5.3 s, with no workaround set. Raise the budget if you would rather wait: `SP1_METAL_COMPILE_BUDGET=600` restores the old behaviour.
+A round now waits `SP1_METAL_COMPILE_BUDGET` seconds for its chip's kernel and takes the CPU if it is not ready — but the kernel is **installed whenever it arrives**, so nothing is refused for having been slow once, and a chip whose kernel lands mid-proof is on the GPU for the rest of it. A keccak proof is 6.3 s with no workaround set, where its first used to stall for ten minutes.
+
+The one cost is that a program whose chip takes longer to compile than the proof takes to run never sees that kernel, because the process exits first: `divrem` settles at 18.7 s against 14.1 s when the kernel is present. macOS caches a compiled shader against its source, so `SP1_METAL_COMPILE_BUDGET=900` on a single run pays for it once and every run after that gets the kernel immediately.
 
 Two proofs that did not verify, both fixed on 2026-08-26, and both of which presented as a hang: SP1 retries a failed shard silently and leaves every thread parked, so nothing but `RUST_LOG=error` says what happened.
 
