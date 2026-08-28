@@ -128,7 +128,7 @@ The counters are now part of what a run reports: hand-offs kept, taken, dropped 
 | codewords, encode to Merkle | 265 | 261 | 4 | 0 |
 | arrays, jagged reduce to fold | 2,556 | 852 | 0 | 0 |
 
-So the codeword hand-off is orphaned about one time in seventy, roughly once every three proofs. No orphan had its address handed out again at the same length inside those twelve proofs — which is the same statement as "the fault did not fire", and it took ninety-four proofs to fire above. The jagged cache, which has the same shape, never leaked at all, so its fix is a precaution rather than a repair.
+So the codeword hand-off is orphaned about one time in seventy, roughly once every three proofs — a rate that held over four hundred proofs later on, at 108 in 8,413. No orphan had its address handed out again at the same length inside those twelve proofs, which is the same statement as "the fault did not fire"; it took ninety-four proofs to fire above. The jagged cache, which has the same shape, never leaked at all, so its fix is a precaution rather than a repair.
 
 **Why `SP1_METAL_MERKLE=0` is a complete workaround for it.** With the tree on the CPU nothing ever *takes*: the encode still leaves buffers, `digest_layers` is never called, and no stale entry can be matched. That is consistent with 115 consecutive proofs and a full-scale run passing on the consumer's machine, and it is consistent with the failure surviving `SP1_METAL_UPLOAD_FRESH=1`, which does not reach this route.
 
@@ -151,11 +151,26 @@ The first cannot go wrong: while the entry lives the allocation lives, so nothin
 - The jagged round cache, which is the same design one crate over, gets the same treatment: its reduction drops what the previous round left, since the fold that was supposed to clear it is skipped for a round with too few pairs.
 - `sp1-profile-host` takes `--repeat N`, which proves through one client the way a consumer's driver does, and `--timeout SECS`, which is a watchdog thread that says the run is parked and leaves with status 2. The parking is most of what this defect costs, and nothing in SP1 says it has happened.
 
-### What this does not settle
+### The same soak with the fix in
 
-The tree is now demonstrably built over the wrong bytes, and this is a mechanism that would do exactly that. It is not yet demonstrated to be *the* mechanism. What would demonstrate it is the same soak with the fix in and nothing else changed: at one failure in ninety-four, a few hundred clean proofs is evidence and a hundred is not.
+Same binary but for the hand-off, same workload, same checking switch, four times as long:
 
-Two smaller things that fit and are not proof. The failure took ninety-four proofs at a rate the consumer measured at one in twenty-eight, on a workload with two shards where theirs has many — and a hand-off is orphaned per commitment, so the exposure should scale with commitments rather than with proofs. And the run that failed had just slowed by half under contention from another job, which is when a tokio task is likeliest to change worker between the encode and the commit.
+```
+400 of 400 proofs verified, 0 failed, in 3 h 03 m
+handoff codewords:    8,413 kept, 8,305 taken,   108 dropped unclaimed, 0 on a dead entry's address
+handoff round arrays: 85,200 kept, 28,400 taken,   0 dropped unclaimed, 0 on a dead entry's address
+```
+
+**One hundred and eight orphans.** Each is an entry that under the previous arrangement would have sat on a pointer to freed memory for up to sixteen hand-offs, waiting for the allocator to hand that address out again; each was dropped at the end of the commitment it belonged to instead. That is the fault's supply, counted, and it does not stop being produced — it stops being reachable.
+
+The unfixed build failed at the ninety-fourth proof of this soak. Four hundred clean proofs at that rate is a **one-in-seventy** coincidence, so this is evidence rather than proof, and it is the kind of evidence a rare fault admits of. The jagged cache produced no orphans at all in 85,200 hand-offs, which settles that its fix was a precaution.
+
+What is still not settled is the consumer's own workload, which has many more shards per proof than this one and measured the fault four times more often. A hand-off is orphaned per commitment, so the exposure scales with commitments rather than with proofs, and their run is the one that would show it soonest.
+
+### What is left
+
+- **Run it on the consumer's statement.** That is the workload the rate was measured on, and it is the only one that can retire the workaround for them.
+- **Decide whether the hand-off is worth keeping at all.** It exists so that the largest allocation in a proof is not wired into a Metal buffer twice, and the module's own note says that effect is "small enough that it needs an A/B on one binary to be seen at all". If that holds, `SP1_METAL_REUSE` defaulting to off would remove this hazard class rather than bound it, which is a better answer than the one above. The A/B needs an idle machine and has not been taken.
 
 ## What a fix would need
 

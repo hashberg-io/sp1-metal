@@ -133,7 +133,7 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ### 🚨 An intermittent wrong proof, which parks the run
 
-**Set `SP1_METAL_MERKLE=0` for anything you are not watching.**
+**On `v0.1.0`, set `SP1_METAL_MERKLE=0` for anything you are not watching.** At the tip the cause has been found and fixed, and the fix has four hundred clean proofs behind it on the soak that produced the fault at ninety-four — evidence, not proof, so watch your own workload before trusting it unattended.
 
 With every phase accelerated, a proof fails SP1's own shard verification roughly **once every twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
 Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says nothing.
@@ -145,7 +145,9 @@ It costs most of the advantage — 4.72× becomes 1.92× on the workload it was 
 Reported by a consumer, and **since reproduced here**: a hundred-proof run under `SP1_METAL_MERKLE=check` verified ninety-three and then found the GPU's tree disagreeing with the CPU's at **layer zero, digest zero** — the leaves, so the tree was built over the wrong bytes rather than built wrongly. The run then parked, and the watchdog said so after fifteen minutes of nothing.
 
 A defect has been found and fixed on that route: the table that hands a codeword's buffer from the encode to the Merkle kernels was keyed on a raw pointer and could outlive the allocation that pointer named, which in a process making many proofs is a use-after-free waiting for an address to be handed out twice.
-It fits everything reported, including why turning the tree off is a complete workaround — nothing then takes from the table — but a fault this rare is only shown fixed by a long run, so treat the warning above as standing until this section says otherwise.
+It fits everything reported, including why turning the tree off is a complete workaround — nothing then takes from the table.
+The same soak with the fix in ran **400 of 400** and dropped 108 orphaned hand-offs along the way, each one an entry that would previously have sat on a pointer to freed memory waiting for the allocator to hand that address out again.
+What is not settled is the workload the rate was actually measured on: a hand-off is orphaned per commitment, and a statement with many more shards per proof than `fib` is exposed proportionally more often.
 The reproduction, the counts and the mechanism are in [knowledge/defect-wrong-proof.md](knowledge/defect-wrong-proof.md).
 
 Two things exist now that did not:
