@@ -4,29 +4,9 @@ GPU proving for the [SP1](https://github.com/succinctlabs/sp1) zkVM on Apple Sil
 SP1's official GPU story is CUDA-only and no Metal backend exists anywhere public, so on Apple hardware the prover falls back to CPU.
 This closes part of that gap: four phases of a shard proof run on the GPU, and a real proof verifies.
 
-**On an M4 Max, core shard proving is 6.0x faster than the same machine's CPU prover** on a large workload — 15.04 s against 90.39 s, both arms through one binary.
+**On an M4 Max it proves a shard up to 6.0x faster than the same machine's CPU prover.** That is the best case; the median across fourteen microbenchmarks is 3.6x, and across eight whole Bitcoin and Ethereum statements it is 2.98x, which is the number to plan against. [Benchmarks](#benchmarks) has the range, the second machine, and the caveats that matter more than the headline.
 
-That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **1.94x to 6.01x** with a median of 3.6x, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **2.9x to 3.1x** across three guests, so recursion roughly halves the advantage and the 5x bar is not met. Those three figures are the one place a second machine disagrees, and the disagreement points at how they were taken rather than at the hardware — see below.
-
-Those are microbenchmarks. **Eight whole statements from Bitcoin and Ethereum — a mined header chain, Merkle-Patricia proofs, `ecrecover`, BIP-340, the public-input and pairing halves of a Groth16 verification, and a sync-committee BLS signature — measure 2.48x to 5.75x with a median of 2.98x**, about a fifth below the microbenchmarks taken on the same machine the same day. That gap is the point of measuring them: it is what someone deploying one of these would actually get.
-
-They also invert the size effect. Only the header chain climbs as it grows, and it is the only one of the eight with much ordinary work around its precompile; the rest are flat or fall. A workload already saturated with precompile rows gains nothing from being bigger, which is what the microbenchmarks' "bigger is better" was really measuring. Full table: [`results/bench-apps.md`](results/bench-apps.md).
-
-One consumer has now run the whole thing end to end on a statement they deploy: 219 ZKBoo responses proved in one zkVM program, wrapped to Groth16 and verified on chain, in **2 h 51 m against 6 h 28 m** for the same pass on the same machine's CPU prover. That is **2.27x**, and it is the lowest figure in this file for two reasons worth separating — it is execute-to-Groth16 rather than shard proving, and it was taken with the Merkle tree left on the CPU, because with the tree accelerated that run does not finish. See the warning below.
-
-The fourteen microbenchmarks have each been measured twice, ten hours apart on the same machine — once on their own, once inside the larger matrix that adds the shard-size, thread-count, ablation and compressed-mode sweeps.
-That is 570 timed runs, of which 564 verified, and the application statements add 144 more with no failures at all.
-The six that did not are one configuration, deliberately out of range — it raises the zerocheck node bound until a chip becomes eligible whose kernel takes longer to compile than a run is allowed to take.
-Of the thirty-three workloads the two matrices share, twenty-nine agree to within 0.25x.
-The four that do not are keccak and divrem, and they differ only in the GPU arm: macOS caches a compiled kernel across runs, so those two are slower the first time a machine ever proves them and settle afterwards — divrem/standard at 5.14x rather than 3.75x, keccak/small at 3.19x rather than 2.41x.
-The 1.94x floor quoted above is keccak on a large workload against a cold cache; warm it is 2.16x, so that floor is a first-run cost rather than a steady state, and [USING.md](USING.md) says how to pay it once, up front.
-
-The whole matrix has also been measured on a second machine, an M5 Max.
-Both arms are 8 to 10 per cent faster and the ratio between them is unchanged — a median of 3.90x against 3.93x over the sixty-four points the two machines share, with the same guest best and the same guest worst at each end — and every structural finding reproduces: the phase ablation accounts for 60 per cent of the whole rather than 61, in the same order and with the Merkle tree still the largest single item; shard size is still flat; concurrency still stops mattering above four.
-The compressed points are the exception, and they move on one side only. Their CPU arms shift by the same tenth as everything else while their GPU arms move by 1.28x to 1.48x, which no other point in the matrix comes close to. A shader cache that was warm for the core guests and cold for the recursion kernels explains that; a generational step reaching recursion alone does not. So the compressed figures above are under a question about the M4 measurement rather than superseded by the M5 one — the warm readings are 3.45x to 4.01x, and the 5x bar is missed either way.
-The eight application statements measure **2.67x to 5.99x with a median of 3.17x** on the M5, against 2.48x to 5.75x and a median of 2.98x on the M4. They are the one tier where the two arms do not move together — the CPU arm gains a median 8.7% and the GPU arm 13.5% — and whether that is the newer GPU on long workloads or the M4 reference having been taken with no pause between proofs is not yet settled. The first attempt at that tier on the M5 ran too hot to quote and was taken again; both the ruined run and the paced one are in [`results/m5-max.md`](results/m5-max.md) alongside the comparison.
-
-Every figure here comes from [`results/`](results); [the verdict](knowledge/verdict.md) says which of this project's earlier claims survived and which did not.
+[The verdict](knowledge/verdict.md) says what was asked, what was measured, and which of this project's earlier claims did not survive. Every figure comes from [`results/`](results).
 
 This is experimental software and an independent fork. It is not affiliated with, endorsed by, or supported by Succinct Labs.
 
@@ -34,7 +14,7 @@ This is experimental software and an independent fork. It is not affiliated with
 
 You do not need to clone this. Three blocks of TOML in your host's manifest point cargo at this repository, and the Metal path is on from there — see **[USING.md](USING.md)**.
 
-🚨 **Set `SP1_METAL_MERKLE=0` for anything you are not watching.** A consumer proving in a loop hits a Merkle root mismatch about once every twenty-eight proofs, and SP1 then retries the shard silently and parks: no output, no exit. No invalid proof is accepted — what is at risk is the run finishing, which for an overnight run is the whole of it. It has since been reproduced here, localised to the leaves of the tree, and traced to a use-after-free on the route the codeword takes to those leaves. That is fixed: the soak that produced the fault at its ninety-fourth proof now runs four hundred clean. Watch your own workload before trusting it unattended, and on `v0.1.0` keep the switch set. [The known issue](USING.md#-an-intermittent-wrong-proof-which-parks-the-run), and [what was found](knowledge/defect-wrong-proof.md).
+⚠️ **An intermittent wrong proof, fixed in `v1.0.0`.** A consumer proving in a loop hit a Merkle root mismatch about once every twenty-eight proofs, after which SP1 retried the shard silently and parked: no output, no exit. No invalid proof is accepted — what was at risk is the run finishing, which for an overnight run is the whole of it. It was reproduced here, localised to the leaves of the tree, and traced to a use-after-free on the route the codeword takes to those leaves. The soak that produced the fault at its ninety-fourth proof now runs four hundred clean. That is evidence rather than proof, so watch your own workload before trusting it unattended; **on `v0.1.0`, set `SP1_METAL_MERKLE=0`**. [The known issue](USING.md#-an-intermittent-wrong-proof-which-parks-the-run), and [what was found](knowledge/defect-wrong-proof.md).
 
 ## Seeing it work
 
@@ -69,6 +49,42 @@ It refuses to run on a loaded machine, because a pair timed under load measures 
 - [`guests/`](guests) — the twenty-two guest programs every measurement is taken against, sources and built ELFs. Fourteen are microbenchmarks and composites; eight are whole Bitcoin and Ethereum statements.
 - [`results/`](results) — the measurements the documents cite.
 - [`tools/`](tools) — the quickstart, the benchmark suite and its reporter, the acceptance ladder, the span and sample profilers, the phase model, and the consistency checker that holds these documents to what the code says.
+
+## Benchmarks
+
+### The headline, and why it is not the number to plan against
+
+**On an M4 Max, core shard proving is 6.0x faster than the same machine's CPU prover** on a large workload — 15.04 s against 90.39 s, both arms through one binary.
+
+That is the best case, and quoting it alone would mislead. Across fourteen guests, three workload sizes and three repeats, the measured range is **1.94x to 6.01x** with a median of 3.6x, and what moves it is the size of the workload rather than what the workload computes: a small proof gets about 3.5x whatever chips it exercises, because this backend does not remove the floor underneath it. Compressed proving — which is what this project's own [D7](knowledge/desiderata.md) bar is written against — measures **2.9x to 3.1x** across three guests, so recursion roughly halves the advantage and the 5x bar is not met. Those three figures are the one place a second machine disagrees, and the disagreement points at how they were taken rather than at the hardware — see below.
+
+### Whole statements, which get less
+
+Those are microbenchmarks. **Eight whole statements from Bitcoin and Ethereum — a mined header chain, Merkle-Patricia proofs, `ecrecover`, BIP-340, the public-input and pairing halves of a Groth16 verification, and a sync-committee BLS signature — measure 2.48x to 5.75x with a median of 2.98x**, about a fifth below the microbenchmarks taken on the same machine the same day. That gap is the point of measuring them: it is what someone deploying one of these would actually get.
+
+They also invert the size effect. Only the header chain climbs as it grows, and it is the only one of the eight with much ordinary work around its precompile; the rest are flat or fall. A workload already saturated with precompile rows gains nothing from being bigger, which is what the microbenchmarks' "bigger is better" was really measuring. Full table: [`results/bench-apps.md`](results/bench-apps.md).
+
+### End to end, on a workload someone deploys
+
+One consumer has now run the whole thing end to end on a statement they deploy: 219 responses proved in one zkVM program, wrapped to Groth16 and verified on chain, in **2 h 51 m against 6 h 28 m** for the same pass on the same machine's CPU prover. That is **2.27x**, and it is the lowest figure here for two reasons worth separating — it is execute-to-Groth16 rather than shard proving, and it was taken with the Merkle tree left on the CPU, because with the tree accelerated that run did not finish before the fix above.
+
+### How much of this was measured twice
+
+The fourteen microbenchmarks have each been measured twice, ten hours apart on the same machine — once on their own, once inside the larger matrix that adds the shard-size, thread-count, ablation and compressed-mode sweeps.
+That is 570 timed runs, of which 564 verified, and the application statements add 144 more with no failures at all.
+The six that did not are one configuration, deliberately out of range — it raises the zerocheck node bound until a chip becomes eligible whose kernel takes longer to compile than a run is allowed to take.
+Of the thirty-three workloads the two matrices share, twenty-nine agree to within 0.25x.
+The four that do not are keccak and divrem, and they differ only in the GPU arm: macOS caches a compiled kernel across runs, so those two are slower the first time a machine ever proves them and settle afterwards — divrem/standard at 5.14x rather than 3.75x, keccak/small at 3.19x rather than 2.41x.
+The 1.94x floor quoted above is keccak on a large workload against a cold cache; warm it is 2.16x, so that floor is a first-run cost rather than a steady state, and [USING.md](USING.md) says how to pay it once, up front.
+
+### A second machine
+
+The whole matrix has also been measured on a second machine, an M5 Max.
+Both arms are 8 to 10 per cent faster and the ratio between them is unchanged — a median of 3.90x against 3.93x over the sixty-four points the two machines share, with the same guest best and the same guest worst at each end — and every structural finding reproduces: the phase ablation accounts for 60 per cent of the whole rather than 61, in the same order and with the Merkle tree still the largest single item; shard size is still flat; concurrency still stops mattering above four.
+
+The compressed points are the exception, and they move on one side only. Their CPU arms shift by the same tenth as everything else while their GPU arms move by 1.28x to 1.48x, which no other point in the matrix comes close to. A shader cache that was warm for the core guests and cold for the recursion kernels explains that; a generational step reaching recursion alone does not. So the compressed figures above are under a question about the M4 measurement rather than superseded by the M5 one — the warm readings are 3.45x to 4.01x, and the 5x bar is missed either way.
+
+The eight application statements measure **2.67x to 5.99x with a median of 3.17x** on the M5, against 2.48x to 5.75x and a median of 2.98x on the M4. They are the one tier where the two arms do not move together — the CPU arm gains a median 8.7% and the GPU arm 13.5% — and whether that is the newer GPU on long workloads or the M4 reference having been taken with no pause between proofs is not yet settled. The first attempt at that tier on the M5 ran too hot to quote and was taken again; both the ruined run and the paced one are in [`results/m5-max.md`](results/m5-max.md) alongside the comparison.
 
 ## Tests
 

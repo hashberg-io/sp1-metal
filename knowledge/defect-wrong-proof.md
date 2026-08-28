@@ -1,6 +1,6 @@
 # An intermittent wrong proof, and the run that never returns
 
-Found 2026-08-28 by a consumer — the ProofofSeed SNARK lifter — proving leaf after leaf through this backend at `v0.1.0` against SP1 6.4.0, and reproduced here the same day.
+Found 2026-08-28 by a consumer running a SNARK lifter, proving leaf after leaf through this backend at `v0.1.0` against SP1 6.4.0, and reproduced here the same day.
 
 The first half of this note is the consumer's evidence and the reasoning done from it, kept as it was written so the guesses can be read against the answer.
 [Reproduced, and localised to the leaves](#reproduced-and-localised-to-the-leaves) is where it turns into a measurement.
@@ -56,7 +56,7 @@ That is an inference from exclusion, not a localisation. Nothing here identifies
 
 `SP1_METAL_MERKLE=0` leaves the tree on the CPU and accelerates everything else.
 
-**115 consecutive proofs with no failure** — a run of 51 stopped by its own wall-clock cap, and a complete run of 64 — followed by a **full-scale proof of a far larger body of shards**, which also completed clean: 219 ZKBoo responses verified in one zkVM program, 2 h 51 m 36 s, a Groth16 wrap, and an on-chain verification at 270,441 gas.
+**115 consecutive proofs with no failure** — a run of 51 stopped by its own wall-clock cap, and a complete run of 64 — followed by a **full-scale proof of a far larger body of shards**, which also completed clean: 219 responses verified in one zkVM program, 2 h 51 m 36 s, a Groth16 wrap, and an on-chain verification at 270,441 gas.
 
 Against a rate of one in 28, those 115 proofs predict 4.1 failures and the chance of seeing none is **1.6%**. Three events is a thin basis for a rate and the interval around it is wide, so this is evidence at about the two-percent level rather than a demonstration.
 
@@ -188,6 +188,6 @@ What is still open:
 ## Provenance
 
 Measured on an M4 Max, 16 cores / 137 GB, `RAYON_NUM_THREADS=12 GOMAXPROCS=12`, one run at a time on an otherwise idle machine, against `sp1-metal` v0.1.0 and SP1 6.4.0.
-The consumer-side record, including the logs, is in `ProofofSeed/snark-lifter/knowledge/gpu-corruption.md` and `fixtures/gpu-failure-*.log`.
+The consumer-side record, including the logs, is held by the consumer and is not part of this repository.
 
-Separately, that full-scale run is the measurement [verdict.md](verdict.md) named as the one that would change it — wall clock on the ProofofSeed classical-128 lift, the workload D7's bar is written against and which had never been run on. It is **2.27×** end to end at the safe setting, against 6 h 28 m for the same pass on the CPU. It has since been written into the verdict, where it closes that item without moving the answer: the bar is 5x.
+Separately, that full-scale run is the measurement [verdict.md](verdict.md) named as the one that would change it — wall clock on the canonical classical-128 lift, the workload D7's bar is written against and which had never been run on. It is **2.27×** end to end at the safe setting, against 6 h 28 m for the same pass on the CPU. It has since been written into the verdict, where it closes that item without moving the answer: the bar is 5x.

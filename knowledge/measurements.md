@@ -91,7 +91,7 @@ Two smaller findings from the same audit. Building with `lto = "fat"` and `codeg
 
 ## Where the time goes
 
-Profiled by replaying the ProofofSeed snark-lifter's compressed proof at n=8 through the span-timing host: 1007 s wall, proved and verified, 3997 s of accounted span time over 105 span paths.
+Profiled by replaying a SNARK lifter's compressed proof at n=8 through the span-timing host: 1007 s wall, proved and verified, 3997 s of accounted span time over 105 span paths.
 
 | phase | seconds | share |
 |---|---|---|

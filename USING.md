@@ -45,12 +45,12 @@ slop-basefold-prover = "=6.4.0"
 p3-uni-stark = "=0.4.3-succinct"
 
 [patch.crates-io]
-sp1-hypercube        = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
-slop-jagged          = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
-slop-multilinear     = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
-slop-basefold-prover = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
-slop-dft             = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
-p3-uni-stark         = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v0.1.0" }
+sp1-hypercube        = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
+slop-jagged          = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
+slop-multilinear     = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
+slop-basefold-prover = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
+slop-dft             = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
+p3-uni-stark         = { git = "https://github.com/hashberg-io/sp1-metal", tag = "v1.0.0" }
 ```
 
 Then build with the feature on:
@@ -133,7 +133,7 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ### 🚨 An intermittent wrong proof, which parks the run
 
-**On `v0.1.0`, set `SP1_METAL_MERKLE=0` for anything you are not watching.** At the tip the cause has been found and fixed, and the fix has four hundred clean proofs behind it on the soak that produced the fault at ninety-four — evidence, not proof, so watch your own workload before trusting it unattended.
+**Fixed in `v1.0.0`.** The cause has been found and fixed, and the fix has four hundred clean proofs behind it on the soak that produced the fault at its ninety-fourth — evidence, not proof, so watch your own workload before trusting it unattended. **On `v0.1.0`, set `SP1_METAL_MERKLE=0` for anything you are not watching**; the paragraphs below describe that release.
 
 With every phase accelerated, a proof fails SP1's own shard verification roughly **once every twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
 Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says nothing.

@@ -1158,21 +1158,21 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "sp1-metal-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metal",
 ]
 
 [[package]]
 name = "sp1-metal-kernelbench"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metal",
 ]
 
 [[package]]
 name = "sp1-metal-probes"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metal",
  "rand",

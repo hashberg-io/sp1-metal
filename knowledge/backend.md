@@ -207,12 +207,12 @@ So what remains of step 8 is the reduction: generate three-point constraint kern
 
 ## 9. Acceptance
 
-The run D7 names is the ProofofSeed classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again, which is not this project's to start.
+The run D7 names is the canonical classical-128 lift, roughly 7.3 hours on the CPU path, and the `SP1_DUMP` pair that would reproduce it no longer exists on this machine; regenerating it needs that host run again, which is not this project's to start.
 The harness for it is ready: `crates/sp1-profile-host` builds against the fork, takes `--features metal` to turn the GPU path on, proves and verifies, and now accepts `--stdin-u32` so a small guest can drive it. A fibonacci core proof through it is the standing smoke test — 18.2 s on the CPU path, and the number to beat.
 
 ### The scaling law, measured
 
-The proof-of-seed pair is gone, so acceptance is a set of canonical non-trivial computations instead, run in pairs through the *same* binary with `SP1_METAL_MIN_ENTRIES` switching the Metal path on and off, so nothing but the path under test differs.
+That pair is gone, so acceptance is a set of canonical non-trivial computations instead, run in pairs through the *same* binary with `SP1_METAL_MIN_ENTRIES` switching the Metal path on and off, so nothing but the path under test differs.
 Three guests: `fib` at 9 cycles per iteration, `mem` at 21.7, `bits` at 14.
 
 Holding work fixed at two million fibonacci iterations and sweeping the shard size across a sixteen-fold range moves the ratio from 1.211x to 1.256x — about +0.009x per doubling, which is flat.

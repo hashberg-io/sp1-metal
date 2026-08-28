@@ -1,7 +1,7 @@
 # Minimum desiderata
 
 What an SP1 Metal client must deliver to be worth shipping.
-Written 2026-08-19, at the close of a day that established (during ProofofSeed snark-lifter work, on an M4 Max) that no Apple-Silicon GPU proving path exists in any major zkVM: SP1's GPU backend is CUDA-only, and RISC Zero dropped its Metal segment prover in the v2 circuit rewrite.
+Written 2026-08-19, at the close of a day that established (during SNARK-lifter work, on an M4 Max) that no Apple-Silicon GPU proving path exists in any major zkVM: SP1's GPU backend is CUDA-only, and RISC Zero dropped its Metal segment prover in the v2 circuit rewrite.
 Prior-art check the same day: no public SP1 Metal project exists (GitHub repo/issue search; Succinct's published GPU work is CUDA — `sp1-cluster`, Hypercube real-time proving on 16×5090).
 
 ## D1 — Target the current proof system, at its designed seam
@@ -44,7 +44,7 @@ Keep upstreamability open: licence choice (MIT/Apache-2 dual would match sp1; LG
 ## D7 — A measurable performance floor, end to end
 
 Shipping bar: ≥5× the same machine's CPU prover, wall-clock, on a canonical end-to-end workload (execute → compressed proof), at equal CPU-thread budgets for the non-GPU parts.
-Canonical workload candidate: the ProofofSeed snark-lifter's classical-128 lift (5.80e9 instructions; measured 2026-08-19 at ~7.3 h on the 16-core M4 Max CPU path, uncapped).
+Canonical workload candidate: a SNARK lifter's classical-128 lift (5.80e9 instructions; measured 2026-08-19 at ~7.3 h on the 16-core M4 Max CPU path, uncapped).
 Stretch goal: within 5× of a single RTX 4090 on the same workload.
 Kernel microbenchmarks inform but never headline; only end-to-end numbers are citable (house discipline: no number with a shortcut).
 

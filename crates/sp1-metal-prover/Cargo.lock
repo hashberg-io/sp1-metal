@@ -912,8 +912,6 @@ dependencies = [
 [[package]]
 name = "p3-uni-stark"
 version = "0.4.3-succinct"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc3dfdeba14d8db621c4e52dd63973384ff35f353fd750154ff88397f4ea5adf"
 dependencies = [
  "itertools 0.12.1",
  "p3-air",
@@ -1652,14 +1650,14 @@ dependencies = [
 
 [[package]]
 name = "sp1-metal-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metal",
 ]
 
 [[package]]
 name = "sp1-metal-probes"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metal",
  "rand",
@@ -1682,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-metal-prover"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rand",
  "rayon",
