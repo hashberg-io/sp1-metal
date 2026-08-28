@@ -140,13 +140,22 @@ def thermal_state() -> str:
 
 
 # Heat is roughly proportional to the work just done, so the pause after a run
-# is too: a quarter of its wall clock, floored so that even the short guests
-# get a breath and capped so the pairing guests do not double the suite. A
-# fixed pause would either be pointless after a 3 s proof or ruinous after a
-# 300 s one.
-COOL_FRACTION = 0.25
+# is too. A fixed pause would either be pointless after a 3 s proof or ruinous
+# after a 300 s one.
+#
+# The fraction was a quarter and is now a whole, because a quarter was measured
+# and found insufficient. The application tier ran three hours of the heaviest
+# workloads in the suite at that setting and came out 26% to 42% slow: re-taken
+# on a cool machine, one point's CPU arm went from 50.1 s to 39.6 s and another
+# from 19.9 s to 14.3 s. Nothing in the run said so at the time, which is the
+# reason for the nominal gate below as well.
+COOL_FRACTION = 1.0
 COOL_MIN_S = 5.0
-COOL_MAX_S = 120.0
+COOL_MAX_S = 300.0
+
+# How long to wait for the machine to report itself cool again before giving up
+# and recording that it did not.
+THERMAL_WAIT_MAX_S = 600.0
 
 
 def cool_down(elapsed_s: float, force: bool) -> float:
@@ -201,14 +210,22 @@ def wait_until_quiet(force: bool, threshold: float = 70.0, min_free_gb: float = 
     while True:
         idle = cpu_idle_pct()
         free_gb = memory_headroom_gb()
-        if idle >= threshold and free_gb >= min_free_gb:
+        # "fair" is not a safe state to measure in. It spans everything from
+        # mildly warm to throttling hard, so a tier that reads `fair` from end
+        # to end looks fine by this signal while being a quarter slow. Waiting
+        # for `nominal` is the only reading that means the machine is cool.
+        cool = thermal_state() in ("nominal", "unknown")
+        if idle >= threshold and free_gb >= min_free_gb and cool:
+            return round(time.time() - t0, 1)
+        if not cool and time.time() - t0 > THERMAL_WAIT_MAX_S:
+            print(f"  ... proceeding while still {thermal_state()}", flush=True)
             return round(time.time() - t0, 1)
         if free_gb < min_free_gb and time.time() - t0 > 300:
             print(f"  ... proceeding with only {free_gb:.0f} GB reclaimable", flush=True)
             return round(time.time() - t0, 1)
         if not announced:
             print(f"  ... waiting for the machine ({idle:.0f}% idle, "
-                  f"{free_gb:.0f} GB reclaimable)", flush=True)
+                  f"{free_gb:.0f} GB reclaimable, {thermal_state()})", flush=True)
             announced = True
         time.sleep(5)
         if time.time() - t0 > 900 and int(time.time() - t0) % 900 < 6:

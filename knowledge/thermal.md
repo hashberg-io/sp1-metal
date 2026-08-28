@@ -66,6 +66,53 @@ A `pgrep -f` waiter matches its own command line, so a shell waiting for a prove
 Losing a machine mid-run costs the logs written under the system temporary directory and nothing else: the compiled kernels survive a reboot, so the expensive part of a warming pass does not have to be paid twice.
 Check by proving one small workload and reading the dispatch count before assuming the work is gone.
 
+## What a full run recorded, and what it got wrong
+
+> **Added 2026-08-28**, from the first complete matrix run under this pacing.
+> The strategy above is what the run started with; the numbers here are why the pause is now a whole run's wall clock rather than a quarter of one, and why `nominal` is now waited for rather than merely recorded.
+
+Three tiers, 714 timed runs, and the thermal reading was taken before and after every one of them.
+
+| tier       | nominal | fair | points with runs in both states | fair/nominal wall, median |
+| ---------- | ------- | ---- | ------------------------------- | ------------------------- |
+| `standard` | 81      | 123  | 16                              | 1.010                     |
+| `full`     | 90      | 270  | 19                              | 1.009                     |
+| `apps`     | 8       | 136  | 3                               | 0.999                     |
+
+Nothing ever reached `serious` or `critical`, the pauses were taken as designed, and read on its own that table says the pacing worked.
+It did not, and the way it fails is the most useful thing in this document.
+
+**`fair` is not one state.**
+It spans everything from mildly warm to throttling hard, so the fair-against-nominal comparison only measures the distance between "cool" and "the average of everything above cool", which is small.
+A tier that never leaves `fair` has no cool runs to compare against and its contamination is invisible: the `apps` tier read `fair` for 136 of 144 runs and looked, by every signal the harness recorded, exactly like the two tiers that were nearly clean.
+
+**The only control that works is re-measuring on a machine that is actually cool.**
+Four points from the `apps` tier, re-taken hours later with the machine idle and reading `nominal`:
+
+- `eth-ecrecover/small`, CPU arm — 19.90 s in the tier, **14.31 s** cool. The tier was 39% slow.
+- `eth-mpt/large`, CPU arm — 50.10 s in the tier, **39.62 s** cool. 26% slow.
+- `eth-mpt/large`, GPU arm — 19.34 s in the tier, **14.32 s** cool. 35% slow.
+- `eth-ecrecover/small`, GPU arm — 4.02 s in the tier, **3.91 s** cool. 3% slow.
+
+**The two arms are not affected equally, so the errors do not cancel.**
+This is what makes thermal contamination worse than noise.
+The CPU arm uses every core and heats the machine hardest, so it loses most, and the ratio the benchmark exists to report moves in whichever direction the pair happens to be hurt unevenly: `eth-ecrecover/small` was inflated from a true 3.66x to a reported 4.96x, while `eth-mpt/large` was deflated from 2.77x to 2.59x.
+A contaminated tier does not read as noisy. It reads as a finding.
+
+**Heat accumulates across a sequence, not within a run.**
+The pause was a quarter of the previous run's wall clock, which is generous after one proof and nothing at all after three hours of them.
+The short guests suffered most, because a five-second pause after a fifteen-second proof does not undo the heat of the heavy guest that ran before it.
+Even in the deliberately gentle re-measurement — ninety-second gaps around forty-second runs, reading `nominal` throughout — the three repeats still drifted from 38.0 s to 41.2 s.
+
+**What changed as a result.**
+The pause is now the whole of the previous run's wall clock, capped at five minutes, and the idle gate additionally waits for the thermal reading to return to `nominal` before any timed run, giving up after ten minutes and recording that it did.
+Waiting for `nominal` is the part that matters: it is the only reading that means cool, where `fair` means only "not yet alarming".
+
+**And the check to run afterwards is not the one in the section above.**
+Comparing `fair` against `nominal` within a tier is worth having and is nearly free, but it answers a weaker question than it appears to, and it will pass a tier that is uniformly ruined.
+Re-measure two or three points cold, hours later, and compare against what was recorded.
+If they agree the run can be read as taken; if they do not, no amount of caveat rescues it and the tier has to be run again.
+
 ## Checking a finished run
 
 The point of recording conditions is to be able to ask, afterwards, whether they mattered.
