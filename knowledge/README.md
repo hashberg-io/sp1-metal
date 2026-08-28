@@ -15,7 +15,7 @@ They are working documents kept as a record, not a tidied-up narrative, and seve
 | [measurements.md](measurements.md) | What the machine can do: the two silicon ratios, per-kernel throughput, the phase profile of a real proof. Measured 2026-08-21. |
 | [probes.md](probes.md) | The probe suite — what each of the thirteen probes measures, how to run it, and its limits. |
 | [desiderata.md](desiderata.md) | The requirements this work was to meet. D7 is the bar the verdict is judged against, and it is still not met. |
-| [defect-wrong-proof.md](defect-wrong-proof.md) | **Open.** An intermittent wrong proof that parks the run, reported by a consumer, with `SP1_METAL_MERKLE=0` as the workaround. |
+| [defect-wrong-proof.md](defect-wrong-proof.md) | **Open.** An intermittent wrong proof that parks the run: reported by a consumer, reproduced here, localised to the leaves of the tree, and traced to a buffer hand-off keyed on a pointer that outlived its allocation. `SP1_METAL_MERKLE=0` remains the workaround until a long run says the fix held. |
 
 ## Executed plans
 
