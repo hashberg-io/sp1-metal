@@ -11,6 +11,7 @@
 | Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
 | Application tier | **Done, 2026-08-27.** `results/bench-apps.jsonl` and `.md`, 144 timed runs, 24 points, no failures. |
 | Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
+| Second machine | **Measured 2026-08-28 on an M5 Max**, and the comparison is [`results/m5-max.md`](../results/m5-max.md). Both arms are 8-10% faster and the Metal advantage is unchanged. The standard and full tiers are usable; **the application tier is thermally contaminated and is quoted nowhere** — it needs re-running. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
 
