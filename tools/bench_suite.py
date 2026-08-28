@@ -99,7 +99,103 @@ def cpu_idle_pct() -> float:
         return 0.0
 
 
-def wait_until_quiet(force: bool, threshold: float = 70.0) -> float:
+THERMAL_BIN = ROOT / "tools/thermal_state"
+THERMAL_SRC = ROOT / "tools/thermal_state.swift"
+_THERMAL_OK: list = []
+
+
+def thermal_state() -> str:
+    """The OS's own thermal pressure: nominal, fair, serious or critical.
+
+    This machine throttles under sustained GPU load, and nothing the suite
+    already recorded would show it: a throttled run is not a busy run, so the
+    idle gate passes it, and the wall clock alone cannot say whether a slow
+    proof was slow because the silicon was hot. `pmset -g therm` reports
+    nothing on Apple Silicon and `powermetrics` needs root, so this shells out
+    to `ProcessInfo.thermalState`, which is the signal the system itself uses
+    to tell applications to back off.
+
+    Built on demand from three lines of Swift rather than committed as a
+    binary. Returns "unknown" where it cannot be built, which gates nothing --
+    the cooldown below is the protection that does not depend on it.
+    """
+    if not _THERMAL_OK:
+        ok = False
+        if THERMAL_BIN.exists():
+            ok = True
+        elif THERMAL_SRC.exists():
+            try:
+                ok = subprocess.run(["swiftc", "-O", "-o", str(THERMAL_BIN), str(THERMAL_SRC)],
+                                    capture_output=True, timeout=180).returncode == 0
+            except Exception:
+                ok = False
+        _THERMAL_OK.append(ok)
+    if not _THERMAL_OK[0]:
+        return "unknown"
+    try:
+        return subprocess.run([str(THERMAL_BIN)], capture_output=True, text=True,
+                              timeout=30).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Heat is roughly proportional to the work just done, so the pause after a run
+# is too. A fixed pause would either be pointless after a 3 s proof or ruinous
+# after a 300 s one.
+#
+# The fraction was a quarter and is now a whole, because a quarter was measured
+# and found insufficient. The application tier ran three hours of the heaviest
+# workloads in the suite at that setting and came out 26% to 42% slow: re-taken
+# on a cool machine, one point's CPU arm went from 50.1 s to 39.6 s and another
+# from 19.9 s to 14.3 s. Nothing in the run said so at the time, which is the
+# reason for the nominal gate below as well.
+COOL_FRACTION = 1.0
+COOL_MIN_S = 5.0
+COOL_MAX_S = 300.0
+
+# How long to wait for the machine to report itself cool again before giving up
+# and recording that it did not.
+THERMAL_WAIT_MAX_S = 600.0
+
+
+def cool_down(elapsed_s: float, force: bool) -> float:
+    """Pause after a run, and keep pausing while the machine reports heat."""
+    if force:
+        return 0.0
+    t0 = time.time()
+    time.sleep(max(COOL_MIN_S, min(COOL_MAX_S, COOL_FRACTION * (elapsed_s or 0.0))))
+    announced = False
+    while thermal_state() in ("serious", "critical"):
+        if not announced:
+            print("  ... cooling (thermal pressure)", flush=True)
+            announced = True
+        if time.time() - t0 > 600:
+            break
+        time.sleep(15)
+    return round(time.time() - t0, 1)
+
+
+def memory_headroom_gb() -> float:
+    """Memory the next run could actually get, in GB.
+
+    The large guests peak above 100 GB resident, so a run started while a
+    previous one is still handing its pages back will swap, and a swapping run
+    measures the swap. Free pages alone understate this badly on macOS, where
+    most of memory is usually inactive or speculative and reclaimable, so
+    those count too. Returns a large number if `vm_stat` cannot be read, which
+    gates nothing.
+    """
+    try:
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=30).stdout
+        size = int(re.search(r"page size of ([0-9]+)", out).group(1))
+        got = {k: int(v) for k, v in re.findall(r"^Pages ([^:]+):\s+([0-9]+)\.", out, re.M)}
+        pages = sum(got.get(k, 0) for k in ("free", "inactive", "speculative", "purgeable"))
+        return pages * size / 1e9
+    except Exception:
+        return 1e9
+
+
+def wait_until_quiet(force: bool, threshold: float = 70.0, min_free_gb: float = 32.0) -> float:
     """Block until the machine is genuinely idle. Returns seconds waited.
 
     Deliberately patient rather than fatal: this machine runs its owner's own
@@ -113,10 +209,23 @@ def wait_until_quiet(force: bool, threshold: float = 70.0) -> float:
     announced = False
     while True:
         idle = cpu_idle_pct()
-        if idle >= threshold:
+        free_gb = memory_headroom_gb()
+        # "fair" is not a safe state to measure in. It spans everything from
+        # mildly warm to throttling hard, so a tier that reads `fair` from end
+        # to end looks fine by this signal while being a quarter slow. Waiting
+        # for `nominal` is the only reading that means the machine is cool.
+        cool = thermal_state() in ("nominal", "unknown")
+        if idle >= threshold and free_gb >= min_free_gb and cool:
+            return round(time.time() - t0, 1)
+        if not cool and time.time() - t0 > THERMAL_WAIT_MAX_S:
+            print(f"  ... proceeding while still {thermal_state()}", flush=True)
+            return round(time.time() - t0, 1)
+        if free_gb < min_free_gb and time.time() - t0 > 300:
+            print(f"  ... proceeding with only {free_gb:.0f} GB reclaimable", flush=True)
             return round(time.time() - t0, 1)
         if not announced:
-            print(f"  ... waiting for the machine ({idle:.0f}% idle)", flush=True)
+            print(f"  ... waiting for the machine ({idle:.0f}% idle, "
+                  f"{free_gb:.0f} GB reclaimable, {thermal_state()})", flush=True)
             announced = True
         time.sleep(5)
         if time.time() - t0 > 900 and int(time.time() - t0) % 900 < 6:
@@ -264,14 +373,21 @@ def pair(name: str, size_label: str, n: int, shard_size: int, mode: str, repeats
         _WARMED.add(warm_key)
         print(f"  warm {name:<11} {size_label:<9} {config:<22} discarded "
               f"{w.get('wall_s')}", flush=True)
+        cool_down(w.get("elapsed_s") or 0.0, force)
     for rep in range(repeats):
         for arm in arms:
             waited = wait_until_quiet(force)
             idle_before = cpu_idle_pct()
+            thermal_before = thermal_state()
+            free_before = memory_headroom_gb()
             r = run_once(name, n, arm, shard_size, mode, extra_env,
                          timeout=GUESTS[name].get("timeout", 1800))
             r["idle_before_pct"] = round(idle_before, 1)
             r["load_before"] = round(load_average(), 2)
+            r["thermal_before"] = thermal_before
+            r["thermal_after"] = thermal_state()
+            r["free_gb_before"] = round(free_before, 1)
+            r["cooled_s"] = cool_down(r.get("elapsed_s") or 0.0, force)
             r.update({
                 "guest": name, "tier": GUESTS[name]["tier"], "stresses": GUESTS[name]["stresses"],
                 "size": size_label, "n": n, "shard_size": shard_size, "mode": mode,

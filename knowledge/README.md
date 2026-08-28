@@ -36,6 +36,7 @@ Each records its own result at the end; do not read the opening as a live statem
 | [benchmark-status.md](benchmark-status.md) | Where the benchmark work stands, what it found, how to check on the running suite and how to resume it. **Read this first if picking the work back up.** |
 | [benchmark-plan.md](benchmark-plan.md) | Why the suite measures the regimes it does, and how its sizes were calibrated. The design note the built suite came from. |
 | [pairing-guests.md](pairing-guests.md) | Whether a pairing can be measured through SP1's precompiles, the one test that decided it, and the rule that a number nobody would deploy is worse than no number. |
+| [thermal.md](thermal.md) | Keeping a measurement honest on hardware that throttles: which heat signals the OS actually offers, what the suite does about it, and the pass that panicked a machine by not doing it. |
 
 ## Historical record
 

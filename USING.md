@@ -7,8 +7,9 @@ You do not need to clone this repository to use it.
 
 ## Requirements
 
-- An Apple Silicon Mac. Everything here was measured on an M4 Max; other M-series chips will differ in degree, not in kind.
+- An Apple Silicon Mac. Everything here was measured on an M4 Max, and the whole matrix was re-measured on an M5 Max: both arms move by 8-10% and the ratio between them does not, so other M-series chips differ in degree rather than in kind. [`results/m5-max.md`](results/m5-max.md) has the comparison.
 - Rust 1.88 or later, which is what `sp1-hypercube` itself requires.
+- `protoc`, from `brew install protobuf`. It is not this project's dependency — `sp1-prover-types` has a build script that needs it — but a machine with only Rust cannot build the host, and the failure (`Could not find protoc`) does not say where it came from.
 - **SP1 6.4.0 exactly.** See [Compatibility](#compatibility).
 
 You do **not** need Xcode or the Command Line Tools.
