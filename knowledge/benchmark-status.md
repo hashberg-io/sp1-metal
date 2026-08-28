@@ -153,6 +153,36 @@ Predictions recorded in advance, so the results can be scored rather than ration
 - **`compressed` will be markedly below `core`** — recursion measures 2.54x and is a fixed addition. This is the number D7 actually asks for and it has never been measured.
 - **The ablation will not sum.** Individual phase contributions should exceed the measured whole, because the system is bound by its dependency structure rather than any phase's throughput.
 
+## The M4 figures may have been taken on a cold shader cache
+
+> **Added 2026-08-28**, after the suite was run on a second machine.
+> This is a question about the numbers already recorded here, not a finding about the new hardware.
+
+Measuring on an M5 Max turned up a warming behaviour that nobody had had reason to look for on the M4.
+Repeated runs at the default compile budget do not converge to a fully warm cache: `fib/standard` plateaued at 751 of its 1,311 zerocheck dispatches over five consecutive runs, with about 550 rounds a run still taking the CPU because their kernel had not finished compiling.
+Only an explicit `SP1_METAL_COMPILE_BUDGET=1800` pass, which blocks until every kernel is built, reached 1,311 — after which the figure went from 12.5 s to 8.87 s, a difference of 30% that nothing in the run's own output announces.
+The cache then survives even a reboot, so it is a once-per-machine cost rather than a per-run one.
+
+That matters here because the suite's own warm-up is a single discarded run per point, which is enough for a chip whose kernel compiles in a second and not for one that takes minutes.
+The M4 tiers were therefore warm for most guests and possibly not for all of them, and there is one place where the numbers themselves suggest they were not.
+
+Across the fifty-six points the two machines share, the M5's CPU arm is faster by a median of 1.10x and its GPU arm by 1.08x, and **no point in the matrix has a GPU gain above 1.17x**.
+The three compressed points break that pattern and only on one side:
+
+| point                | M4    | M5    | CPU gain | GPU gain |
+| -------------------- | ----- | ----- | -------- | -------- |
+| fib/small            | 3.09x | 3.70x | 1.07x    | 1.28x    |
+| sha256/small         | 2.99x | 3.45x | 1.11x    | 1.28x    |
+| secp256k1/small      | 2.90x | 4.01x | 1.07x    | 1.48x    |
+
+The CPU arms move by the same 1.07-1.11x as everything else, so the workloads are unchanged and the machines are behaving as expected.
+Only the GPU arms jump, and they jump outside the range every other point occupies.
+A generational step that reaches recursion alone, by a third to a half, while touching nothing else is not a plausible reading; a cache that was warm for the core guests and cold for the recursion AIRs is.
+Those AIRs are the largest kernel set here — they needed 120 s of blocking compile on the M5 — and they are exercised by exactly three points in the whole matrix, so they get the fewest warm-up runs of anything measured.
+
+This is inference from the shape of the numbers, not a measurement, and it cannot be settled from the M5.
+It is worth settling because compressed proving is what [desiderata.md](desiderata.md) D7 is judged against: the recorded answer is "about 3x", and if the recorded answer was taken cold then the backend does better than the verdict currently credits it with. It would still be short of D7's 5x either way.
+
 ## Next actions, in order
 
 The first three of these are closed; they are kept so the order they were written in can be read against what they turned out to be.
@@ -161,3 +191,4 @@ The first three of these are closed; they are kept so the order they were writte
 2. ~~Replace the node-count bound with something that predicts compile cost.~~ Closed by a different fix. Node count still does not predict compile cost and probably cannot, so the bound is no longer asked to: a round waits a second for its kernel, takes the CPU if it is not ready, and installs the kernel whenever it arrives. Nothing is refused for having been slow once.
 3. ~~Diagnose the secp256k1 cliff.~~ Closed 2026-08-26. Also a wrong proof, from two no-copy Metal buffers lent over one shared page.
 4. Fold the results into `verdict.md` — in particular, that the headline figure is a *large-workload* one and small workloads get about 3.5x whatever they compute.
+5. Re-measure the M4 on a deliberately warmed shader cache, and settle the question above. One `SP1_METAL_COMPILE_BUDGET=1800` run per guest and per mode, then the three compressed points and the `divrem` and `keccak` rows at the default budget. Those two guests are the other candidates: the gap between the cold `bench-standard` and the warm `bench-full` was already attributed to cache warmth, and a run warmed on purpose would say whether that attribution had the magnitude right. If the compressed figures move, `verdict.md` and the compressed claims in `README.md` and `USING.md` move with them.
