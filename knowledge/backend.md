@@ -260,7 +260,7 @@ Openings stay on the CPU: walking digest layers and copying rows are not worth a
 
 Parity is checked digest by digest against slop for one tensor, several tensors, a height that is not a power of two, a single row, and a row wide enough to absorb in several chunks.
 
-**Result.** Committing takes 4.1 thread-seconds instead of 36.8. A two-million iteration fibonacci proof goes from **66.50 s to 35.57 s — 1.87x** — and verifies. `SP1_METAL_MERKLE=0` forces the CPU committer through the same binary, which is how the pair is taken.
+**Result.** Committing takes 4.1 thread-seconds instead of 36.8. A two-million iteration fibonacci proof goes from **66.50 s to 35.57 s — 1.87x** — and verifies. `SP1_METAL_MERKLE=0` forces the CPU committer through the same binary, which is how the pair is taken, and `SP1_METAL_MERKLE=check` builds both trees and compares every digest of every layer. The checking mode came later than the others and for a reason: this was the only accelerated phase without one, which made it the one place a fully checked run could not look — see [defect-wrong-proof.md](defect-wrong-proof.md).
 
 The profile afterwards, 89.5 thread-seconds over a 35.6 second wall: gkr 41.8%, zerocheck 24.3%, pcs 19.0%, commit 10.3%. What is left of commit is mostly the encode, which is not worth taking. Of the GKR share, the GPU itself accounts for 1.2 seconds and uploading for 5.5, so the copy still costs more than the arithmetic — the difference now is that it buys a phase worth having.
 

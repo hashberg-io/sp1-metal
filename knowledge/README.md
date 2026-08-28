@@ -15,6 +15,7 @@ They are working documents kept as a record, not a tidied-up narrative, and seve
 | [measurements.md](measurements.md) | What the machine can do: the two silicon ratios, per-kernel throughput, the phase profile of a real proof. Measured 2026-08-21. |
 | [probes.md](probes.md) | The probe suite — what each of the thirteen probes measures, how to run it, and its limits. |
 | [desiderata.md](desiderata.md) | The requirements this work was to meet. D7 is the bar the verdict is judged against, and it is still not met. |
+| [defect-wrong-proof.md](defect-wrong-proof.md) | An intermittent wrong proof that parks the run: reported by a consumer, reproduced here, localised to the leaves of the tree, and traced to a buffer hand-off keyed on a pointer that outlived its allocation. Fixed, with 400 clean proofs against a fault that fired at 94; open on the consumer's own workload. |
 
 ## Executed plans
 
@@ -26,7 +27,7 @@ Each records its own result at the end; do not read the opening as a live statem
 | [backend-plan.md](backend-plan.md) | Executed. It opens by quoting a verdict that has since been overturned, and its projection of 10.7x proved optimistic by roughly a factor of two. |
 | [cpu-plan.md](cpu-plan.md) | Executed. Three ports took the backend from 3.40x to 3.74x, which is close to what it predicted, for the reason it gave. |
 | [resident-plan.md](resident-plan.md) | Stage 1 executed, 2.60x to 3.40x, and it was one false page-alignment rule. Stages 2 to 4 deliberately not built; the document says why. |
-| [release-plan.md](release-plan.md) | Executed. Items 1 to 6 and the v0.1.0 tag; the push is the only part left. |
+| [release-plan.md](release-plan.md) | Executed, and pushed: items 1 to 6, the `v0.1.0` tag, and the repository public. |
 
 ## Benchmarking
 

@@ -404,22 +404,36 @@ fn as_words<T>(xs: &[T]) -> &[u8] {
 /// Keyed on the pointer, which is sound *only* because of that lifetime: the
 /// slice is borrowed by the reduction that inserted the entry and by the fold
 /// that takes it, so it cannot be freed and its address cannot be handed to
-/// something else in between. Entries do not outlive the round -- see
-/// [`clear_round_buffers`].
+/// something else in between.
+///
+/// That argument holds for a round whose fold runs, and the fold is skipped for
+/// a round with too few pairs, so it did not hold for every round. The
+/// reduction now calls [`drop_stale_round_buffers`] before mapping anything, so
+/// an entry cannot outlive the round that made it whatever the fold does. This
+/// is the same hazard as `sp1_metal_core::handoff` in the same shape; unlike
+/// that one it has never been seen to fire, with zero entries left behind over
+/// 2,556 hand-offs of twelve compressed proofs.
 fn round_buffer(device: &Device, words: &[u8]) -> Buffer {
     if !sp1_metal_core::handoff::reusing() {
         return read_only(device, words);
     }
     let key = (words.as_ptr() as usize, words.len());
     if let Some(hit) = ROUND_BUFFERS.with(|c| {
-        c.borrow().iter().find(|(k, _)| *k == key).map(|(_, b)| b.clone())
+        // The newest entry for an address is the only one that can describe
+        // memory still owned by whoever is asking: two live allocations cannot
+        // share an address, so an older one is by definition freed.
+        c.borrow().iter().rev().find(|(k, _)| *k == key).map(|(_, b)| b.clone())
     }) {
         stats::record_input(Input::Wrapped, words.len(), 0);
+        sp1_metal_core::handoff::ROUND_ARRAYS.taken();
         return hit;
     }
     let buffer = read_only(device, words);
     ROUND_BUFFERS.with(|c| {
         let mut c = c.borrow_mut();
+        let before = c.len();
+        c.retain(|(k, _)| *k != key);
+        sp1_metal_core::handoff::ROUND_ARRAYS.kept(before - c.len());
         if c.len() < 4 {
             c.push((key, buffer.clone()));
         }
@@ -438,6 +452,21 @@ thread_local! {
 /// reads the arrays the reduction mapped.
 fn clear_round_buffers() {
     ROUND_BUFFERS.with(|c| c.borrow_mut().clear());
+}
+
+/// Drops anything a previous round left, and says how much there was.
+///
+/// Called by the reduction rather than the fold. What it finds is what the
+/// fold did not clear, because the fold is skipped for a round with too few
+/// pairs -- and under the previous arrangement those entries stayed, keyed on
+/// arrays that were about to be freed. The count is the measurement of how
+/// exposed that was.
+fn drop_stale_round_buffers() {
+    ROUND_BUFFERS.with(|c| {
+        let mut c = c.borrow_mut();
+        sp1_metal_core::handoff::ROUND_ARRAYS.orphaned(c.len());
+        c.clear();
+    });
 }
 
 /// A read-only buffer over a slice.
@@ -481,6 +510,9 @@ fn round_sums<B, E>(base: &[B], ext: &[E], base_is_ext: bool) -> Option<([u32; 4
     let pairs = n / 2;
     let ctx = context()?;
     let pso = if base_is_ext { &ctx.round_ext } else { &ctx.round_base };
+    // Whatever is still here belongs to a round that is over: its fold either
+    // ran and dropped it, or was skipped and never will.
+    drop_stale_round_buffers();
     // Kept until this round's fold has used them; see `round_buffer`.
     let b_base = round_buffer(&ctx.device, as_words(&base[..n]));
     let b_ext = round_buffer(&ctx.device, as_words(&ext[..n]));

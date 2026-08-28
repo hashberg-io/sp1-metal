@@ -14,7 +14,18 @@
 //! upstream builds, so the rest of the proof cannot tell the difference.
 //!
 //! Set `SP1_METAL_MERKLE=0` to force the CPU committer through the same binary,
-//! which is how the pair of numbers either side of this is taken.
+//! which is how the pair of numbers either side of this is taken, and
+//! `SP1_METAL_MERKLE=check` to build both trees and compare every digest of
+//! every layer.
+//!
+//! The checking mode was added because this was the only accelerated phase
+//! without one, which made it the one place a fully checked run could not
+//! look — and an intermittent wrong proof reported by a consumer
+//! (`knowledge/defect-wrong-proof.md`) was a Merkle root mismatch that had
+//! survived exactly such a run. Comparing whole layers rather than the root
+//! is the point: the root says only that something is wrong, while the lowest
+//! layer that disagrees says whether the tree was built wrongly or built
+//! correctly over the wrong bytes.
 
 use std::borrow::Borrow;
 use std::convert::Infallible;
@@ -75,13 +86,77 @@ pub static COMMIT_STATS: CommitStats = CommitStats {
     inner: Mutex::new(CommitStatsInner { commits: 0, on_gpu: 0, seconds: 0.0, rows: 0 }),
 };
 
+/// How the tree is switched, read once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Cpu,
+    Gpu,
+    /// Build both trees and compare them, which is slower than either.
+    Check,
+}
+
+fn mode() -> Mode {
+    static MODE: OnceLock<Mode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        if !sp1_metal_probes::commit::available() {
+            return Mode::Cpu;
+        }
+        match std::env::var("SP1_METAL_MERKLE").as_deref() {
+            Ok("0") => Mode::Cpu,
+            Ok("check") => Mode::Check,
+            _ => Mode::Gpu,
+        }
+    })
+}
+
 /// Whether the GPU committer is in use, read once.
 fn use_gpu() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("SP1_METAL_MERKLE").map(|v| v != "0").unwrap_or(true)
-            && sp1_metal_probes::commit::available()
-    })
+    mode() != Mode::Cpu
+}
+
+/// Ends the hand-off window when a commitment returns, however it returns.
+///
+/// The encode leaves its codeword's buffer for the Merkle kernels to take
+/// rather than mapping the largest allocation in the proof twice, and this is
+/// the far end of that: past here nothing can want one, and anything still
+/// waiting is keyed on a pointer whose allocation is about to be dropped. See
+/// `sp1_metal_core::handoff` for why an entry that outlives its allocation is
+/// worse than a slow commitment.
+struct EndOfHandoff;
+
+impl Drop for EndOfHandoff {
+    fn drop(&mut self) {
+        sp1_metal_probes::handoff::clear();
+    }
+}
+
+/// Where two trees over the same tensors first disagree.
+///
+/// Reported as a layer and an index rather than as a root, because which layer
+/// it is answers a different question in each case: layer zero is the leaves,
+/// so a disagreement there is about the bytes that were hashed, and any layer
+/// above it with agreeing children is about the compression.
+fn first_disagreement(
+    gpu: &[Vec<[SP1Field; 8]>],
+    cpu: &[Vec<[SP1Field; 8]>],
+) -> Option<String> {
+    if gpu.len() != cpu.len() {
+        return Some(format!("{} layers against {}", gpu.len(), cpu.len()));
+    }
+    for (l, (a, b)) in gpu.iter().zip(cpu).enumerate() {
+        if a.len() != b.len() {
+            return Some(format!("layer {l} has {} digests against {}", a.len(), b.len()));
+        }
+        if let Some(i) = a.iter().zip(b).position(|(x, y)| x != y) {
+            return Some(format!(
+                "layer {l} digest {i} of {}: GPU {:?}, CPU {:?}",
+                a.len(),
+                a[i],
+                b[i]
+            ));
+        }
+    }
+    None
 }
 
 /// Commits tensors with the Merkle tree built on the GPU.
@@ -133,6 +208,7 @@ impl TensorCsProver<SP1GlobalContext, CpuBackend> for MetalMerkleProver {
         T: OwnedBorrow<Tensor<SP1Field, CpuBackend>>,
     {
         let start = Instant::now();
+        let _handoff = EndOfHandoff;
         let borrowed: Vec<&Tensor<SP1Field, CpuBackend>> = tensors
             .iter()
             .map(|t| {
@@ -157,7 +233,9 @@ impl TensorCsProver<SP1GlobalContext, CpuBackend> for MetalMerkleProver {
                     (w, t.sizes()[1])
                 })
                 .collect();
-            if let Some(layers) = sp1_metal_probes::commit::digest_layers(&words, rows) {
+            let built = sp1_metal_probes::commit::digest_layers(&words, rows);
+            drop(words);
+            if let Some(layers) = built {
                 let layers: Vec<Vec<[SP1Field; 8]>> =
                     layers.into_iter().map(as_field).collect();
                 let root = layers.last().expect("a tree has a root")[0];
@@ -169,6 +247,26 @@ impl TensorCsProver<SP1GlobalContext, CpuBackend> for MetalMerkleProver {
                     SP1Field::from_canonical_usize(total_width),
                 ]);
                 let commitment = self.tcs.compressor.compress([root, shape]);
+                if mode() == Mode::Check {
+                    drop(borrowed);
+                    let (cpu_commitment, cpu_data) = self.inner.commit_tensors(tensors)?;
+                    let disagreement =
+                        first_disagreement(&layers, &cpu_data.0.digest_layers);
+                    assert!(
+                        disagreement.is_none(),
+                        "metal merkle disagrees with the CPU over {rows} rows of total \
+                         width {total_width}: {}",
+                        disagreement.unwrap()
+                    );
+                    assert_eq!(
+                        (commitment, root, log_height, total_width),
+                        (cpu_commitment, cpu_data.1, cpu_data.2, cpu_data.3),
+                        "metal merkle agrees layer by layer but publishes a different \
+                         commitment over {rows} rows"
+                    );
+                    COMMIT_STATS.record(start.elapsed().as_secs_f64(), rows, true);
+                    return Ok((cpu_commitment, cpu_data));
+                }
                 let digests = Digests { digest_layers: std::sync::Arc::new(layers) };
                 COMMIT_STATS.record(start.elapsed().as_secs_f64(), rows, true);
                 return Ok((commitment, (digests, root, log_height, total_width)));
