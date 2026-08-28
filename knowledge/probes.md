@@ -57,6 +57,11 @@ The study varies three things separately, because "a bigger workload" conflates 
 
 `sp1-profile-host --execute` reports the cycle count without proving, which is how a workload is placed on those axes before spending minutes on it.
 
+`--repeat N` proves the same statement N times through one client, which is the only way to reach a fault that lives in state carried between proofs rather than in a kernel — see [defect-wrong-proof.md](defect-wrong-proof.md), where five single-proof runs were clean against about one failure in twenty-eight from a driver.
+Pair it with `--timeout SECS`: a proof that fails shard verification is retried silently and then parks, so the run has to be killed by something outside the runtime that has stopped turning.
+Each failure is reported where it happened and the run continues, because with an intermittent fault the rate is the measurement.
+The end of a run also prints how many buffers were handed from one kernel to another, how many were taken, and how many were left on an address a dead entry still held.
+
 `probes check` runs every parity check in milliseconds; `probes all --reps N --out results.json` runs the full throughput ladder.
 `--cpu` adds the CPU baselines described below to every probe that has one (all but `imul`); without it only the kernels are timed.
 Always build with `--release` for throughput runs (`cargo run --release --bin probes -- ...`): kernel timing is GPU-side, but buffer preparation and every `--cpu` baseline are host code.
