@@ -88,6 +88,8 @@ Three things about that line, in order of how much they narrow it.
 
 **Digest zero.** The first row of the matrix, not a row somewhere in the middle where a boundary or a tail might be mishandled.
 
+**Total width eight, which means one tensor.** The leaf kernel reads a gathered buffer when a commitment has several tensors and the uploaded tensor itself when it has one, so at width eight it read exactly what `upload` handed it. That function has three routes: take the buffer the encode left in the hand-off table, wrap the words where they lie, or copy them. The last two are built fresh on every call and cannot be intermittent across proofs. The first is the only state in the path that outlives a call.
+
 **It parked, exactly as reported.** The check's panic reaches SP1 as a task failure, SP1 calls it retryable, and the process then sat for fifteen minutes with nothing printed and nothing exiting, until the watchdog said so and left:
 
 ```
