@@ -105,7 +105,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_UPLOAD_CACHE` | reuse of device buffers across dispatches | on |
 | `SP1_METAL_UPLOAD_LEND` | lending host pages to the device rather than copying | on |
 | `SP1_METAL_UPLOAD_FRESH` | a private buffer for every upload, sharing nothing | off — a diagnostic |
-| `SP1_METAL_REUSE` | reuse of a round's buffer between reduce and fold | on |
+| `SP1_METAL_REUSE` | handing a buffer from the kernel that wrote an array to the one that reads it | on |
 | `SP1_METAL_ZC_ILP` | interleaved constraint bodies in the generated kernel | on |
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |
@@ -121,7 +121,7 @@ The last two are switches for negative results, kept so that neither question ge
 
 **Raising `SP1_METAL_ZEROCHECK_MAX_NODES` is not the optimisation it looks like.** Above about 20,000 nodes it admits `Global:false`, whose kernel needs on the order of half an hour in the Metal compiler; the benchmark matrix runs it at 10^6 and no proof completes in fifteen minutes while the CPU arm is unmoved. The bound is not what decides whether a chip reaches the GPU any more — the compile budget is, and a kernel is installed whenever it arrives — so what the bound still does is stop the generator emitting a kernel nobody will wait for.
 
-Seven of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST`, `ZEROCHECK` and `GKR_ROUND`.
+Eight of them take `=check` instead of `0` or `1` — `ENCODE`, `FIRST_LAYER`, `BATCH`, `JAGGED_VALUES`, `JAGGED_ASSIST`, `ZEROCHECK`, `GKR_ROUND` and `MERKLE`.
 In that mode both paths run on every call of a real proof and their results are compared element for element.
 It is slow and it is the strongest correctness evidence available short of the verifier, which also runs.
 
@@ -135,18 +135,23 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 **Set `SP1_METAL_MERKLE=0` for anything you are not watching.**
 
-With every phase accelerated, a proof fails SP1's own shard verification roughly **once every
-twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
-Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says
-nothing. **No invalid proof is accepted**: this is a proof being refused, so what is at risk is the
-run finishing rather than the statement it proves.
+With every phase accelerated, a proof fails SP1's own shard verification roughly **once every twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
+Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says nothing.
+**No invalid proof is accepted**: this is a proof being refused, so what is at risk is the run finishing rather than the statement it proves.
 
-`SP1_METAL_MERKLE=0` has since run 115 consecutive proofs and a full-scale one with no failure. It
-costs most of the advantage — 4.72× becomes 1.92× on the workload it was measured on — because the
-Merkle tree is where most of the advantage was.
+`SP1_METAL_MERKLE=0` has since run 115 consecutive proofs and a full-scale one with no failure.
+It costs most of the advantage — 4.72× becomes 1.92× on the workload it was measured on — because the Merkle tree is where most of the advantage was.
 
-Not reproduced from inside this repository. Reported by a consumer, with the exclusions and the
-evidence in [knowledge/defect-wrong-proof.md](knowledge/defect-wrong-proof.md).
+Reported by a consumer, and **since reproduced here**: a hundred-proof run under `SP1_METAL_MERKLE=check` verified ninety-three and then found the GPU's tree disagreeing with the CPU's at **layer zero, digest zero** — the leaves, so the tree was built over the wrong bytes rather than built wrongly. The run then parked, and the watchdog said so after fifteen minutes of nothing.
+
+A defect has been found and fixed on that route: the table that hands a codeword's buffer from the encode to the Merkle kernels was keyed on a raw pointer and could outlive the allocation that pointer named, which in a process making many proofs is a use-after-free waiting for an address to be handed out twice.
+It fits everything reported, including why turning the tree off is a complete workaround — nothing then takes from the table — but a fault this rare is only shown fixed by a long run, so treat the warning above as standing until this section says otherwise.
+The reproduction, the counts and the mechanism are in [knowledge/defect-wrong-proof.md](knowledge/defect-wrong-proof.md).
+
+Two things exist now that did not:
+
+- `SP1_METAL_MERKLE=check` builds both trees and compares every digest of every layer, naming the lowest layer that disagrees. This phase was the only accelerated one that could not check itself, which is why a fully checked run passed while the fault was live — and it is what caught the fault the moment it was asked to.
+- `sp1-profile-host --repeat N --timeout SECS` proves through one client the way a driver does, and the timeout is a watchdog on its own OS thread — the runtime is what has stopped turning, so a timer inside it is no use. It says the run is parked and leaves with status 2.
 
 ### Fixed, but worth knowing
 
@@ -186,7 +191,7 @@ Its manifest is the shortest complete answer to "what do I put where".
 The GPU path is not trusted on the strength of its being fast.
 
 - Proofs are verified, not merely produced; the acceptance harness reports "proved and verified".
-- Seven switches have a `=check` mode that compares against upstream's own code on every call.
+- Eight switches have a `=check` mode that compares against upstream's own code on every call.
 - The forks' own test suites pass unmodified, including the four GKR tests that exist to show the CPU path is bit-identical after the seam was cut.
 
 Run the fast parity suite yourself from a clone:

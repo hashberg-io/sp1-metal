@@ -12,6 +12,8 @@ Those are microbenchmarks. **Eight whole statements from Bitcoin and Ethereum �
 
 They also invert the size effect. Only the header chain climbs as it grows, and it is the only one of the eight with much ordinary work around its precompile; the rest are flat or fall. A workload already saturated with precompile rows gains nothing from being bigger, which is what the microbenchmarks' "bigger is better" was really measuring. Full table: [`results/bench-apps.md`](results/bench-apps.md).
 
+One consumer has now run the whole thing end to end on a statement they deploy: 219 ZKBoo responses proved in one zkVM program, wrapped to Groth16 and verified on chain, in **2 h 51 m against 6 h 28 m** for the same pass on the same machine's CPU prover. That is **2.27x**, and it is the lowest figure in this file for two reasons worth separating — it is execute-to-Groth16 rather than shard proving, and it was taken with the Merkle tree left on the CPU, because with the tree accelerated that run does not finish. See the warning below.
+
 The fourteen microbenchmarks have each been measured twice, ten hours apart on the same machine — once on their own, once inside the larger matrix that adds the shard-size, thread-count, ablation and compressed-mode sweeps.
 That is 570 timed runs, of which 564 verified, and the application statements add 144 more with no failures at all.
 The six that did not are one configuration, deliberately out of range — it raises the zerocheck node bound until a chip becomes eligible whose kernel takes longer to compile than a run is allowed to take.
@@ -31,6 +33,8 @@ This is experimental software and an independent fork. It is not affiliated with
 ## Using it from your own program
 
 You do not need to clone this. Three blocks of TOML in your host's manifest point cargo at this repository, and the Metal path is on from there — see **[USING.md](USING.md)**.
+
+🚨 **Set `SP1_METAL_MERKLE=0` for anything you are not watching.** A consumer proving in a loop hits a Merkle root mismatch about once every twenty-eight proofs, and SP1 then retries the shard silently and parks: no output, no exit. No invalid proof is accepted — what is at risk is the run finishing, which for an overnight run is the whole of it. It has since been reproduced here and localised to the leaves of the tree, and a use-after-free on the route the codeword takes to those leaves has been fixed; the warning stands until a long run says the fix held. [The known issue](USING.md#-an-intermittent-wrong-proof-which-parks-the-run), and [what was found](knowledge/defect-wrong-proof.md).
 
 ## Seeing it work
 
@@ -81,7 +85,7 @@ cargo run --release --bin probes -- check                # every kernel against 
 
 Building a vendored crate in place resolves its dev-dependencies and so rewrites the `Cargo.lock` that came with the release; `git checkout -- crates/vendor` puts it back.
 
-The seven switches with a `=check` mode — `ZEROCHECK`, `GKR_ROUND`, `FIRST_LAYER`, `BATCH`, `ENCODE`, `JAGGED_VALUES` and `JAGGED_ASSIST` — run both the GPU and the CPU path on every call of a real proof and compare element for element; that, and the fact that proofs are verified rather than merely produced, is the strongest correctness evidence here.
+The eight switches with a `=check` mode — `ZEROCHECK`, `GKR_ROUND`, `FIRST_LAYER`, `BATCH`, `ENCODE`, `JAGGED_VALUES`, `JAGGED_ASSIST` and `MERKLE` — run both the GPU and the CPU path on every call of a real proof and compare element for element; that, and the fact that proofs are verified rather than merely produced, is the strongest correctness evidence here.
 
 ## License
 
