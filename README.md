@@ -24,7 +24,7 @@ The 1.94x floor quoted above is keccak on a large workload against a cold cache;
 The whole matrix has also been measured on a second machine, an M5 Max.
 Both arms are 8 to 10 per cent faster and the ratio between them is unchanged — a median of 3.90x against 3.93x over the sixty-four points the two machines share, with the same guest best and the same guest worst at each end — and every structural finding reproduces: the phase ablation accounts for 60 per cent of the whole rather than 61, in the same order and with the Merkle tree still the largest single item; shard size is still flat; concurrency still stops mattering above four.
 The compressed points are the exception, and they move on one side only. Their CPU arms shift by the same tenth as everything else while their GPU arms move by 1.28x to 1.48x, which no other point in the matrix comes close to. A shader cache that was warm for the core guests and cold for the recursion kernels explains that; a generational step reaching recursion alone does not. So the compressed figures above are under a question about the M4 measurement rather than superseded by the M5 one — the warm readings are 3.45x to 4.01x, and the 5x bar is missed either way.
-There is no M5 figure for the eight application statements: that tier ran too hot to be worth quoting, which is itself written up in [`results/m5-max.md`](results/m5-max.md) alongside the comparison.
+The eight application statements measure **2.67x to 5.99x with a median of 3.17x** on the M5, against 2.48x to 5.75x and a median of 2.98x on the M4. They are the one tier where the two arms do not move together — the CPU arm gains a median 8.7% and the GPU arm 13.5% — and whether that is the newer GPU on long workloads or the M4 reference having been taken with no pause between proofs is not yet settled. The first attempt at that tier on the M5 ran too hot to quote and was taken again; both the ruined run and the paced one are in [`results/m5-max.md`](results/m5-max.md) alongside the comparison.
 
 Every figure here comes from [`results/`](results); [the verdict](knowledge/verdict.md) says which of this project's earlier claims survived and which did not.
 
@@ -47,7 +47,7 @@ Proves the same workload twice through one binary, once with every GPU switch fo
 The first build is about eight minutes; the pair is about two.
 It refuses to run on a loaded machine, because a pair timed under load measures the load.
 
-**Requirements:** an Apple Silicon Mac and Rust 1.88 or later. Not Xcode — the kernels are compiled at run time by the Metal framework, which ships with the OS.
+**Requirements:** an Apple Silicon Mac, Rust 1.88 or later, and `protoc` (`brew install protobuf`), which SP1's own build scripts need and which fails with a message that does not say where it came from. Not Xcode — the kernels are compiled at run time by the Metal framework, which ships with the OS.
 
 ## Project structure
 

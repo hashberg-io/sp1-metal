@@ -1,6 +1,6 @@
 # Release plan
 
-> **Status: executed.** Items 1 to 6 are done and v0.1.0 is tagged. Pushing is the only step outstanding.
+> **Status: executed and pushed.** Items 1 to 7 are done: `v0.1.0` is tagged and the repository is public. The one open question below, whether the runtime shader path needs the Xcode Command Line Tools, was answered before the tag — it does not, and [`USING.md`](../USING.md) says so.
 
 This plans a public release of sp1-metal from one repository at a tag, so that people can clone it, verify what it claims, and use it in their own SP1 host programs.
 It does not plan a crates.io publication or an upstream contribution; both are ruled out below, the first by construction and the second by choice.

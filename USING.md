@@ -1,7 +1,7 @@
 # Using sp1-metal
 
 GPU proving for SP1 Hypercube on Apple Silicon, as an overlay on the crates you already depend on.
-On an M4 Max it proves a shard up to **6.0x** faster than the same machine's CPU prover, measured end to end; across fourteen guests and three workload sizes the envelope is 1.94x to 6.01x, with a median of 3.60x. Those are microbenchmarks; eight whole Bitcoin and Ethereum statements measure 2.48x to 5.75x with a median of 2.98x, and that is the figure to plan against. Compressed proving is about 3x.
+On an M4 Max it proves a shard up to **6.0x** faster than the same machine's CPU prover, measured end to end; across fourteen guests and three workload sizes the envelope is 1.94x to 6.01x, with a median of 3.60x. Those are microbenchmarks; eight whole Bitcoin and Ethereum statements measure 2.48x to 5.75x with a median of 2.98x, and that is the figure to plan against. An M5 Max puts the same eight at 2.67x to 5.99x with a median of 3.17x. Compressed proving is about 3x.
 
 You do not need to clone this repository to use it.
 
@@ -199,6 +199,6 @@ The GPU path is not trusted on the strength of its being fast.
 Run the fast parity suite yourself from a clone:
 
 ```sh
-cargo test --workspace --release          # 20 tests
+cargo test --workspace --release          # 23 tests
 cargo run --release --bin probes -- check # GPU against packed CPU, small inputs
 ```

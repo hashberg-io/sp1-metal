@@ -623,7 +623,9 @@ So the lever is **not to map the same allocation twice**, and there are two plac
 - A sumcheck round reduces its arrays and then folds the same ones. Keeping the first mapping until the fold has used it is sound for exactly the reason its life is short — both users borrow the same live slice, within one round. The jagged sumcheck fell from 2.44 to 2.19 thread-seconds and the proof from 11.04 to 10.70 seconds, **5.39x to 5.63x**.
 - The encode writes a codeword and the Merkle kernels hash it immediately, and each mapped it separately. A hand-off in the crate below both takes the commit phase's inputs from 0% resident to 65%.
 
-The rule the hand-off rests on is worth stating on its own, because it is the same rule the two hangs of §17 broke from the other side: **a buffer may be kept for a second use only while the allocation it borrows is still borrowed by the first.** The consumer removes the entry, so a pointer can never be matched after the memory behind it has gone.
+The rule the hand-off rests on is worth stating on its own, because it is the same rule the two hangs of §17 broke from the other side: **a buffer may be kept for a second use only while the allocation it borrows is still borrowed by the first.**
+
+> **The table did not hold that rule, and the gap was a live defect.** This section originally continued "the consumer removes the entry, so a pointer can never be matched after the memory behind it has gone." The consumer removes the entry only when the consumer runs, and it does not always run: a commitment can go to the CPU, and SP1 proves a shard as a tokio task that moves between workers, which a thread-local table cannot follow. An entry orphaned that way sat on a pointer waiting for the allocator to hand its address out again, which is the wrong Merkle tree a consumer reported. The rule above is right; the implementation approximated it. What it does now — a producer replaces its own key, a lookup takes the newest match, and a commitment drops whatever is left — is in [defect-wrong-proof.md](defect-wrong-proof.md), along with the counters that turned the argument into a number.
 
 ### Which phases have any room left
 
