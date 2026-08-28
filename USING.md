@@ -130,9 +130,22 @@ That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each �
 
 ## Known issues
 
-None outstanding. What follows is what was wrong and how you would recognise it in an older copy.
+### 🚨 An intermittent wrong proof, which parks the run
 
-### Fixed, but worth knowing
+**Set `SP1_METAL_MERKLE=0` for anything you are not watching.**
+
+With every phase accelerated, a proof fails SP1's own shard verification roughly **once every
+twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
+Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says
+nothing. **No invalid proof is accepted**: this is a proof being refused, so what is at risk is the
+run finishing rather than the statement it proves.
+
+`SP1_METAL_MERKLE=0` has since run 115 consecutive proofs and a full-scale one with no failure. It
+costs most of the advantage — 4.72× becomes 1.92× on the workload it was measured on — because the
+Merkle tree is where most of the advantage was.
+
+Not reproduced from inside this repository. Reported by a consumer, with the exclusions and the
+evidence in [knowledge/defect-wrong-proof.md](knowledge/defect-wrong-proof.md).
 
 ### Fixed, but worth knowing
 
