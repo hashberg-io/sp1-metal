@@ -10,7 +10,8 @@ The file name is what does: `-m5-max` is this machine, and the unsuffixed files 
 
 - **`bench-standard-m5-max`** — usable. 204 timed runs, 34 points, no failures.
 - **`bench-full-m5-max`** — usable with a caveat. 366 timed runs, 64 points, six failures, every one of them the deliberately out-of-range `nodebound=1e6` configuration that fails the same way on the M4. It ran warmer than the standard tier and reads a few per cent slow: `fib/standard` on the GPU arm is 9.20 s in the standard tier and 10.11 s here, against 8.87 s measured by hand on a cold machine.
-- **`bench-apps-m5-max-thermally-contaminated`** — **not usable, and quoted nowhere.** The first attempt at the application tier, thermally contaminated from end to end. It is kept under that name because the record of a ruined run is worth more than its absence, and because the thermal fields in it are what diagnosed the problem. `bench-apps-m5-max` is the re-run under the longer pauses and the `nominal` gate; at the time this merged it held one run of its first point, so **there is still no M5 figure for the application statements** and nothing here quotes one.
+- **`bench-apps-m5-max`** — usable. 144 timed runs, 24 points, no failures, every proof verified, and every run started with the machine reading `nominal`.
+- **`bench-apps-m5-max-thermally-contaminated`** — **not usable, and quoted nowhere.** The first attempt at the application tier, thermally contaminated from end to end. It is kept under that name because the record of a ruined run is worth more than its absence, and because the thermal fields in it are what diagnosed the problem. `bench-apps-m5-max` is the re-run, taken under the longer pauses and the `nominal` gate.
 
 Three points from the two microbenchmark tiers were re-taken cool to check them, and they stand.
 Their absolute times run up to a tenth slow in the full tier, but the speedups those times produce are within 4.5% of the cool readings, because mild heat warms both arms together and cancels in the ratio:
@@ -74,7 +75,7 @@ That asymmetry is much more likely to be a shader cache that was warm for the co
 It cannot be settled from this machine; see the action recorded in [benchmark-status.md](../knowledge/benchmark-status.md).
 **D7 is not met either way** — its bar is 5x and the warm figures reach 3.45x to 4.01x.
 
-## Why the application tier was thrown away
+## Why the first application tier was thrown away
 
 It ran three hours of the heaviest workloads in the suite with a pause of a quarter of each run's wall clock between them, and read `fair` for 136 of its 144 runs.
 Every signal the harness recorded said it was fine.
@@ -90,6 +91,55 @@ Four points re-taken hours later on an idle machine reading `nominal`:
 The arms are not hurt equally, so the errors do not cancel: `eth-ecrecover/small` was inflated from a true 3.66x to a reported 4.96x, and `eth-mpt/large` deflated from 2.77x to 2.59x.
 A contaminated tier does not read as noisy — it reads as a finding, which is what makes this worth the space.
 [thermal.md](../knowledge/thermal.md) has the full account and what the suite does about it now.
+
+## The application tier
+
+The re-run took 1.84 hours of proving and 2.22 hours of waiting: a pause equal to each run's own wall clock, and then a hold until the machine read `nominal` again.
+The pauses cost more than the work, which is the price of a number that means anything on a laptop.
+
+**Here, unlike in the microbenchmarks, the two arms did not move together.**
+The CPU arm is a median 8.7% faster than the M4 and the GPU arm 13.5%, so the Metal advantage rises from a median 2.98x to 3.17x, and it rises at every one of the twenty-four points but three.
+
+Two readings fit that, and this machine cannot separate them:
+
+- **The M4 apps figures are throttled.** They were taken with no pause between proofs, and these are the longest workloads in the suite — `eth-bls-verify/large` is a five-minute CPU run. Whatever thermal offset that machine carries, it carries most of it here.
+- **The M5's GPU path genuinely gains more on this shape of work.** Against this: the standard and full tiers were also unpaced on the M4 and show no such asymmetry at all. For it: their runs are a fraction as long, so they had less room to heat.
+
+The paced M4 re-take recorded in [benchmark-status.md](../knowledge/benchmark-status.md) settles it. Until then the M5 column stands on its own and the gain column does not.
+
+**The CPU arm heats itself inside a single run, and no pause can fix that.**
+Twenty-seven of the twenty-eight runs that finished at `fair` were CPU-arm, and all eighteen CPU runs of `eth-pairing-check` and `eth-bls-verify` began at `nominal` and ended at `fair`.
+There is no cool number to be had for a four-minute all-core proof on a laptop: what is measured is what a user gets, but it is not a ratio against a CPU that stays cool, and the multipliers for those two guests are flattered by however much their own heat cost them.
+
+| guest | size | N | cpu M4 | cpu M5 | gpu M4 | gpu M5 | M4x | M5x |
+|---|---|---|---|---|---|---|---|---|
+| btc-headers | small | 400 | 20.76 | 18.73 | 6.04 | 5.49 | 3.44x | 3.41x |
+| btc-headers | standard | 1600 | 58.76 | 51.25 | 10.59 | 9.60 | 5.55x | 5.34x |
+| btc-headers | large | 3000 | 102.76 | 94.60 | 17.88 | 15.79 | 5.75x | 5.99x |
+| btc-schnorr | small | 2 | 14.92 | 13.89 | 4.18 | 3.92 | 3.56x | 3.54x |
+| btc-schnorr | standard | 10 | 24.63 | 22.13 | 7.95 | 7.07 | 3.10x | 3.13x |
+| btc-schnorr | large | 20 | 35.37 | 31.83 | 12.43 | 10.44 | 2.85x | 3.05x |
+| eth-ecrecover | small | 2 | 16.01 | 14.89 | 4.34 | 3.93 | 3.69x | 3.79x |
+| eth-ecrecover | standard | 8 | 26.71 | 23.87 | 8.51 | 7.16 | 3.14x | 3.34x |
+| eth-ecrecover | large | 16 | 40.38 | 36.22 | 13.97 | 11.42 | 2.89x | 3.17x |
+| eth-mpt | small | 10 | 16.86 | 15.37 | 6.28 | 5.43 | 2.68x | 2.83x |
+| eth-mpt | standard | 20 | 26.45 | 23.90 | 10.65 | 8.97 | 2.48x | 2.67x |
+| eth-mpt | large | 40 | 44.42 | 40.14 | 16.52 | 13.98 | 2.69x | 2.87x |
+| eth-groth16-inputs | small | 2 | 16.93 | 15.07 | 5.17 | 4.77 | 3.27x | 3.16x |
+| eth-groth16-inputs | standard | 8 | 26.92 | 24.21 | 9.56 | 8.08 | 2.82x | 3.00x |
+| eth-groth16-inputs | large | 16 | 38.29 | 34.47 | 15.43 | 12.75 | 2.48x | 2.70x |
+| eth-pairing-check | small | 1 | 112.78 | 104.99 | 40.29 | 34.88 | 2.80x | 3.01x |
+| eth-pairing-check | standard | 4 | 176.83 | 168.00 | 60.36 | 52.20 | 2.93x | 3.22x |
+| eth-pairing-check | large | 8 | 260.81 | 248.41 | 90.51 | 77.92 | 2.88x | 3.19x |
+| eth-bls-aggregate | small | 8 | 17.50 | 16.25 | 5.79 | 5.17 | 3.03x | 3.14x |
+| eth-bls-aggregate | standard | 16 | 21.80 | 20.00 | 7.68 | 6.63 | 2.84x | 3.02x |
+| eth-bls-aggregate | large | 32 | 30.08 | 27.51 | 11.23 | 9.64 | 2.68x | 2.85x |
+| eth-bls-verify | small | 1 | 174.35 | 163.61 | 56.47 | 48.44 | 3.09x | 3.38x |
+| eth-bls-verify | standard | 2 | 210.54 | 205.34 | 69.64 | 62.56 | 3.02x | 3.28x |
+| eth-bls-verify | large | 4 | 286.65 | 279.56 | 93.98 | 84.13 | 3.05x | 3.32x |
+
+`btc-headers` is the outlier it was on the M4 — 5.99x at three thousand headers, roughly double the rest — because its GPU-side memory grows far more slowly than its CPU-side does, so it keeps the device fed long after the others stop filling it.
+The two long cryptographic guests sit at a flat 3.2-3.3x across all three sizes, unmoved by N, which is what a workload dominated by a fixed pairing cost should do.
 
 ## Setting the prover up on a new machine
 

@@ -126,6 +126,24 @@ Comparing `fair` against `nominal` within a tier is worth having and is nearly f
 Re-measure two or three points cold, hours later, and compare against what was recorded.
 If they agree the run can be read as taken; if they do not, no amount of caveat rescues it and the tier has to be run again.
 
+## What a run under the cool regime looks like
+
+The application tier re-run on 2026-08-28 is the reference for what the pauses buy.
+All 144 runs began at `nominal`, and 1.84 hours of proving cost 2.22 hours of waiting — 1.0x of each run's wall clock in cooldown, plus 0.19 hours held at the gate waiting for `nominal` to come back.
+Budget rather more than double the prover time for any tier run this way.
+
+**The gate cannot keep a long run cool, only start it cool.**
+Twenty-eight runs finished at `fair`, and twenty-seven of them were CPU-arm: every one of the eighteen CPU runs of `eth-pairing-check` and `eth-bls-verify`, which take four to five minutes on all cores.
+The GPU arm never once ended `fair` at those sizes, because it finishes in a third of the time and leaves most of the machine idle while it runs.
+
+This is not a harness failure and no pause length fixes it — a four-minute all-core proof heats the machine by itself, and a laptop has no cool version of that number.
+It does mean the arms are not symmetric for the longest guests: the CPU arm is measured partly throttled and the GPU arm is not, so the multipliers for those two guests are flattered by whatever the CPU arm's own heat cost it.
+Quote them as what a user gets, not as a ratio against a CPU that stays cool.
+
+The asymmetry runs the *opposite* way from the one that ruined the first attempt, where the pauses were too short and both arms started hot.
+That is worth keeping in mind when reading a multiplier: too little cooling and the CPU arm is hurt more because it runs longer under a machine that never recovers; enough cooling and the CPU arm is still hurt more, because it runs longer.
+Heat never favours the CPU arm, so a Metal multiplier measured on a laptop is an upper bound in both regimes.
+
 ## Checking a finished run
 
 The point of recording conditions is to be able to ask, afterwards, whether they mattered.
