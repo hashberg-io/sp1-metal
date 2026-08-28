@@ -141,6 +141,26 @@ There is no cool number to be had for a four-minute all-core proof on a laptop: 
 `btc-headers` is the outlier it was on the M4 — 5.99x at three thousand headers, roughly double the rest — because its GPU-side memory grows far more slowly than its CPU-side does, so it keeps the device fed long after the others stop filling it.
 The two long cryptographic guests sit at a flat 3.2-3.3x across all three sizes, unmoved by N, which is what a workload dominated by a fixed pairing cost should do.
 
+## The measurements predate the hand-off fix, and survive it
+
+Every figure in this file was taken before the buffer hand-off fix, which landed after the last of them.
+That fix changes the Merkle commit path — the largest single phase in the GPU proof — so it is the one change that could plausibly have moved these numbers.
+
+Four points re-taken against the fixed backend, three repeats each, all at `nominal`, in `spotcheck-m5-max-postfix.jsonl`:
+
+| point                          | CPU here | CPU published | GPU here | GPU published | x here | x published |
+| ------------------------------ | -------- | ------------- | -------- | ------------- | ------ | ----------- |
+| fib/standard                   | 53.02 s  | 55.07 s       | 9.20 s   | 10.11 s       | 5.76x  | 5.45x       |
+| eth-mpt/large                  | 41.29 s  | 40.14 s       | 14.16 s  | 13.98 s       | 2.92x  | 2.87x       |
+| eth-ecrecover/standard         | 24.74 s  | 23.87 s       | 7.28 s   | 7.16 s        | 3.40x  | 3.33x       |
+| fib/small, compressed          | 26.01 s  | 25.99 s       | 6.98 s   | 7.03 s        | 3.73x  | 3.70x       |
+
+Three of the four agree to within 3.6% on either arm, and the compressed point — chosen because the fix's own commit measured its orphaned hand-offs on compressed `fib` proofs, so it is where the new behaviour differs most — agrees to within 0.7%.
+The dispatch counts are identical across all three repeats of every point and every proof verified.
+`fib/standard` on the GPU arm reads 9% below its published figure because the published one comes from the full tier, which ran warm; it matches the standard tier's 9.20 s exactly.
+
+**Nothing here needs re-running.** The fix is a correctness repair with no measurable cost.
+
 ## Setting the prover up on a new machine
 
 Two things cost an hour each and are not in [USING.md](../USING.md).
