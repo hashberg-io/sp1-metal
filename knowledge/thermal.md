@@ -108,6 +108,19 @@ Even in the deliberately gentle re-measurement — ninety-second gaps around for
 The pause is now the whole of the previous run's wall clock, capped at five minutes, and the idle gate additionally waits for the thermal reading to return to `nominal` before any timed run, giving up after ten minutes and recording that it did.
 Waiting for `nominal` is the part that matters: it is the only reading that means cool, where `fair` means only "not yet alarming".
 
+**The ratio survives what the wall clock does not.**
+The two microbenchmark tiers were spot-checked the same way, three points re-taken cool, and they came back with absolute times up to a tenth slow -- `bits/large` on the GPU arm read 14.45 s in the full tier against 13.06 s cool -- while the speedups those times produce were within 4.5% throughout:
+
+| point            | cool  | standard tier   | full tier       |
+| ---------------- | ----- | --------------- | --------------- |
+| fib/standard     | 5.54x | 5.79x (+4.5%)   | 5.45x (-1.6%)   |
+| bits/large       | 6.06x | 5.91x (-2.4%)   | 5.97x (-1.4%)   |
+| sha256/standard  | 4.03x | 3.96x (-1.7%)   | 3.99x (-0.8%)   |
+
+Mild heat warms both arms together and largely cancels in the ratio, which is why those tiers stand and the application tier does not.
+What ruins a ratio is heat severe enough to hurt the arms *unequally*, and that is what three hours of the heaviest guests produced: 39% on one CPU arm against 3% on its GPU arm.
+So the quantity being reported decides how much heat is tolerable, and a suite reporting ratios can survive conditions that would invalidate one reporting wall clocks -- up to a point, and that point is somewhere below where the application tier was run.
+
 **And the check to run afterwards is not the one in the section above.**
 Comparing `fair` against `nominal` within a tier is worth having and is nearly free, but it answers a weaker question than it appears to, and it will pass a tier that is uniformly ruined.
 Re-measure two or three points cold, hours later, and compare against what was recorded.
