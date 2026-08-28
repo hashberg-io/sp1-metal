@@ -158,8 +158,10 @@ def check_references() -> None:
                 broken.append(f"{f}: [{text[:30]}]({target})")
     check("every relative link resolves", not broken, "\n          ".join(broken[:5]))
 
+    # Rust doc comments cite these files the same way documents do, and a
+    # rename that misses one leaves a reader chasing a path that is gone.
     dangling = set()
-    for f in md:
+    for f in md + [f for f in tracked() if f.endswith(".rs")]:
         for m in re.findall(r"`((?:results|tools|guests|crates|knowledge)/[A-Za-z0-9_./-]+)`", read(f)):
             if not os.path.exists(os.path.join(ROOT, m)):
                 dangling.add(f"{f}: {m}")

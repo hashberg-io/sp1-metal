@@ -21,10 +21,10 @@
 //! The checking mode was added because this was the only accelerated phase
 //! without one, which made it the one place a fully checked run could not
 //! look — and an intermittent wrong proof reported by a consumer
-//! (`knowledge/defect-wrong-proof.md`) was a Merkle root mismatch that had
-//! survived exactly such a run. Comparing whole layers rather than the root
-//! is the point: the root says only that something is wrong, while the lowest
-//! layer that disagrees says whether the tree was built wrongly or built
+//! (`knowledge/2026-08-28-defect-wrong-proof.md`) was a Merkle root mismatch
+//! that had survived exactly such a run. Comparing whole layers rather than the
+//! root is the point: the root says only that something is wrong, while the
+//! lowest layer that disagrees says whether the tree was built wrongly or built
 //! correctly over the wrong bytes.
 
 use std::borrow::Borrow;

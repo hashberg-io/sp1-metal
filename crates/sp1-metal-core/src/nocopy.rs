@@ -30,9 +30,9 @@
 //! The GKR round broke this and it cost a wrong proof, not a crash: it bound a
 //! prefix of the same array once per chip, so a layer with several wide chips
 //! had several buffers over that array's first page at once. See
-//! `results/2026-08-26-m4-max-gkr-overlapping-lends.md`. Anything that lends per item rather than
-//! per array should copy instead, which for a slice small enough to be bound
-//! per item costs nothing worth measuring.
+//! `results/2026-08-26-m4-max-gkr-overlapping-lends.md`. Anything that lends
+//! per item rather than per array should copy instead, which for a slice small
+//! enough to be bound per item costs nothing worth measuring.
 
 use metal::{Buffer, Device, MTLResourceOptions};
 

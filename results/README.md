@@ -12,7 +12,7 @@ Every measurement the documents cite, kept as it was taken.
 
 `tools/check_consistency.py` enforces this, so a file that does not follow it fails a check rather than sitting unnoticed.
 
-A run in progress writes to a working path such as `results/bench-full.jsonl`; file it under the convention when it finishes.
+A run in progress writes to an undated working path — `tools/bench_suite.py` defaults to `results/bench-<tier>.jsonl` — so file it under the convention when it finishes.
 
 ## What is here
 
