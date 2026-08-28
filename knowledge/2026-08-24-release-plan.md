@@ -63,7 +63,7 @@ The committed ELFs will be the only copies, so they must be committed exactly as
 
 **The trunk contradicts the branch.**
 `main` is 115 commits behind and has never seen this work.
-`knowledge/verdict.md`, which the README calls "Start here", says the project is not worth building and predicts 3.3x; the branch measured 5.56x.
+`knowledge/2026-08-21-verdict.md`, which the README calls "Start here", says the project is not worth building and predicts 3.3x; the branch measured 5.56x.
 
 ## The work, in order
 
@@ -76,7 +76,7 @@ The directory names are the workloads; the crate and ELF names stay `acceptance-
 
 Do this first and independently of everything else: the scratchpad is temporary, and until this is done the project can lose the ability to reproduce its own headline claim to a routine cleanup.
 
-*Verified by:* running the ladder against the in-repo guests and getting a row that matches `results/scaling-quiet.tsv`.
+*Verified by:* running the ladder against the in-repo guests and getting a row that matches `results/2026-08-24-m4-max-scaling-quiet.tsv`.
 
 ### 2. Commit the measurements
 
@@ -84,11 +84,11 @@ Drop `/results` from `.gitignore` and commit the 29 files.
 
 The central claim of this project is a number, and the measurements that produce it should travel with it — particularly since three knowledge documents already link to them.
 
-*Verified by:* `git ls-files results | wc -l` reporting 29, and the links in `next-levers.md`, `cpu-plan.md` and `spikes.md` resolving.
+*Verified by:* `git ls-files results | wc -l` reporting 29, and the links in `2026-08-23-next-levers.md`, `2026-08-23-cpu-plan.md` and `2026-08-22-spikes.md` resolving.
 
 ### 3. Merge to main, and rewrite the verdict as part of the merge
 
-Merge the branch, then replace `knowledge/verdict.md`'s headline and update the top-level `README.md`.
+Merge the branch, then replace `knowledge/2026-08-21-verdict.md`'s headline and update the top-level `README.md`.
 
 The old verdict was not wrong.
 It measured a *predicted* port against a *packed* CPU baseline and concluded 3.3x against a bar of 5x, which was the right answer to the question it asked.
@@ -98,7 +98,7 @@ Replace only the headline and the recommendation.
 
 The README update belongs to the merge rather than to the branch, which is the standing rule for an index that sits above the work.
 
-*Verified by:* reading the front page as a stranger would and finding it agrees with `results/scaling-quiet.tsv`.
+*Verified by:* reading the front page as a stranger would and finding it agrees with `results/2026-08-24-m4-max-scaling-quiet.tsv`.
 
 ### 4. Write the integration guide
 
@@ -119,7 +119,7 @@ The README update belongs to the merge rather than to the branch, which is the s
 Honest about cost in its own output: the first build is about eight minutes, the pair about two on an M4 Max.
 It should refuse to run, rather than produce a misleading number, if the machine is busy — the project has already recorded one corrupted measurement taken during a competing build.
 
-*Verified by:* running it on a quiet machine and getting a ratio inside the measured envelope, which is 1.94x-6.01x as of 2026-08-27; `results/bench-standard.md` is the current table.
+*Verified by:* running it on a quiet machine and getting a ratio inside the measured envelope, which is 1.94x-6.01x as of 2026-08-27; `results/2026-08-27-m4-max-bench-standard.md` is the current table.
 
 ### 6. Release hygiene
 

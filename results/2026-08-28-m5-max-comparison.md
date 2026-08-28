@@ -72,7 +72,7 @@ Those sum to 26.97 s against a whole GPU path worth 44.96 s — 60%, against the
 
 These are the only points in the matrix whose GPU gain exceeds 1.17x, and their CPU arms move by the same tenth as everything else.
 That asymmetry is much more likely to be a shader cache that was warm for the core guests and cold for the recursion AIRs than a generational step that reaches recursion alone.
-It cannot be settled from this machine; see the action recorded in [benchmark-status.md](../knowledge/benchmark-status.md).
+It cannot be settled from this machine; see the action recorded in [2026-08-24-benchmark-status.md](../knowledge/2026-08-24-benchmark-status.md).
 **D7 is not met either way** — its bar is 5x and the warm figures reach 3.45x to 4.01x.
 
 ## Why the first application tier was thrown away
@@ -90,7 +90,7 @@ Four points re-taken hours later on an idle machine reading `nominal`:
 
 The arms are not hurt equally, so the errors do not cancel: `eth-ecrecover/small` was inflated from a true 3.66x to a reported 4.96x, and `eth-mpt/large` deflated from 2.77x to 2.59x.
 A contaminated tier does not read as noisy — it reads as a finding, which is what makes this worth the space.
-[thermal.md](../knowledge/thermal.md) has the full account and what the suite does about it now.
+[2026-08-28-thermal.md](../knowledge/2026-08-28-thermal.md) has the full account and what the suite does about it now.
 
 ## The application tier
 
@@ -105,7 +105,7 @@ Two readings fit that, and this machine cannot separate them:
 - **The M4 apps figures are throttled.** They were taken with no pause between proofs, and these are the longest workloads in the suite — `eth-bls-verify/large` is a five-minute CPU run. Whatever thermal offset that machine carries, it carries most of it here.
 - **The M5's GPU path genuinely gains more on this shape of work.** Against this: the standard and full tiers were also unpaced on the M4 and show no such asymmetry at all. For it: their runs are a fraction as long, so they had less room to heat.
 
-The paced M4 re-take recorded in [benchmark-status.md](../knowledge/benchmark-status.md) settles it. Until then the M5 column stands on its own and the gain column does not.
+The paced M4 re-take recorded in [2026-08-24-benchmark-status.md](../knowledge/2026-08-24-benchmark-status.md) settles it. Until then the M5 column stands on its own and the gain column does not.
 
 **The CPU arm heats itself inside a single run, and no pause can fix that.**
 Twenty-seven of the twenty-eight runs that finished at `fair` were CPU-arm, and all eighteen CPU runs of `eth-pairing-check` and `eth-bls-verify` began at `nominal` and ended at `fair`.
@@ -146,7 +146,7 @@ The two long cryptographic guests sit at a flat 3.2-3.3x across all three sizes,
 Every figure in this file was taken before the buffer hand-off fix, which landed after the last of them.
 That fix changes the Merkle commit path — the largest single phase in the GPU proof — so it is the one change that could plausibly have moved these numbers.
 
-Four points re-taken against the fixed backend, three repeats each, all at `nominal`, in `spotcheck-m5-max-postfix.jsonl`:
+Four points re-taken against the fixed backend, three repeats each, all at `nominal`, in `2026-08-28-m5-max-spotcheck-postfix.jsonl`:
 
 | point                          | CPU here | CPU published | GPU here | GPU published | x here | x published |
 | ------------------------------ | -------- | ------------- | -------- | ------------- | ------ | ----------- |

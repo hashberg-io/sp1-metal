@@ -10,7 +10,7 @@ SP1_METAL_MIN_ENTRIES=999999999 SP1_METAL_BATCH=1 \
   ... --elf guests/secp256k1/elf/bench-secp256k1 --stdin-u32 500 --mode core
 ```
 
-About two runs in three never finished. `SP1_METAL_PERMITS=1` made it stop happening, 6 for 6, which said cross-thread; every upload policy failed and succeeded alike, which said it was not the lending defect of `gkr-overlapping-lends.md`.
+About two runs in three never finished. `SP1_METAL_PERMITS=1` made it stop happening, 6 for 6, which said cross-thread; every upload policy failed and succeeded alike, which said it was not the lending defect of `2026-08-26-m4-max-gkr-overlapping-lends.md`.
 
 **All of that was reasoning about the wrong thing.** The first line of a "hung" run's log is:
 

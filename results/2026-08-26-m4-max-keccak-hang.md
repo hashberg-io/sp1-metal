@@ -1,4 +1,4 @@
-> **Resolved 2026-08-26.** This was never a hang. See `results/zerocheck-invalid-proofs.md`: the GPU zerocheck computed the wrong round polynomial for four recursion AIRs (eight chip variants, both rounds each), SP1 retried until its budget was gone, and the parked threads that remained read as a hang. Kept for the diagnosis, and because the compile deadlock and the two missing autorelease pools found along the way were real and are fixed.
+> **Resolved 2026-08-26.** This was never a hang. See `results/2026-08-26-m4-max-zerocheck-invalid-proofs.md`: the GPU zerocheck computed the wrong round polynomial for four recursion AIRs (eight chip variants, both rounds each), SP1 retried until its budget was gone, and the parked threads that remained read as a hang. Kept for the diagnosis, and because the compile deadlock and the two missing autorelease pools found along the way were real and are fixed.
 
 # An intermittent hang in the Metal path
 
@@ -26,7 +26,7 @@ Same binary, same input, same environment, same machine. The CPU arm is unaffect
 
 ## What it resembles
 
-This project has seen one hang before, recorded in `knowledge/backend.md`: deferred command-buffer submission produced a state where every thread parked with nothing outstanding in Metal, and the shard retried until its retry budget was exhausted. That was traced to a per-thread queue against tokio task migration, and deferral has been off by default since — `SP1_METAL_DEFER` defaults to false, so it is not the cause here, but the shape is the same.
+This project has seen one hang before, recorded in `knowledge/2026-08-22-backend.md`: deferred command-buffer submission produced a state where every thread parked with nothing outstanding in Metal, and the shard retried until its retry budget was exhausted. That was traced to a per-thread queue against tokio task migration, and deferral has been off by default since — `SP1_METAL_DEFER` defaults to false, so it is not the cause here, but the shape is the same.
 
 The suspicion worth testing first is therefore a lost wakeup between a command buffer's completion handler and the thread waiting on it, which would be rare, timing-dependent, and would present exactly like this.
 
@@ -55,4 +55,4 @@ That widens the finding considerably. The hang was first seen on keccak at n>=20
 Two consequences for whoever picks this up:
 
 - **`compressed` mode is unmeasured because of it.** That is the mode D7's bar is actually written against, so the one number this project most needs is the one the hang blocks.
-- **Look for something shared** by keccak-at-scale and fib-under-recursion rather than for something in either. A lost wakeup between a command buffer's completion handler and the thread awaiting it fits both, and fits the earlier deferral hang recorded in `knowledge/backend.md`.
+- **Look for something shared** by keccak-at-scale and fib-under-recursion rather than for something in either. A lost wakeup between a command buffer's completion handler and the thread awaiting it fits both, and fits the earlier deferral hang recorded in `knowledge/2026-08-22-backend.md`.

@@ -8,10 +8,10 @@
 |---|---|
 | Guests | **Done.** Twenty-two in `guests/`, sources and ELFs committed: fourteen microbenchmarks and composites, and eight whole Bitcoin and Ethereum statements added 2026-08-27. |
 | Harness | **Done.** `tools/bench_suite.py`, `tools/bench_report.py`. |
-| Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
-| Application tier | **Done, 2026-08-27.** `results/bench-apps.jsonl` and `.md`, 144 timed runs, 24 points, no failures. |
-| Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
-| Second machine | **Measured 2026-08-28 on an M5 Max**, and the comparison is [`results/m5-max.md`](../results/m5-max.md). Both arms are 8-10% faster and the Metal advantage is unchanged. All three tiers are usable, and three points of the microbenchmark tiers re-taken cool confirm the ratios hold to within 4.5%. The application tier was run twice: the first attempt was thermally contaminated and is quoted nowhere, kept under a name that says so, and the re-run under a cooldown equal to each run's wall clock is the one to read. |
+| Standard tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/2026-08-27-m4-max-bench-standard.jsonl`, 204 runs, 34 points, no failures. Earlier runs kept beside it under dated names. |
+| Application tier | **Done, 2026-08-27.** `results/2026-08-27-m4-max-bench-apps.jsonl` and `.md`, 144 timed runs, 24 points, no failures. |
+| Full tier | **Done, and re-run 2026-08-27 against the fixed backend.** `results/2026-08-27-m4-max-bench-full.jsonl`, 366 timed runs, 64 points, six failures — all of them the one configuration that raises the node bound. The 2026-08-24 run is kept beside it under a dated name. |
+| Second machine | **Measured 2026-08-28 on an M5 Max**, and the comparison is [`results/2026-08-28-m5-max-comparison.md`](../results/2026-08-28-m5-max-comparison.md). Both arms are 8-10% faster and the Metal advantage is unchanged. All three tiers are usable, and three points of the microbenchmark tiers re-taken cool confirm the ratios hold to within 4.5%. The application tier was run twice: the first attempt was thermally contaminated and is quoted nowhere, kept under a name that says so, and the re-run under a cooldown equal to each run's wall clock is the one to read. |
 
 The full tier is a detached `nohup` process. It survives the session that started it, flushes one JSON line per run, and can be interrupted at any point without losing what it already measured.
 
@@ -19,8 +19,8 @@ The full tier is a detached `nohup` process. It survives the session that starte
 
 ```sh
 pgrep -f bench_suite.py                       # still alive?
-wc -l results/bench-full.jsonl                # rows so far
-python3 tools/bench_report.py results/bench-full.jsonl
+wc -l results/2026-08-27-m4-max-bench-full.jsonl                # rows so far
+python3 tools/bench_report.py results/2026-08-27-m4-max-bench-full.jsonl
 ```
 
 ### If it died partway
@@ -29,7 +29,7 @@ The file is valid JSON Lines at every moment, so the report works on a partial f
 
 ```sh
 nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
-  --out results/bench-full.jsonl > /tmp/full.log 2>&1 &
+  --out results/2026-08-27-m4-max-bench-full.jsonl > /tmp/full.log 2>&1 &
 ```
 
 ### Two operational traps, both already hit
@@ -41,7 +41,7 @@ nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
 
 ## What the standard tier found
 
-> The numbers below are from the 2026-08-24 run. The **2026-08-27 re-run against the fixed backend** is `results/bench-standard.md`: 204 runs, 34 points, **every proof verified**, median 3.60x over a range of 1.94x to 6.01x, with the compressed point at 3.12x. Its findings about *shape* — that size dominates chip mix, and that the memory advantage is flat — are unchanged; the differences are that keccak's large size is measured at all rather than timing out, that fib/large rose from 4.89x to 5.84x, and that divrem and keccak gave up some of their advantage because their slowest kernels no longer block a proof waiting to compile.
+> The numbers below are from the 2026-08-24 run. The **2026-08-27 re-run against the fixed backend** is `results/2026-08-27-m4-max-bench-standard.md`: 204 runs, 34 points, **every proof verified**, median 3.60x over a range of 1.94x to 6.01x, with the compressed point at 3.12x. Its findings about *shape* — that size dominates chip mix, and that the memory advantage is flat — are unchanged; the differences are that keccak's large size is measured at all rather than timing out, that fib/large rose from 4.89x to 5.84x, and that divrem and keccak gave up some of their advantage because their slowest kernels no longer block a proof waiting to compile.
 
 198 paired runs, 33 points, every proof verified except the keccak hangs below.
 
@@ -51,22 +51,22 @@ nohup python3 -u tools/bench_suite.py --tier full --repeats 3 \
 
 **The memory advantage is real and flat.** The Metal arm peaks at about half the CPU arm's resident memory at every size: 18.25 GB against 9.62 at fib/small, 103.25 against 54.41 at fib/large. The prediction that it would widen with shard count was wrong; the prediction that precompile guests would fall below the envelope was also wrong, since sha256 reaches 5.43x.
 
-Full table: `results/bench-standard.md`.
+Full table: `results/2026-08-27-m4-max-bench-standard.md`.
 
 ## Four defects, all closed on 2026-08-26
 
-> Closed. See `knowledge/defect-plan.md` for what each turned out to be — two of the four were not what this section says they were. Defect 1, the "intermittent hang", and defect 3, the "scaling cliff", were both **wrong proofs**: SP1 retries a failed shard silently and leaves every thread parked, which reads as a hang. The section is kept as it was written because what it got wrong is the useful part.
+> Closed. See `knowledge/2026-08-26-defect-plan.md` for what each turned out to be — two of the four were not what this section says they were. Defect 1, the "intermittent hang", and defect 3, the "scaling cliff", were both **wrong proofs**: SP1 retries a failed shard silently and leaves every thread parked, which reads as a hang. The section is kept as it was written because what it got wrong is the useful part.
 
-Detail and reproduction steps in `results/kernel-compile-pathology.tsv`, `results/precompile-scaling.tsv`, `results/keccak-hang.md`, `results/gkr-overlapping-lends.md`, `results/zerocheck-invalid-proofs.md`.
+Detail and reproduction steps in `results/2026-08-24-m4-max-kernel-compile-pathology.tsv`, `results/2026-08-24-m4-max-precompile-scaling.tsv`, `results/2026-08-26-m4-max-keccak-hang.md`, `results/2026-08-26-m4-max-gkr-overlapping-lends.md`, `results/2026-08-26-m4-max-zerocheck-invalid-proofs.md`.
 
-1. **An intermittent hang.** `guests/keccak` at n>=2000 on the Metal arm sometimes stops dead at **0.0% CPU** with the machine idle. Roughly two runs in three, but genuinely intermittent — a point that hung in one tier completed in 8.86 s in the next. The CPU arm proves the same input in 13.3 s every time. Verification catches wrong answers; nothing catches this. **Fix this first.** The shape resembles the deferral hang in `backend.md` — threads parked with nothing outstanding in Metal — so a lost wakeup between a command buffer's completion handler and the thread waiting on it is the first suspect. `SP1_METAL_DEFER` is off, so that is not the cause.
+1. **An intermittent hang.** `guests/keccak` at n>=2000 on the Metal arm sometimes stops dead at **0.0% CPU** with the machine idle. Roughly two runs in three, but genuinely intermittent — a point that hung in one tier completed in 8.86 s in the next. The CPU arm proves the same input in 13.3 s every time. Verification catches wrong answers; nothing catches this. **Fix this first.** The shape resembles the deferral hang in `2026-08-22-backend.md` — threads parked with nothing outstanding in Metal — so a lost wakeup between a command buffer's completion handler and the thread waiting on it is the first suspect. `SP1_METAL_DEFER` is off, so that is not the cause.
 2. **The node bound does not predict compile cost.** `KeccakPermuteControl` (8,234 / 12,351 nodes) and `DivRem` (7,624 / 11,436) each cost about ten minutes to compile, while `Global:true` at **15,196** compiles instantly. Cached afterwards, so it is one-time per program — but it lands on a user's first proof, which appears to hang. It buys nothing: keccak's warm wall is 2.77 s with those kernels and 2.79-2.85 s without. Workaround `SP1_METAL_ZEROCHECK_MAX_NODES=8000`; the real fix is a better predictor than node count.
 3. **A scaling cliff on secp256k1 that is ours.** Between n=1000 and n=1500, same shard count, the CPU arm is flat (7.73 -> 7.79 s) and the Metal arm goes from 2.15 s to not finishing in 900. At n=1000 Metal is 3.6x faster; at n=1500 it is >115x slower. `Secp256k1DoubleAssign` is 167,376 / 251,064 nodes, far over the bound, so it never gets a kernel and its zerocheck falls back to the CPU — and it is the widest chip in the machine.
 4. **Timeouts leaked processes** (fixed). `subprocess.run(timeout=)` kills only the direct child, so a hung prover under `/usr/bin/time` survived and held its memory.
 
 ## What the application tier found
 
-144 timed runs, 24 points, **every proof verified.** Median **2.98x**, range 2.48x–5.75x. Full table: `results/bench-apps.md`.
+144 timed runs, 24 points, **every proof verified.** Median **2.98x**, range 2.48x–5.75x. Full table: `results/2026-08-27-m4-max-bench-apps.md`.
 
 **A real statement scores below a tight precompile loop, by about a fifth.** 2.98x here against 3.59x for the microbenchmarks, measured on the same machine the same day. That was the prediction written down when these guests were designed, and it is the number someone in those communities would actually get.
 
@@ -89,7 +89,7 @@ Six of the eight are flat or *falling* with size. What separates `btc-headers` i
 
 ## What the full tier found
 
-> **Re-measured 2026-08-27 against the fixed backend.** `results/bench-full.md`: 366 timed runs, 64 points, and the only failures left are the six that raise the node bound.
+> **Re-measured 2026-08-27 against the fixed backend.** `results/2026-08-27-m4-max-bench-full.md`: 366 timed runs, 64 points, and the only failures left are the six that raise the node bound.
 > The section below is kept as written, because what it got wrong is the useful part. Here is what the re-run changed.
 >
 > - **The ablation still does not sum, and still refutes the prediction in direction.** Against a 10.33 s baseline: MERKLE 23.86 (+13.53), ZEROCHECK 17.19 (+6.86), JAGGED 14.32 (+3.99), TRANSITION 12.74 (+2.41), ENCODE 12.24 (+1.91), FIRST_LAYER 11.51 (+1.18). Those sum to 29.88 s against a whole path worth 48.74 s — 61% of it, against 54% before, and the same conclusion. Merkle is still the largest single thing this backend does. The one row that moved is FIRST_LAYER: it was +0.17 s and is now +1.18 s, because the first layer now has kernels it used to decline.
@@ -182,7 +182,7 @@ A generational step that reaches recursion alone, by a third to a half, while to
 Those AIRs are the largest kernel set here — they needed 120 s of blocking compile on the M5 — and they are exercised by exactly three points in the whole matrix, so they get the fewest warm-up runs of anything measured.
 
 This is inference from the shape of the numbers, not a measurement, and it cannot be settled from the M5.
-It is worth settling because compressed proving is what [desiderata.md](desiderata.md) D7 is judged against: the recorded answer is "about 3x", and if the recorded answer was taken cold then the backend does better than the verdict currently credits it with. It would still be short of D7's 5x either way.
+It is worth settling because compressed proving is what [2026-08-19-desiderata.md](2026-08-19-desiderata.md) D7 is judged against: the recorded answer is "about 3x", and if the recorded answer was taken cold then the backend does better than the verdict currently credits it with. It would still be short of D7's 5x either way.
 
 ## Next actions, in order
 
@@ -191,6 +191,6 @@ The first three of these are closed; they are kept so the order they were writte
 1. ~~Fix the keccak hang.~~ Closed 2026-08-26. It was not a hang: the proof was wrong, and SP1's silent shard retry left every thread parked, which reads as one.
 2. ~~Replace the node-count bound with something that predicts compile cost.~~ Closed by a different fix. Node count still does not predict compile cost and probably cannot, so the bound is no longer asked to: a round waits a second for its kernel, takes the CPU if it is not ready, and installs the kernel whenever it arrives. Nothing is refused for having been slow once.
 3. ~~Diagnose the secp256k1 cliff.~~ Closed 2026-08-26. Also a wrong proof, from two no-copy Metal buffers lent over one shared page.
-4. Fold the results into `verdict.md` — in particular, that the headline figure is a *large-workload* one and small workloads get about 3.5x whatever they compute.
-5. Re-measure the M4 on a deliberately warmed shader cache, and settle the question above. One `SP1_METAL_COMPILE_BUDGET=1800` run per guest and per mode, then the three compressed points and the `divrem` and `keccak` rows at the default budget. Those two guests are the other candidates: the gap between the cold `bench-standard` and the warm `bench-full` was already attributed to cache warmth, and a run warmed on purpose would say whether that attribution had the magnitude right. If the compressed figures move, `verdict.md` and the compressed claims in `README.md` and `USING.md` move with them. While the machine is set up for it, spot-check two or three points cool as well: the M4 tiers were run with no pause between proofs at all, so they carry whatever thermal offset this machine has, and nothing recorded at the time would show it. Within-point drift is absent from that data -- no point of forty-eight is more than 5% slower by its last repeat -- but a uniform offset would not appear that way, and comparing a cool M5 against a warm M4 would overstate the newer machine.
+4. Fold the results into `2026-08-21-verdict.md` — in particular, that the headline figure is a *large-workload* one and small workloads get about 3.5x whatever they compute.
+5. Re-measure the M4 on a deliberately warmed shader cache, and settle the question above. One `SP1_METAL_COMPILE_BUDGET=1800` run per guest and per mode, then the three compressed points and the `divrem` and `keccak` rows at the default budget. Those two guests are the other candidates: the gap between the cold `bench-standard` and the warm `bench-full` was already attributed to cache warmth, and a run warmed on purpose would say whether that attribution had the magnitude right. If the compressed figures move, `2026-08-21-verdict.md` and the compressed claims in `README.md` and `USING.md` move with them. While the machine is set up for it, spot-check two or three points cool as well: the M4 tiers were run with no pause between proofs at all, so they carry whatever thermal offset this machine has, and nothing recorded at the time would show it. Within-point drift is absent from that data -- no point of forty-eight is more than 5% slower by its last repeat -- but a uniform offset would not appear that way, and comparing a cool M5 against a warm M4 would overstate the newer machine.
    **The application tier makes this urgent rather than tidy.** Its M5 re-run was paced and its M4 reference was not, and there the two arms do *not* move together: the CPU arm gains a median 8.7% and the GPU arm 13.5%, lifting the Metal advantage from 2.98x to 3.17x at every point but three. That is either a real property of the newer GPU on long workloads or the M4's own heat inflating the baseline, and the apps guests are the longest in the suite, so they had the most room to throttle. The microbenchmark tiers show no such asymmetry, which argues against throttling but not decisively, since their runs are a fraction as long. Re-take the application tier on the M4 under the same regime the M5 used — `COOL_FRACTION = 1.0` and the `nominal` gate — and the question closes.

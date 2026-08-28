@@ -7,7 +7,7 @@ You do not need to clone this repository to use it.
 
 ## Requirements
 
-- An Apple Silicon Mac. Everything here was measured on an M4 Max, and the whole matrix was re-measured on an M5 Max: both arms move by 8-10% and the ratio between them does not, so other M-series chips differ in degree rather than in kind. [`results/m5-max.md`](results/m5-max.md) has the comparison.
+- An Apple Silicon Mac. Everything here was measured on an M4 Max, and the whole matrix was re-measured on an M5 Max: both arms move by 8-10% and the ratio between them does not, so other M-series chips differ in degree rather than in kind. [`results/2026-08-28-m5-max-comparison.md`](results/2026-08-28-m5-max-comparison.md) has the comparison.
 - Rust 1.88 or later, which is what `sp1-hypercube` itself requires.
 - `protoc`, from `brew install protobuf`. It is not this project's dependency — `sp1-prover-types` has a build script that needs it — but a machine with only Rust cannot build the host, and the failure (`Could not find protoc`) does not say where it came from.
 - **SP1 6.4.0 exactly.** See [Compatibility](#compatibility).
@@ -129,33 +129,18 @@ It is slow and it is the strongest correctness evidence available short of the v
 
 That is not belt-and-braces. Four of SP1's recursion AIRs, in both rounds each — `BaseAlu`, `ExtAlu`, `PrefixSumChecks` and `PublicValues` — used to transpile to kernels that computed the wrong round polynomial, which is why compressed proofs did not verify before this check existed. The cause is fixed and they no longer decline, but the check is what turned an unverifiable proof into a performance cost while it lasted. `SP1_METAL_ZEROCHECK=check` turns the same comparison on for *every* call, over the whole round, and makes a disagreement fatal.
 
-## Known issues
+## Defects, all found and fixed
 
-### 🚨 An intermittent wrong proof, which parks the run
+Nothing here is open. They are recorded because each one changed what the backend does, and because a reader running an older checkout may still meet them.
 
-**Fixed in `v1.0.0`.** The cause has been found and fixed, and the fix has four hundred clean proofs behind it on the soak that produced the fault at its ninety-fourth — evidence, not proof, so watch your own workload before trusting it unattended. **On `v0.1.0`, set `SP1_METAL_MERKLE=0` for anything you are not watching**; the paragraphs below describe that release.
+**An intermittent wrong proof, which read as a hang.** With every phase accelerated, a proof failed SP1's own shard verification roughly once every twenty-eight — `Query failed to verify: root mismatch` — after which SP1 retried the shard and never returned. No invalid proof was ever accepted: this was a proof being refused, so what was at risk was the run finishing rather than the statement it proved. A hundred-proof run under `SP1_METAL_MERKLE=check` found the GPU's tree disagreeing with the CPU's at layer zero, digest zero — the leaves, so the tree was built over the wrong bytes rather than built wrongly.
 
-With every phase accelerated, a proof fails SP1's own shard verification roughly **once every twenty-eight** — `Query failed to verify: root mismatch` — and SP1 then retries and never returns.
-Nothing is printed unless `RUST_LOG=error` is set, so an unattended run produces nothing and says nothing.
-**No invalid proof is accepted**: this is a proof being refused, so what is at risk is the run finishing rather than the statement it proves.
+The cause was the table that hands a codeword's buffer from the encode to the Merkle kernels: it was keyed on a raw pointer and could outlive the allocation that pointer named, which in a process making many proofs is a use-after-free waiting for an address to be handed out twice. The soak that produced the fault at its ninety-fourth proof ran 400 of 400 with the fix in, dropping 108 orphaned hand-offs along the way — each one an entry that would previously have sat on a pointer to freed memory. The reproduction, the counts and the mechanism are in [knowledge/2026-08-28-defect-wrong-proof.md](knowledge/2026-08-28-defect-wrong-proof.md).
 
-`SP1_METAL_MERKLE=0` has since run 115 consecutive proofs and a full-scale one with no failure.
-It costs most of the advantage — 4.72× becomes 1.92× on the workload it was measured on — because the Merkle tree is where most of the advantage was.
-
-Reported by a consumer, and **since reproduced here**: a hundred-proof run under `SP1_METAL_MERKLE=check` verified ninety-three and then found the GPU's tree disagreeing with the CPU's at **layer zero, digest zero** — the leaves, so the tree was built over the wrong bytes rather than built wrongly. The run then parked, and the watchdog said so after fifteen minutes of nothing.
-
-A defect has been found and fixed on that route: the table that hands a codeword's buffer from the encode to the Merkle kernels was keyed on a raw pointer and could outlive the allocation that pointer named, which in a process making many proofs is a use-after-free waiting for an address to be handed out twice.
-It fits everything reported, including why turning the tree off is a complete workaround — nothing then takes from the table.
-The same soak with the fix in ran **400 of 400** and dropped 108 orphaned hand-offs along the way, each one an entry that would previously have sat on a pointer to freed memory waiting for the allocator to hand that address out again.
-What is not settled is the workload the rate was actually measured on: a hand-off is orphaned per commitment, and a statement with many more shards per proof than `fib` is exposed proportionally more often.
-The reproduction, the counts and the mechanism are in [knowledge/defect-wrong-proof.md](knowledge/defect-wrong-proof.md).
-
-Two things exist now that did not:
+Two things came out of it that are worth having in their own right:
 
 - `SP1_METAL_MERKLE=check` builds both trees and compares every digest of every layer, naming the lowest layer that disagrees. This phase was the only accelerated one that could not check itself, which is why a fully checked run passed while the fault was live — and it is what caught the fault the moment it was asked to.
-- `sp1-profile-host --repeat N --timeout SECS` proves through one client the way a driver does, and the timeout is a watchdog on its own OS thread — the runtime is what has stopped turning, so a timer inside it is no use. It says the run is parked and leaves with status 2.
-
-### Fixed, but worth knowing
+- `sp1-profile-host --repeat N --timeout SECS` proves through one client the way a driver does, and the timeout is a watchdog on its own OS thread — the runtime is what stops turning, so a timer inside it is no use. It says the run is parked and leaves with status 2.
 
 **A Keccak or division program's first proof appeared to hang for ten minutes.** `KeccakPermuteControl` and `DivRem` each take about that long in the Metal compiler, paid on the first proof with no output. Node count never predicted it — `Global:true` at 15,196 nodes compiles instantly while `KeccakPermuteControl` at 12,351 does not — so the bound drawn on node count could neither catch them nor be raised past them.
 
@@ -163,7 +148,7 @@ A round now waits `SP1_METAL_COMPILE_BUDGET` seconds for its chip's kernel and t
 
 The one cost is that a program whose chip takes longer to compile than the proof takes to run never sees that kernel, because the process exits first — `divrem` is 18.7 s that way against 14.4 s with it.
 
-macOS caches a compiled shader against its source and its compile options, and that cache outlives the process, so the cost is payable once. `SP1_METAL_COMPILE_BUDGET=1800` on a single run blocks until every kernel is built — 571 s for keccak — and every run after it gets those kernels at the default budget. Measured: keccak 6.30 s → 5.55 s, divrem 18.7 s → 14.3 s, both back to what they were before any of this. The two benchmark matrices in `results/` measure this without meaning to: `bench-standard.md` was taken on a cold cache and `bench-full.md` ten hours later on a warm one, and of the thirty-three workloads they share the only four that move by more than a quarter are these — divrem/standard 3.75x to 5.14x, keccak/small 2.41x to 3.19x, divrem/small 2.47x to 3.24x, keccak/standard 2.07x to 2.37x, with keccak/large moving too but by less, 1.94x to 2.16x — and every one of them moves in the GPU arm alone. `results/kernel-compile-budget.md` has the deliberate pairs. `SP1_METAL_COMPILE_LOG=1` prints what each kernel cost and how much of it was queueing.
+macOS caches a compiled shader against its source and its compile options, and that cache outlives the process, so the cost is payable once. `SP1_METAL_COMPILE_BUDGET=1800` on a single run blocks until every kernel is built — 571 s for keccak — and every run after it gets those kernels at the default budget. Measured: keccak 6.30 s → 5.55 s, divrem 18.7 s → 14.3 s, both back to what they were before any of this. The two benchmark matrices in `results/` measure this without meaning to: `2026-08-27-m4-max-bench-standard.md` was taken on a cold cache and `2026-08-27-m4-max-bench-full.md` ten hours later on a warm one, and of the thirty-three workloads they share the only four that move by more than a quarter are these — divrem/standard 3.75x to 5.14x, keccak/small 2.41x to 3.19x, divrem/small 2.47x to 3.24x, keccak/standard 2.07x to 2.37x, with keccak/large moving too but by less, 1.94x to 2.16x — and every one of them moves in the GPU arm alone. `results/2026-08-27-m4-max-kernel-compile-budget.md` has the deliberate pairs. `SP1_METAL_COMPILE_LOG=1` prints what each kernel cost and how much of it was queueing.
 
 `SP1_METAL_COMPILE_OPT=size` asks for a size-optimised compile. It is kept as a measured negative: the ten-minute chip takes 552 s that way against 566 s at the default, so this is not the optimiser being aggressive.
 

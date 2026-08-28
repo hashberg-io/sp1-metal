@@ -12,7 +12,7 @@
 # not finish because it produces a shard proof that does not verify -- the GKR
 # round lent overlapping pages -- and SP1 retries it until the budget is gone.
 # Fixed; secp256k1 now verifies at every size from 1000 to 4000 at 3.47x-3.59x
-# with no discontinuity. See results/gkr-overlapping-lends.md.
+# with no discontinuity. See results/2026-08-26-m4-max-gkr-overlapping-lends.md.
 #
 # An earlier reading of this cliff was contaminated -- the diagnostic ran
 # alongside a stuck 21-minute process -- and was re-measured cleanly.

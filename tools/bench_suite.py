@@ -496,7 +496,7 @@ def run_tier(tier: str, repeats: int, fh, force: bool) -> None:
 
 
 # The registry, at module scope so it can be inspected without running anything.
-# Sizes come from the calibration recorded in knowledge/benchmark-plan.md: a
+# Sizes come from the calibration recorded in knowledge/2026-08-24-benchmark-plan.md: a
 # guest's standard size lands near the four shards of the acceptance point.
 guest("fib", "acceptance-guest", 250_000, 2_000_000, 4_000_000, "A", "ALU add/mul")
 guest("mem", "acceptance-mem", 50_000, 400_000, 800_000, "A", "memory chips")

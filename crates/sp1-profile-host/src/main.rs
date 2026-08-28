@@ -15,7 +15,7 @@
 //!
 //! `--repeat N` proves the same statement N times through one `ProverClient`,
 //! which is the shape a consumer's driver has and the shape the intermittent
-//! wrong proof of `knowledge/defect-wrong-proof.md` needs: five single-proof
+//! wrong proof of `knowledge/2026-08-28-defect-wrong-proof.md` needs: five single-proof
 //! runs were clean where a process making dozens of sequential calls failed
 //! about one time in twenty-eight. `--timeout SECS` is what makes that
 //! survivable unattended, because the failure does not raise: SP1 treats a
@@ -26,7 +26,7 @@
 //! SP1_DUMP=1 path/to/real-host              # writes program.bin, stdin.bin
 //! RUST_LOGGER=flat RUST_LOG=debug cargo run --release -- \
 //!     --elf program.bin --stdin-bin stdin.bin --mode compressed > prove.log 2>&1
-//! python3 ../../tools/span_profile.py prove.log --json profile.json
+//! python3 ../../tools/span_profile.py prove.log --json 2026-08-24-m4-max-profile.json
 //! ```
 
 

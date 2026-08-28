@@ -1,3 +1,3 @@
 axis	guest	n	shards	shard_size	cpu_s	gpu_s	speedup	note
-work	fib	2000000	4	4194304	60.254	10.845	5.556	from results/scaling-quiet.tsv, quiet machine
+work	fib	2000000	4	4194304	60.254	10.845	5.556	from results/2026-08-24-m4-max-scaling-quiet.tsv, quiet machine
 work	fib	4000000	6	4194304	112.405	19.950	5.634	medians; gpu is the median of eight: 18.12 19.41 19.49 19.79 20.10 20.29 21.85 22.70

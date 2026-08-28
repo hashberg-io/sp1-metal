@@ -76,6 +76,20 @@ def check_hygiene() -> None:
           sh("git check-ignore tools/fixtures/span_profile_sample.log") == "")
 
 
+def check_naming() -> None:
+    """Both records folders name their files by when they were made."""
+    print("\nfile naming")
+    notes = [f for f in os.listdir(os.path.join(ROOT, "knowledge"))
+             if f.endswith(".md") and f != "README.md"]
+    bad = [f for f in sorted(notes) if not re.fullmatch(r"20\d\d-\d\d-\d\d-[a-z0-9-]+\.md", f)]
+    check("every note is dated yyyy-mm-dd-<slug>.md", not bad, str(bad))
+
+    res = [f for f in os.listdir(os.path.join(ROOT, "results")) if f != "README.md"]
+    pat = r"20\d\d-\d\d-\d\d-m[45]-max-[a-z0-9.-]+\.[a-z]+"
+    bad = [f for f in sorted(res) if not re.fullmatch(pat, f)]
+    check("every result is dated yyyy-mm-dd-<machine>-<slug>.<ext>", not bad, str(bad))
+
+
 def check_names() -> None:
     """Every list of names in a document, against the names themselves."""
     print("\nnames, counted where they are defined")
@@ -83,7 +97,7 @@ def check_names() -> None:
     present = {d for d in os.listdir(os.path.join(ROOT, "crates")) if d != "vendor"}
     check("the README lists every crate", listed == present, diff(listed, present))
 
-    doc = set(re.findall(r"^\d+\. `probes ([a-z0-9]+)`", read("knowledge/probes.md"), re.M))
+    doc = set(re.findall(r"^\d+\. `probes ([a-z0-9]+)`", read("knowledge/2026-08-19-probes.md"), re.M))
     binary = set(re.findall(r'\("([a-z0-9]+)", probes::', read("crates/sp1-metal-probes/src/main.rs")))
     check("every probe the binary registers is documented", doc == binary, diff(doc, binary))
 
@@ -185,6 +199,7 @@ def check_change_logs() -> None:
 
 def main() -> int:
     check_hygiene()
+    check_naming()
     check_names()
     check_values()
     check_references()

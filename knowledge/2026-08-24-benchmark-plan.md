@@ -1,6 +1,6 @@
 # Benchmark and correctness plan
 
-> **Superseded by the suite it designed, 2026-08-27.** This was written before anything was built and it is kept for the reasoning, not the status. The suite exists: `tools/bench_suite.py`, twenty-two guests in `guests/`, four tiers, and the measurements in `results/`. [benchmark-status.md](benchmark-status.md) is where the work actually stands.
+> **Superseded by the suite it designed, 2026-08-27.** This was written before anything was built and it is kept for the reasoning, not the status. The suite exists: `tools/bench_suite.py`, twenty-two guests in `guests/`, four tiers, and the measurements in `results/`. [2026-08-24-benchmark-status.md](2026-08-24-benchmark-status.md) is where the work actually stands.
 >
 > The blocker below has cleared — the SP1 guest toolchain is installed at `~/.sp1/bin`, which is not on the `PATH`, so `export PATH="$HOME/.sp1/bin:$PATH"` first. Two of the seven sensitivities named below were answered differently than expected, and both answers are in the status document: the node bound cannot usefully be raised, and workload *size* moves the speedup far more than chip mix does.
 >

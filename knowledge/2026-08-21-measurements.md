@@ -1,6 +1,6 @@
 # What the machine can actually do
 
-Measured on the M4 Max (12 performance + 4 efficiency cores, 40-core GPU, 128 GB unified at 546 GB/s nominal) on 2026-08-21, with the probe suite described in [probes.md](probes.md).
+Measured on the M4 Max (12 performance + 4 efficiency cores, 40-core GPU, 128 GB unified at 546 GB/s nominal) on 2026-08-21, with the probe suite described in [2026-08-19-probes.md](2026-08-19-probes.md).
 Every GPU figure is a Metal kernel parity-checked against slop 6.4.0; every CPU figure is the packed (NEON) implementation, because that is what the SP1 CPU prover runs and beating scalar CPU code would prove nothing.
 Numbers below are best-of-ten, from a single `probes all --cpu` run. The machine was not quite idle — a background test suite held one of the sixteen cores — which understates the CPU side, and so flatters every ratio here, by a few percent.
 
@@ -129,7 +129,7 @@ Pipelining buys almost nothing now that the host-resident share is 3.3%: there i
 
 The conservative column gives every compute-bound phase the hardware's own multiply ratio, which is what a CPU implementation at its roofline would leave. The optimistic column gives each phase its measured ratio against a packed CPU baseline. The central column is the geometric mean, and is the number to plan against.
 
-[Desiderata](desiderata.md) D7 asks for 5× end to end. No column reaches it. The optimistic one assumes every bracketed factor lands at its upper end, the pipelining is perfect, the port is complete — every phase moved, including the constraint transpiler that has not been designed — and the CPU prover stays exactly as unoptimised as it is today. and even then it stops at 4.7×.
+[Desiderata](2026-08-19-desiderata.md) D7 asks for 5× end to end. No column reaches it. The optimistic one assumes every bracketed factor lands at its upper end, the pipelining is perfect, the port is complete — every phase moved, including the constraint transpiler that has not been designed — and the CPU prover stays exactly as unoptimised as it is today. and even then it stops at 4.7×.
 
 The reason is not a weak GPU or a bad kernel. The zerocheck and GKR kernels both run within a few percent of the machine's measured multiply roofline; there is nothing left to extract from them. The reason is the machine: a 40-core GPU and twelve NEON performance cores are only 3.3× apart on field multiplies and 1.5× apart on memory, because they share one pool of it. On a discrete GPU with its own 1 TB/s of memory both those numbers would be several times larger, and the same port would clear 5× comfortably. On this machine it cannot, unless the CPU it is measured against stays as unvectorised as it is now — which is a strange thing to build a target on.
 

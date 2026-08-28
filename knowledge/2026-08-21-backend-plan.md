@@ -1,18 +1,18 @@
 # Plan for building the backend
 
-> **Status: executed.** The port described here was built; [backend.md](backend.md) is what building it found.
-> This document opens by quoting a verdict that has since been overturned — see [verdict.md](verdict.md) — and its projection proved optimistic by roughly a factor of two.
+> **Status: executed.** The port described here was built; [2026-08-22-backend.md](2026-08-22-backend.md) is what building it found.
+> This document opens by quoting a verdict that has since been overturned — see [2026-08-21-verdict.md](2026-08-21-verdict.md) — and its projection proved optimistic by roughly a factor of two.
 > Kept because the gap between the plan and the outcome is the useful part.
 
-[verdict.md](verdict.md) concluded that a Metal backend is not worth building on this hardware, on the strength of a predicted 3.3× against a bar of 5×.
+[2026-08-21-verdict.md](2026-08-21-verdict.md) concluded that a Metal backend is not worth building on this hardware, on the strength of a predicted 3.3× against a bar of 5×.
 That prediction measured the GPU against a *packed* CPU baseline, because that is the fair comparison between two pieces of silicon.
-[D7](desiderata.md) does not ask for the fair comparison. It asks for 5× "the same machine's CPU prover", and the prover on this machine is scalar.
+[D7](2026-08-19-desiderata.md) does not ask for the fair comparison. It asks for 5× "the same machine's CPU prover", and the prover on this machine is scalar.
 
 Against the prover that actually ships, a complete port predicts **10.7×** with the CPU work pipelined against the GPU's, or 8.8× if it is integrated naively and everything runs in sequence; both come from [`tools/fit_model.py`](../tools/fit_model.py) over a real profile, and every corner of the sensitivity band stays above 6.
 This document is the plan if that is the bar you want to clear: what the number rests on, where the code seam is, what is not yet known, and in what order to find out.
 
-The three unknowns below have since been measured; [spikes.md](spikes.md) has the results and the go/no-go, and the numbers here are the refit ones.
-Steps 5 through 7 of the order of work are done, and [backend.md](backend.md) records what building them found — including a stall that took seven defects and one retracted measurement to clear.
+The three unknowns below have since been measured; [2026-08-22-spikes.md](2026-08-22-spikes.md) has the results and the go/no-go, and the numbers here are the refit ones.
+Steps 5 through 7 of the order of work are done, and [2026-08-22-backend.md](2026-08-22-backend.md) records what building them found — including a stall that took seven defects and one retracted measurement to clear.
 
 ## Which baseline
 
@@ -26,8 +26,8 @@ The two numbers answer different questions and both are right.
 | commit | 2.96× | 14.2× |
 | **complete port** | **3.9×** | **10.7×** |
 
-The right-hand column is the left multiplied by the packing headroom the shipped prover leaves unclaimed: 3.26× on the GKR round and 3.0× on the folds, both measured in [measurements.md](measurements.md), and 2.75× assumed for zerocheck by analogy with the folds, which is the one factor here with no measurement behind it.
-The commit row is measured on both sides rather than derived — see [spikes.md](spikes.md) — and its two columns differ by 4.8× because slop's Reed-Solomon encoder is that much slower than the same transform written packed.
+The right-hand column is the left multiplied by the packing headroom the shipped prover leaves unclaimed: 3.26× on the GKR round and 3.0× on the folds, both measured in [2026-08-21-measurements.md](2026-08-21-measurements.md), and 2.75× assumed for zerocheck by analogy with the folds, which is the one factor here with no measurement behind it.
+The commit row is measured on both sides rather than derived — see [2026-08-22-spikes.md](2026-08-22-spikes.md) — and its two columns differ by 4.8× because slop's Reed-Solomon encoder is that much slower than the same transform written packed.
 Phase shares are the profiled ones: GKR 46.8%, PCS 19.0%, zerocheck 15.0%, commit 13.7%, everything else 5.5%.
 
 Sensitivity, on the complete port against the shipped prover:
@@ -95,18 +95,18 @@ At 1.9% of the proof this costs nothing, and unified memory means the traces it 
 
 Each can be answered by a spike against the existing probe harness, before any backend code is written, and each can sink the project on its own.
 
-**A GPU-side challenger.** *(Answered — see [spikes.md](spikes.md): not blocking the host matters more than moving the sponge does.)*
+**A GPU-side challenger.** *(Answered — see [2026-08-22-spikes.md](2026-08-22-spikes.md): not blocking the host matters more than moving the sponge does.)*
 A command buffer of its own costs 87 µs, sumcheck and BaseFold rounds halve every round, and each round's challenge is derived from the previous round's output — so a naive port pays a full round trip per round and the tails become the whole cost.
 The `launch` probe already measured the size of this: folding 2²⁴ elements one round trip at a time takes 2.88 ms, of which 2.2 ms is round trips, against 0.63 ms for the same rounds in a single submission.
 Closing it means a Poseidon2 duplex sponge and Fiat-Shamir running on the device, so challenges never touch the host.
 This is a design constraint on the shape of every other kernel rather than an optimisation to add afterwards, which is why it goes first: retrofitting it is a rewrite.
 
-**A blocked Reed-Solomon encode.** *(Answered — see [spikes.md](spikes.md): 1.72× over a packed CPU, and at the bandwidth roofline.)*
+**A blocked Reed-Solomon encode.** *(Answered — see [2026-08-22-spikes.md](2026-08-22-spikes.md): 1.72× over a packed CPU, and at the bandwidth roofline.)*
 The commit phase is 13.7% and its factor spans 1.97× to 5.13×, the widest bracket in the model, because only the DFT's butterfly stage has been measured and not a real implementation.
 One stage in isolation runs at 1.11× because both sides are moving memory; a version that holds a block in threadgroup memory across stages moves toward the 3.21× multiply roofline.
 Which of those it lands on is entirely a question of residency, and it has to match slop's bit-reversed convention to be usable.
 
-**A constraint transpiler.** *(Answered — see [spikes.md](spikes.md): all 119 chips transpile and compile; chunking the constraint list is worth up to 2.8×.)*
+**A constraint transpiler.** *(Answered — see [2026-08-22-spikes.md](2026-08-22-spikes.md): all 119 chips transpile and compile; chunking the constraint list is worth up to 2.8×.)*
 Zerocheck is 15% of the proof and the probe suite deliberately priced only the *shape* of constraint evaluation, never a real chip's constraints.
 Turning `SymbolicExpression` into something a GPU runs is the genuine unknown-unknown of this project: either MSL codegen per chip, or a bytecode tape walked by an interpreter kernel.
 SP1 has on the order of thirty chips with very different constraint sets, so the spike should take the two largest and find out whether register pressure or branch divergence kills the approach before the other twenty-eight are attempted.
@@ -122,19 +122,19 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
    A Poseidon2 duplex sponge and Fiat-Shamir on the device, plus a sumcheck round loop that batches into one submission instead of one command buffer per round.
    Goes first because it constrains the shape of every other kernel.
    *Machine: yes, GPU only.* Seconds per run, and the CPU side of the comparison is already measured, so it does not need a quiet machine.
-   **Done**, and it revised its own premise: not blocking the host is worth more than moving the sponge, and the two together are worth 3.35x rather than the 4.5x assumed here. See [spikes.md](spikes.md).
+   **Done**, and it revised its own premise: not blocking the host is worth more than moving the sponge, and the two together are worth 3.35x rather than the 4.5x assumed here. See [2026-08-22-spikes.md](2026-08-22-spikes.md).
 2. **Blocked Reed-Solomon encode spike.**
    Bit-reversed, matching slop's convention, holding a block in threadgroup memory across stages.
    *Machine: yes, GPU and CPU.* Roughly 1 GiB working sets and seconds per run, but the packed-CPU baseline is invalidated by a competing job, so this one wants the machine idle.
-   **Done**, and the bracket collapses to 1.72× against a packed CPU and 13.1× against slop's own encoder. See [spikes.md](spikes.md).
+   **Done**, and the bracket collapses to 1.72× against a packed CPU and 13.1× against slop's own encoder. See [2026-08-22-spikes.md](2026-08-22-spikes.md).
 3. **Constraint transpiler spike.**
    `SymbolicExpression` to MSL codegen or to a bytecode tape, tried on the two largest chips.
    *Machine: barely.* Mostly reading `sp1-core-machine` and writing codegen, ending with one GPU run to see whether register pressure or branch divergence kills the approach.
-   **Done**, on all 119 chips rather than two. Nothing is fatal; the obstacles are silent throughput loss on large kernels, fixed by chunking, and eight-minute compile times that force an offline build. See [spikes.md](spikes.md).
+   **Done**, on all 119 chips rather than two. Nothing is fatal; the obstacles are silent throughput loss on large kernels, fixed by chunking, and eight-minute compile times that force an offline build. See [2026-08-22-spikes.md](2026-08-22-spikes.md).
 4. **Refit the model and take the go/no-go.**
    Three measured numbers replace three brackets in `tools/fit_model.py`.
    *Machine: no.* Seconds of Python against the phase profile already on disk.
-   **Done**: 10.7× against the shipped prover, 3.9× against a packed one. Go against D7 as written, no against the fairer bar. See [spikes.md](spikes.md).
+   **Done**: 10.7× against the shipped prover, 3.9× against a packed one. Go against D7 as written, no against the fairer bar. See [2026-08-22-spikes.md](2026-08-22-spikes.md).
 5. **`MetalBackend`.**
    Allocator over page-aligned no-copy buffers, `DeviceMemory`, `GlobalBackend`.
    The device and pipeline plumbing already exists in `crates/sp1-metal-probes/src/gpu.rs`.
@@ -142,15 +142,15 @@ This matters because the same M4 Max runs long CPU proving jobs, and some of the
 6. **PCS opening and commit**, through the `C: MultilinearPcsProver` type parameter.
    Ships against unmodified upstream, which makes it the piece that survives version bumps.
    *Machine: yes, moderate.* The first step that builds against the full sp1-hypercube dependency tree, and it needs integration proofs rather than parity checks alone.
-   **Done.** The Merkle tree runs on the GPU through the `TensorCsProver` type parameter with no change to upstream, and committing fell from 36.8 to 4.1 thread-seconds. The encode stays on the CPU, measured at 1.02x against a packed baseline, where there is nothing to win. The opening protocol needed `slop-jagged` vendored, since `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself and there is no way in from outside; its sumcheck round and fold now run on the GPU with nothing copied in either direction, worth 27.29 s to 24.53 s on its own. See [backend.md](backend.md) §15 for the wrong conclusion that nearly stopped this, and why it was wrong.
+   **Done.** The Merkle tree runs on the GPU through the `TensorCsProver` type parameter with no change to upstream, and committing fell from 36.8 to 4.1 thread-seconds. The encode stays on the CPU, measured at 1.02x against a packed baseline, where there is nothing to win. The opening protocol needed `slop-jagged` vendored, since `ToMle::interleaved_mles` returns `Mle<F, CpuBackend>` in the trait itself and there is no way in from outside; its sumcheck round and fold now run on the GPU with nothing copied in either direction, worth 27.29 s to 24.53 s on its own. See [2026-08-22-backend.md](2026-08-22-backend.md) §15 for the wrong conclusion that nearly stopped this, and why it was wrong.
 7. **Vendor `sp1-hypercube`**, factor the GKR prover behind a trait mirroring the sumcheck backend pattern, and implement Metal GKR.
    The largest phase and the largest diff.
    *Machine: yes.* Heavy repeated compiles of a vendored fork, plus end-to-end shard proofs to validate each layer.
-   **Done.** The fork is in `crates/vendor`, the seam is `LogupRoundOps`, and a real proof runs its GKR rounds on Metal and verifies. 9.06× on a shard-sized layer in isolation. See [backend.md](backend.md).
+   **Done.** The fork is in `crates/vendor`, the seam is `LogupRoundOps`, and a real proof runs its GKR rounds on Metal and verifies. 9.06× on a shard-sized layer in isolation. See [2026-08-22-backend.md](2026-08-22-backend.md).
 8. **Zerocheck.**
    A device polynomial type implementing the three sumcheck backend traits, plus the transpiler extended across all thirty-odd chips.
    *Machine: yes.* Parity runs per chip, individually cheap and collectively a long loop.
-   **Done**, and two of the assumptions above it were wrong. The generator did not have to live outside the fork: the round prover is handed the AIR, and the crate already asks AIRs for their symbolic constraints, so nothing needs enumerating and no dependency cycle appears. Nor did compiling have to happen ahead of time: the eight minutes measured in the spike belongs to the elliptic-curve precompiles, at up to 178,000 constraint nodes, while the sixty-two core chips compile in 15.5 seconds between them and Metal caches the result on disk. Both column types are generated, so the first round moved too. Zerocheck fell from 21.9 to 10.7 thread-seconds. See [backend.md](backend.md).
+   **Done**, and two of the assumptions above it were wrong. The generator did not have to live outside the fork: the round prover is handed the AIR, and the crate already asks AIRs for their symbolic constraints, so nothing needs enumerating and no dependency cycle appears. Nor did compiling have to happen ahead of time: the eight minutes measured in the spike belongs to the elliptic-curve precompiles, at up to 178,000 constraint nodes, while the sixty-two core chips compile in 15.5 seconds between them and Metal caches the result on disk. Both column types are generated, so the first round moved too. Zerocheck fell from 21.9 to 10.7 thread-seconds. See [2026-08-22-backend.md](2026-08-22-backend.md).
 9. **Acceptance** on D7's canonical workload, the canonical classical-128 lift, measured with `tools/span_profile.py` against the CPU run already profiled.
    *Machine: yes, heavily.* The CPU reference took about 7.3 hours uncapped, so this wants the machine to itself for the better part of a day, and again once the first result raises questions.
 
@@ -165,7 +165,7 @@ The Metal kernels for Poseidon2, the GKR round, the zerocheck round, both folds,
 
 ## What would stop this
 
-- **A discrete GPU is a better answer to the same question.** D7's own stretch goal is to come within 5× of a single RTX 4090, and the projection in [measurements.md](measurements.md) puts a discrete card at roughly 10× using SP1's existing CUDA prover. If the goal is faster proofs rather than a Metal backend, that hardware wins without any of this work.
+- **A discrete GPU is a better answer to the same question.** D7's own stretch goal is to come within 5× of a single RTX 4090, and the projection in [2026-08-21-measurements.md](2026-08-21-measurements.md) puts a discrete card at roughly 10× using SP1's existing CUDA prover. If the goal is faster proofs rather than a Metal backend, that hardware wins without any of this work.
 - **Upstream may do the factoring first.** If `sp1-hypercube` puts GKR behind a backend trait in a later release, step 5 stops being a fork and the project gets materially cheaper. Check before starting.
 - **Upstream may pack the CPU prover.** That is the assumption the whole plan rests on, and it would take the projection from 10.7× back to 3.9×, the packed column of the table above.
 - **Maintenance.** A vendored fork of the hottest files in a fast-moving repository, pinned to `=6.4.0`, is a standing cost that does not appear anywhere in the three-to-four-month figure.

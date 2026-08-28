@@ -1,6 +1,6 @@
 # The GPU zerocheck computes wrong values for the recursion AIRs
 
-> **Fixed 2026-08-26.** Each generated kernel is now checked against the CPU on its first use and declined if it disagrees; four recursion AIRs (eight chip variants, both rounds each) decline themselves. Compressed proofs verify, and are measured in `results/compressed-mode.tsv`.
+> **Fixed 2026-08-26.** Each generated kernel is now checked against the CPU on its first use and declined if it disagrees; four recursion AIRs (eight chip variants, both rounds each) decline themselves. Compressed proofs verify, and are measured in `results/2026-08-27-m4-max-compressed-mode.tsv`.
 
 Found 2026-08-26 while chasing what looked like a hang. It is not a hang. It is a **correctness defect**, and it is the most serious thing this project has found.
 

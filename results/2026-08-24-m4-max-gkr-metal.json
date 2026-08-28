@@ -25,6 +25,6 @@
   "end_to_end_model": {
     "vs_shipped_cpu_serial": 6.97,
     "vs_shipped_cpu_pipelined": 8.15,
-    "note": "tools/fit_model.py over results/profile.json with gkr=9.06"
+    "note": "tools/fit_model.py over results/2026-08-24-m4-max-profile.json with gkr=9.06"
   }
 }

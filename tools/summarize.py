@@ -9,7 +9,7 @@ actually runs; where a phase maps onto several kernels, the slowest ratio wins,
 because a phase is not faster than its slowest part.
 
 Usage:
-    python3 tools/summarize.py results.json [--factors speedups.json]
+    python3 tools/summarize.py 2026-08-24-m4-max-results.json [--factors 2026-08-24-m4-max-speedups.json]
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def commit_factor(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("results", help="results.json written by `probes all --cpu`")
+    ap.add_argument("results", help="2026-08-24-m4-max-results.json written by `probes all --cpu`")
     ap.add_argument("--factors", help="write the per-phase speedup vector here")
     args = ap.parse_args()
 

@@ -2,7 +2,7 @@
 
 > **Fixed 2026-08-26.** One line: the GKR round's per-chip bindings are copied rather than lent.
 
-`results/precompile-scaling.tsv` recorded secp256k1 falling off a cliff between n=1000 and n=1500 — the CPU arm flat at 7.7 s, the Metal arm going from 2.15 s to not finishing in 900 — and called it a performance defect, "more than 115x *slower* than the CPU arm". It is not slow. It never finishes because it never produces a valid proof:
+`results/2026-08-24-m4-max-precompile-scaling.tsv` recorded secp256k1 falling off a cliff between n=1000 and n=1500 — the CPU arm flat at 7.7 s, the Metal arm going from 2.15 s to not finishing in 900 — and called it a performance defect, "more than 115x *slower* than the CPU arm". It is not slow. It never finishes because it never produces a valid proof:
 
 ```
 shard verification failed: invalid shard proof:

@@ -2,7 +2,7 @@
 
 > Measured 2026-08-27 on an M4 Max, machine idle, `SP1_METAL_COMPILE_LOG=1`.
 
-`results/kernel-compile-pathology.tsv` recorded that some chips take about ten minutes to compile and that node count does not predict which. This is what was done about it and what each option is worth.
+`results/2026-08-24-m4-max-kernel-compile-pathology.tsv` recorded that some chips take about ten minutes to compile and that node count does not predict which. This is what was done about it and what each option is worth.
 
 ## The compile times, measured per chip
 

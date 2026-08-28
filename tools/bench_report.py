@@ -7,7 +7,7 @@ run-to-run spread reaches 25% at six shards and about a third on zerocheck's
 own GPU time, so a single number from a single pair has misled this project
 more than once.
 
-Usage: tools/bench_report.py results/bench-standard.jsonl [--md]
+Usage: tools/bench_report.py results/2026-08-27-m4-max-bench-standard.jsonl [--md]
 """
 
 from __future__ import annotations

@@ -89,15 +89,15 @@ print(f"  CPU      {cpu:8.2f} s")
 print(f"  Metal    {gpu:8.2f} s")
 print(f"  speedup  {cpu/gpu:8.2f}x")
 print()
-# fib's own measured band on an M4 Max, from results/bench-standard.md and
-# results/bench-full.md: 3.70x at n=250,000, 5.69-5.72x at n=2,000,000, and
+# fib's own measured band on an M4 Max, from results/2026-08-27-m4-max-bench-standard.md and
+# results/2026-08-27-m4-max-bench-full.md: 3.70x at n=250,000, 5.69-5.72x at n=2,000,000, and
 # 5.68-5.84x at n=4,000,000. The suite as a whole spans a good deal wider than
 # this, but this script proves one guest, so this is the band that applies.
 lo, hi = 3.60, 5.95
 r = cpu / gpu
 if r < lo:
     print(f"  Below the {lo}x-{hi}x band fib measures on an M4 Max. Either this is a")
-    print(f"  smaller GPU, or something else was running. results/bench-standard.md")
+    print(f"  smaller GPU, or something else was running. results/2026-08-27-m4-max-bench-standard.md")
     print(f"  has the reference table.")
 elif r > hi:
     print(f"  Above the recorded band, which is good news and worth checking twice.")

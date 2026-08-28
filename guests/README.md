@@ -3,7 +3,7 @@
 The guest programs every measurement in this repository is taken against.
 Each reads its size from stdin as a `u32`, so a workload is made larger without changing its shape, and twenty of the twenty-two depend on no crate outside SP1's own — sixteen on `sp1-zkvm` alone and four on `sp1-lib` beside it.
 
-Four tiers. The first three span what the Metal backend is sensitive to rather than what zkVMs are usually benchmarked on — see [benchmark-plan.md](../knowledge/benchmark-plan.md). The fourth measures whole protocol operations that the Bitcoin and Ethereum communities actually pay for.
+Four tiers. The first three span what the Metal backend is sensitive to rather than what zkVMs are usually benchmarked on — see [2026-08-24-benchmark-plan.md](../knowledge/2026-08-24-benchmark-plan.md). The fourth measures whole protocol operations that the Bitcoin and Ethereum communities actually pay for.
 
 | directory | tier | crate and ELF | what it stresses |
 |---|---|---|---|
@@ -52,7 +52,7 @@ The patches are what make the numbers worth quoting rather than a detail of pack
 
 An unpatched pairing is a real number and the wrong one: nobody deploying a verifier would ship it, so quoting it at the communities that care about these statements would misrepresent what they would get.
 
-All three patch tags name SP1 **6.2.0** while this project is on **6.4.0**. They resolve anyway — cargo pulls `sp1-lib` 6.5.0 for them and the syscall ABI has not moved — and each guest's self-test checks bilinearity and non-degeneracy before it measures, so a version drift that broke the ABI would fail loudly rather than produce a fast proof of nothing. `knowledge/pairing-guests.md` records the test that established this.
+All three patch tags name SP1 **6.2.0** while this project is on **6.4.0**. They resolve anyway — cargo pulls `sp1-lib` 6.5.0 for them and the syscall ABI has not moved — and each guest's self-test checks bilinearity and non-degeneracy before it measures, so a version drift that broke the ABI would fail loudly rather than produce a fast proof of nothing. `knowledge/2026-08-27-pairing-guests.md` records the test that established this.
 
 ## Why `keccak` and `divrem` are slower the first time
 
@@ -123,5 +123,5 @@ crates/sp1-profile-host/target/release/sp1-profile-host \
 
 ## The shipped binary reproduces the published number
 
-`results/scaling-quiet.tsv` records 60.25 s on the CPU against 10.85 s on the GPU at a 4 MiB shard size, a ratio of 5.556x, measured against the fib guest before it was committed here.
+`results/2026-08-24-m4-max-scaling-quiet.tsv` records 60.25 s on the CPU against 10.85 s on the GPU at a 4 MiB shard size, a ratio of 5.556x, measured against the fib guest before it was committed here.
 Run against the committed ELF on a quiet machine, `tools/quickstart.sh` gives 59.84 s against 10.94 s, a ratio of 5.47x — inside 1.5% on every figure.

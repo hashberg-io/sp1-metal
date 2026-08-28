@@ -15,7 +15,7 @@
 # rebuilding is how you check the shipped one.
 set -u
 GUESTS=${1:-guests}
-OUT=${2:-results/scaling.tsv}
+OUT=${2:-results/scaling.tsv}   # a working path; file it under the results convention afterwards
 HOST=crates/sp1-profile-host/target/release/sp1-profile-host
 elf() { # guest_dir elf_name
   local built="$GUESTS/$1/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/acceptance-$2"

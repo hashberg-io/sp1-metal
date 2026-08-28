@@ -19,7 +19,7 @@ and the run then **stops making progress and never returns**.
 SP1 treats the failure as retryable, retries, and parks; nothing is printed after that line and no process exits.
 Only `RUST_LOG=error` shows the cause at all.
 
-This is the third time this project has met that disguise. `defect-plan.md` records the previous two — the secp256k1 "performance cliff" that was a wrong proof, and the transpiler defect that presented as a hang — and says so in as many words: a timeout here is SP1 retrying a proof that will not verify.
+This is the third time this project has met that disguise. `2026-08-26-defect-plan.md` records the previous two — the secp256k1 "performance cliff" that was a wrong proof, and the transpiler defect that presented as a hang — and says so in as many words: a timeout here is SP1 retrying a proof that will not verify.
 
 **Nothing invalid is accepted.** The failure is a proof being refused before anything downstream sees it, so what is at risk is a run finishing, not a statement being proved. For an unattended run that is the whole cost: it produces nothing and says nothing.
 
@@ -190,4 +190,4 @@ What is still open:
 Measured on an M4 Max, 16 cores / 137 GB, `RAYON_NUM_THREADS=12 GOMAXPROCS=12`, one run at a time on an otherwise idle machine, against `sp1-metal` v0.1.0 and SP1 6.4.0.
 The consumer-side record, including the logs, is held by the consumer and is not part of this repository.
 
-Separately, that full-scale run is the measurement [verdict.md](verdict.md) named as the one that would change it — wall clock on the canonical classical-128 lift, the workload D7's bar is written against and which had never been run on. It is **2.27×** end to end at the safe setting, against 6 h 28 m for the same pass on the CPU. It has since been written into the verdict, where it closes that item without moving the answer: the bar is 5x.
+Separately, that full-scale run is the measurement [2026-08-21-verdict.md](2026-08-21-verdict.md) named as the one that would change it — wall clock on the canonical classical-128 lift, the workload D7's bar is written against and which had never been run on. It is **2.27×** end to end at the safe setting, against 6 h 28 m for the same pass on the CPU. It has since been written into the verdict, where it closes that item without moving the answer: the bar is 5x.

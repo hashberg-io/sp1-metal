@@ -1,11 +1,11 @@
 # Five rounds of levers, in the order they were tried
 
-Written 2026-08-23, against the state after the three ports of `cpu-plan.md`: **17.0 s against a 63.6 s CPU arm, 3.74x**, 76 user and 50 system CPU-seconds, the device busy 27.5% of the proof.
+Written 2026-08-23, against the state after the three ports of `2026-08-23-cpu-plan.md`: **17.0 s against a 63.6 s CPU arm, 3.74x**, 76 user and 50 system CPU-seconds, the device busy 27.5% of the proof.
 Every figure below is measured on the acceptance workload — fibonacci n = 2,000,000, `SHARD_SIZE` 4 MiB, four shards — with the same binary switched.
 
 ## The correction this list turns on
 
-`cpu-plan.md` ruled the Reed-Solomon encode out on a probe reading **1.02x**, and the check made of that number — whether the encoder that ships is packed — came back yes, which seemed to settle it. It did not. That ratio is for **one butterfly stage** against a hand-written packed stage. `results/encode.json` holds three figures, and only the first two were ever quoted:
+`2026-08-23-cpu-plan.md` ruled the Reed-Solomon encode out on a probe reading **1.02x**, and the check made of that number — whether the encoder that ships is packed — came back yes, which seemed to settle it. It did not. That ratio is for **one butterfly stage** against a hand-written packed stage. `results/2026-08-24-m4-max-encode.json` holds three figures, and only the first two were ever quoted:
 
 | | ns per input cell | against what ships |
 |---|---:|---:|
@@ -55,7 +55,7 @@ A layer's round reduction and its fold are separate command buffers with a host 
 
 ### 5. The basefold Dense PCS proof — about 11 thread-seconds
 
-The remaining occupant of `prove evaluation claims`, and the reason that phase is still 3.83 s per shard against `cpu-plan.md`'s target of 2.5. Needs `slop-basefold-prover` vendored, which item 1 may need anyway — worth doing together if item 1 goes that way.
+The remaining occupant of `prove evaluation claims`, and the reason that phase is still 3.83 s per shard against `2026-08-23-cpu-plan.md`'s target of 2.5. Needs `slop-basefold-prover` vendored, which item 1 may need anyway — worth doing together if item 1 goes that way.
 
 **Estimated: 0.3-0.6 s.**
 
@@ -545,7 +545,7 @@ Written 2026-08-23, **re-measured on a quiet machine** after the first pass was 
 
 ## 1. What it costs to lend the device memory
 
-The full account is in `backend.md` §20. The short form: the jagged sumcheck waits four to six times its own GPU time, it is **not** queueing — a single shard with nothing to contend with waits just as long — and dispatching the same fold twice over the same buffers shows why. Identical kernel, identical 0.027 seconds of GPU time, 0.134 seconds of waiting the first time and 0.011 the second.
+The full account is in `2026-08-22-backend.md` §20. The short form: the jagged sumcheck waits four to six times its own GPU time, it is **not** queueing — a single shard with nothing to contend with waits just as long — and dispatching the same fold twice over the same buffers shows why. Identical kernel, identical 0.027 seconds of GPU time, 0.134 seconds of waiting the first time and 0.011 the second.
 
 **Nine tenths of what a large dispatch blocks for is the first use of its buffers.** Touching the pages from the host first does not help: what costs is the device's own access, and it is proportional to size, which is why it hid behind the small per-chip buffers of everything looked at before.
 
@@ -608,11 +608,11 @@ The acceptance envelope is **3.71x - 5.63x**, from 3.75x - 5.45x. What moved it 
 
 ## The fifth round: that last item, taken
 
-The item above was taken, and it is written up as [backend.md §21](backend.md#21-the-zerocheck-constraint-arithmetic-and-a-round-that-bought-knowledge-instead-of-seconds).
+The item above was taken, and it is written up as [2026-08-22-backend.md §21](2026-08-22-backend.md#21-the-zerocheck-constraint-arithmetic-and-a-round-that-bought-knowledge-instead-of-seconds).
 
 Two things were built: the three constraint bodies are now emitted line-interleaved so the scheduler has independent chains to overlap (`SP1_METAL_ZC_ILP`, on), and a column-major trace layout with its transpose kernels (`SP1_METAL_ZC_LAYOUT`, off).
 
-**Neither is separable from run-to-run noise in a real proof, and the wall clock did not move.** Zerocheck's own GPU time varies by about a third between runs; the medians differ by 3%. The measurements are in [`results/zerocheck-arithmetic.tsv`](../results/zerocheck-arithmetic.tsv).
+**Neither is separable from run-to-run noise in a real proof, and the wall clock did not move.** Zerocheck's own GPU time varies by about a third between runs; the medians differ by 3%. The measurements are in [`results/2026-08-24-m4-max-zerocheck-arithmetic.tsv`](../results/2026-08-24-m4-max-zerocheck-arithmetic.tsv).
 
 The column-major layout is the more instructive half. The probe measured it at **3.51×** — same kernel, same data, layout the only variable — and it delivered nothing, because the probe reads three random columns of sixty-four where a real constraint DAG reads most of the row. A synthetic probe can measure a worse thing than the one it stands in for, and nothing inside the probe reveals it.
 
