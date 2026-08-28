@@ -10,7 +10,18 @@ The file name is what does: `-m5-max` is this machine, and the unsuffixed files 
 
 - **`bench-standard-m5-max`** — usable. 204 timed runs, 34 points, no failures.
 - **`bench-full-m5-max`** — usable with a caveat. 366 timed runs, 56 points, six failures, every one of them the deliberately out-of-range `nodebound=1e6` configuration that fails the same way on the M4. It ran warmer than the standard tier and reads a few per cent slow: `fib/standard` on the GPU arm is 9.20 s in the standard tier and 10.11 s here, against 8.87 s measured by hand on a cold machine.
-- **`bench-apps-m5-max`** — **not usable, and quoted nowhere.** Thermally contaminated from end to end. It is kept because the record of a ruined run is worth more than its absence, and because the thermal fields in it are what diagnosed the problem. The application statements need re-running before there is an M5 figure for them.
+- **`bench-apps-m5-max-thermally-contaminated`** — **not usable, and quoted nowhere.** The first attempt at the application tier, thermally contaminated from end to end. It is kept under that name because the record of a ruined run is worth more than its absence, and because the thermal fields in it are what diagnosed the problem. `bench-apps-m5-max` is the re-run, taken under the longer pauses and the `nominal` gate.
+
+Three points from the two microbenchmark tiers were re-taken cool to check them, and they stand.
+Their absolute times run up to a tenth slow in the full tier, but the speedups those times produce are within 4.5% of the cool readings, because mild heat warms both arms together and cancels in the ratio:
+
+| point            | cool  | standard tier   | full tier       |
+| ---------------- | ----- | --------------- | --------------- |
+| fib/standard     | 5.54x | 5.79x (+4.5%)   | 5.45x (-1.6%)   |
+| bits/large       | 6.06x | 5.91x (-2.4%)   | 5.97x (-1.4%)   |
+| sha256/standard  | 4.03x | 3.96x (-1.7%)   | 3.99x (-0.8%)   |
+
+The application tier failed where these did not because its heat was severe enough to hurt the two arms *unequally* — 39% on one CPU arm against 3% on its GPU arm — and an error like that does not cancel.
 
 ## The headline
 
