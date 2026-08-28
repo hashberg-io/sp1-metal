@@ -1,7 +1,9 @@
 # An intermittent wrong proof, and the run that never returns
 
-Found 2026-08-28 by a consumer — the ProofofSeed SNARK lifter — proving leaf after leaf through this backend at `v0.1.0` against SP1 6.4.0.
-It is not reproduced from inside this repository, and the evidence below is that consumer's.
+Found 2026-08-28 by a consumer — the ProofofSeed SNARK lifter — proving leaf after leaf through this backend at `v0.1.0` against SP1 6.4.0, and reproduced here the same day.
+
+The first half of this note is the consumer's evidence and the reasoning done from it, kept as it was written so the guesses can be read against the answer.
+[Reproduced, and localised to the leaves](#reproduced-and-localised-to-the-leaves) is where it turns into a measurement.
 
 ## What happens
 
@@ -41,6 +43,8 @@ It appears in both core proving and the recursion layer.
 - **Reproduces only in a process that proves many times.** Every failure came from a driver making dozens of sequential `prove` calls; five single-proof runs in the same session were clean. That points at state carried across proofs rather than at a kernel.
 
 ## What is suspected
+
+> Written before the reproduction, and right. The tree was where it was, though not for the reason that made it the best guess.
 
 **`MERKLE`** — the trace commitment's Merkle tree.
 
