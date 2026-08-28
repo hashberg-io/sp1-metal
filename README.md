@@ -76,7 +76,7 @@ There is no CI. The tests worth running need a real GPU, which hosted runners do
 
 ```sh
 python3 tools/check_consistency.py                       # the docs against the code
-cargo test --workspace --release                         # 20, includes GPU parity
+cargo test --workspace --release                         # 23, includes GPU parity
 cargo run --release --bin probes -- check                # every kernel against a packed CPU
 ( cd crates/sp1-metal-prover  && cargo test --release )  # 8, the GKR and transition kernels
 ( cd crates/vendor/slop-jagged && cargo test --release )  # 15, includes upstream's own suite
