@@ -103,6 +103,7 @@ Each phase below also has a runtime switch, and most accept `=check` to run both
   `MetalMerkleProver`: the tensor commitment with its Merkle tree on the GPU.
   Committing a shard's traces is the largest single thing the prover does — 47.9 thread-seconds of a 52.8 second proof, measured — and nearly all of it is one tree over the encoded rows.
   Openings stay on the CPU: `prove_openings_at_indices` walks the digest layers and `compute_openings_at_indices` copies rows, neither of which is worth a dispatch, and delegating them keeps the prover data exactly the type upstream builds.
+  `SP1_METAL_MERKLE=check` builds both trees and compares every digest of every layer, which is the phase's answer to the seven other phases that could already do this; a commitment also ends the hand-off window, dropping any buffer an encode left for a Merkle kernel that never came for it.
   Switch: `SP1_METAL_MERKLE`.
 
 - **`src/prover/zerocheck/counters.rs`.**
