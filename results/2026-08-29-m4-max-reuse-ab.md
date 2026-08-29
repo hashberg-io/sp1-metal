@@ -55,3 +55,10 @@ Over 10 proofs with the hand-off on.
 | round arrays | 2850 | 950 | 0 | 0 |
 
 Over 10 proofs with the hand-off on.
+
+## What this means for the figures already recorded
+
+Every measurement in `results/` taken before this one ran with the hand-off on, because the benchmark suite does not set `SP1_METAL_REUSE` and so records whatever the default was at the time. The default is now off, which makes those figures measurements of a configuration that is no longer shipped.
+
+They stand, and this is the measurement that says so: `btc-headers/standard`, `divrem/large`, `fib/large` are points of the suite itself, and none of them moved by more than the scatter of a single arm across repeats. Re-taking the suite would cost hours and, on this evidence, move nothing.
+

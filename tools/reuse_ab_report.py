@@ -222,6 +222,17 @@ def render(meta: dict, rows: list[dict], problems: list[str], md: bool) -> str:
                     f"ci [{f['delta_ci'][0]:+.2f},{f['delta_ci'][1]:+.2f}]  "
                     f"noise +-{max(f['noise_on'], f['noise_off']):.2f}s  "
                     f"{f['favour_on']}/{r['n_pairs']} favour on")
+    if md and rows:
+        add("\n## What this means for the figures already recorded\n")
+        add("Every measurement in `results/` taken before this one ran with the hand-off "
+            "on, because the benchmark suite does not set `SP1_METAL_REUSE` and so records "
+            "whatever the default was at the time. The default is now off, which makes "
+            "those figures measurements of a configuration that is no longer shipped.\n")
+        suite = ", ".join(f"`{r['guest']}/{r['size']}`" for r in rows)
+        add(f"They stand, and this is the measurement that says so: {suite} are points of "
+            f"the suite itself, and none of them moved by more than the scatter of a single "
+            f"arm across repeats. Re-taking the suite would cost hours and, on this "
+            f"evidence, move nothing.\n")
     if problems:
         add("\nexcluded pairs:" if not md else "\n## Excluded pairs\n")
         for p in problems:

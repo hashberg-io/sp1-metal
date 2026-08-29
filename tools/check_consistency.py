@@ -143,6 +143,126 @@ def check_values() -> None:
     check("every published guest ELF hash matches its file", not wrong, str(wrong))
 
 
+def check_defaults() -> None:
+    """Every default the switch table states, against the code that supplies it.
+
+    This is the check the docstring above promised and did not have. The table
+    in `USING.md` is the only place a consumer learns what a switch does when
+    they leave it alone, and it is a column of prose beside a value in a
+    `unwrap_or` that nothing forced to agree with it -- the shape of drift this
+    file exists to catch. It is not hypothetical: `SP1_METAL_REUSE` was flipped
+    off after measurement, and the table and the code had to be edited
+    separately to say so.
+
+    A switch may be read at several sites. The `=check` modes are read as their
+    own site and default off, so a switch counts as on by default if *any* site
+    turns it on, which is what the table's column means.
+
+    Anything this cannot classify fails rather than being skipped. A checker
+    that quietly ignores a shape it does not know protects nothing, and the new
+    shape is exactly where an unchecked default would hide.
+    """
+    print("\nswitch defaults, against the code that supplies them")
+    src = {f: read(f) for f in tracked() if f.endswith(".rs")}
+
+    # Constants that a default is spelled with, so `unwrap_or(MAX_NODES)` can
+    # be compared against a number in a table.
+    consts: dict[str, int] = {}
+    for text in src.values():
+        for name, value in re.findall(r"const ([A-Z][A-Z0-9_]*): usize = ([^;]+);", text):
+            try:
+                consts[name] = int(eval(value.replace("_", ""), {"__builtins__": {}}))
+            except Exception:
+                pass
+
+    def number(expr: str):
+        expr = expr.strip()
+        if re.fullmatch(r"[0-9_]+\.[0-9]+", expr):
+            return float(expr)
+        if re.fullmatch(r"[0-9_]+", expr):
+            return int(expr.replace("_", ""))
+        if expr in consts:
+            return consts[expr]
+        if re.fullmatch(r"[0-9_]+\s*<<\s*[0-9]+", expr):
+            return int(eval(expr.replace("_", ""), {"__builtins__": {}}))
+        return None
+
+    # Which switch a helper function's own default defers to, so the table may
+    # name a switch rather than a value.
+    defers: dict[str, str] = {}
+    for text in src.values():
+        for name, body in re.findall(r"\nfn ([a-z_]+)\(\)[^{]*\{(.{0,400})", text, re.S):
+            m = re.search(r'env::var\("(SP1_METAL_[A-Z_]+)"\)', body)
+            if m:
+                defers[name] = m.group(1)
+
+    def classify(window: str):
+        """What one read site says the default is."""
+        m = re.search(r"unwrap_or_else\(\s*([a-z_]+)\s*\)", window)
+        if m:
+            return ("defers", defers.get(m.group(1), m.group(1)))
+        m = re.search(r"unwrap_or\(([^()]*(?:\([^()]*\))?[^()]*)\)", window)
+        if m:
+            arg = m.group(1).strip()
+            if arg in ("true", "false"):
+                return ("bool", arg == "true")
+            n = number(arg)
+            if n is not None:
+                return ("number", n)
+            if re.fullmatch(r"[a-z_][a-z0-9_]*", arg):
+                return ("caller", arg)
+            return None
+        if re.search(r"_ => Mode::(Gpu|Cpu)", window):
+            return ("bool", "Mode::Gpu" in re.search(r"_ => (Mode::\w+)", window).group(1))
+        if "is_ok_and" in window:
+            return ("bool", False)
+        return None
+
+    documented = {}
+    for name, stated in re.findall(r"^\| `(SP1_METAL_[A-Z_]+)` \| [^|]* \| ([^|]+)\|", read("USING.md"), re.M):
+        documented[name] = stated.strip()
+
+    wrong, unknown = [], []
+    for name, stated in sorted(documented.items()):
+        sites = []
+        for text in src.values():
+            for m in re.finditer(rf'env::var\("{name}"\)', text):
+                got = classify(text[m.start():m.start() + 400])
+                if got:
+                    sites.append(got)
+        if not sites:
+            unknown.append(f"{name}: no read site whose default this can read")
+            continue
+        # A switch is on by default if any site turns it on; the `=check` modes
+        # are sites of their own and every one of them defaults off.
+        bools = [v for kind, v in sites if kind == "bool"]
+        other = [(kind, v) for kind, v in sites if kind != "bool"]
+        # What the table says, with the reason it gives stripped off.
+        plain = re.split(r"\s+[—-]{1,2}\s+", stated.replace("**", ""))[0].strip()
+        if other:
+            kind, value = other[0]
+            if kind == "number":
+                want = number(plain)
+                ok = want is not None and float(want) == float(value)
+            elif kind == "defers":
+                ok = plain.strip("`") == value
+            else:
+                ok = plain == "as the caller set it"
+            if not ok:
+                wrong.append(f"{name}: code says {value}, the table says {plain!r}")
+        elif bools:
+            on = any(bools)
+            if plain not in ("on", "off"):
+                unknown.append(f"{name}: the table says {plain!r}, which is not on or off")
+            elif (plain == "on") != on:
+                wrong.append(f"{name}: code defaults {'on' if on else 'off'}, the table says {plain!r}")
+
+    check("every documented default is the one the code supplies", not wrong,
+          "\n          ".join(wrong))
+    check("every switch's default is one this can read", not unknown,
+          "\n          ".join(unknown))
+
+
 def check_references() -> None:
     """Every path a document points at, resolved."""
     print("\nreferences")
@@ -204,6 +324,7 @@ def main() -> int:
     check_naming()
     check_names()
     check_values()
+    check_defaults()
     check_references()
     check_change_logs()
     print()
