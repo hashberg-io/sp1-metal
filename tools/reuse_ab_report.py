@@ -108,8 +108,74 @@ def analyse(runs: list[dict]) -> tuple[list[dict], list[str]]:
             }
         row["kept"] = statistics.median([p[0]["kept_total"] for p in pairs])
         row["collided"] = sum(p[0].get("collided_total", 0) for p in pairs)
+        # The other half of the trade. An orphan is an entry left on a pointer
+        # whose allocation is about to be freed: bounded to one commitment by
+        # `clear`, but it is the state the wrong proof was found in.
+        traffic = collections.defaultdict(collections.Counter)
+        for on, _ in pairs:
+            for what, v in on.get("handoff", {}).items():
+                traffic[what].update(v)
+        row["traffic"] = {w: dict(c) for w, c in traffic.items()}
         out.append(row)
     return out, problems
+
+
+def verdict(rows: list[dict]) -> list[str]:
+    """What the numbers support, worked out rather than asserted.
+
+    Two things have to hold before a saving is real. The wall clock has to
+    separate from zero by more than the same arm's own scatter -- otherwise the
+    difference is one this workload cannot resolve. And `blocked` has to move
+    the same way everywhere, because mapping cost is the only channel the
+    hand-off acts through: a mechanism that helps one workload and hurts
+    another is not a mechanism.
+    """
+    L = []
+    real = []
+    for r in rows:
+        w = r.get("wall_s")
+        if not w:
+            continue
+        clears_zero = w["delta_ci"][0] > 0 or w["delta_ci"][1] < 0
+        clears_noise = abs(w["delta_median"]) > max(w["noise_on"], w["noise_off"])
+        if clears_zero and clears_noise:
+            real.append(r)
+    signs = {r["guest"]: (1 if r["blocked_s"]["delta_median"] > 0 else -1)
+             for r in rows if r.get("blocked_s")}
+    if not real:
+        L.append(f"No workload shows a wall-clock difference this measurement can tell "
+                 f"from zero: every interval spans it, and every median difference is "
+                 f"smaller than the scatter of the same arm across repeats.")
+    else:
+        L.append(f"A wall-clock difference clears both zero and the noise floor on: "
+                 f"{', '.join(r['guest'] + '/' + r['size'] for r in real)}.")
+    if len(set(signs.values())) > 1:
+        up = sorted(g for g, s in signs.items() if s > 0)
+        down = sorted(g for g, s in signs.items() if s < 0)
+        L.append(f"The mechanism disagrees with itself. `blocked` is the only channel the "
+                 f"hand-off can act through, and it favours keeping buffers on "
+                 f"{', '.join(up)} while favouring dropping them on {', '.join(down)}. "
+                 f"A saving that changes sign between workloads is not a saving.")
+    # Per table, never pooled. The two have very different orphan rates, and a
+    # combined figure is the busier and cleaner table diluting the one that
+    # actually carries the hazard -- which is the table the wrong proof came
+    # from. An aggregate that hides where a fault lives is worse than none.
+    totals = collections.defaultdict(collections.Counter)
+    for r in rows:
+        for what, c in r.get("traffic", {}).items():
+            totals[what].update(c)
+    for what, c in sorted(totals.items()):
+        kept, orph, coll = c.get("kept", 0), c.get("orphaned", 0), c.get("collided", 0)
+        if not kept:
+            continue
+        if orph:
+            L.append(f"Against that, the {what} table left {orph} of {kept} hand-offs "
+                     f"unclaimed at the end of a commitment -- one in {kept / orph:.0f} -- "
+                     f"each a pointer key on an allocation about to be freed. {coll} were "
+                     f"still there when that address came back.")
+        else:
+            L.append(f"The {what} table left none of its {kept} hand-offs unclaimed.")
+    return L
 
 
 def render(meta: dict, rows: list[dict], problems: list[str], md: bool) -> str:
@@ -122,6 +188,8 @@ def render(meta: dict, rows: list[dict], problems: list[str], md: bool) -> str:
             f"measured {meta.get('ts', '')[:10]}.\n")
     else:
         add(f"SP1_METAL_REUSE A/B -- git {meta.get('git')} -- {meta.get('host')}")
+    for line in verdict(rows):
+        add(("\n" + line) if md else ("\n  " + line))
     for r in rows:
         w, b = r.get("wall_s"), r.get("blocked_s")
         if not w:
@@ -138,8 +206,12 @@ def render(meta: dict, rows: list[dict], problems: list[str], md: bool) -> str:
                     f"{f['delta_ci'][0]:+.2f} to {f['delta_ci'][1]:+.2f} s | "
                     f"±{max(f['noise_on'], f['noise_off']):.2f} s | "
                     f"{f['favour_on']}/{r['n_pairs']} |")
-            add(f"\n{int(r['kept'])} buffers kept per proof with the hand-off on; "
-                f"{r['collided']} of them landed on an address a dead entry still held.")
+            add(f"\n| hand-off table | kept | taken | left unclaimed | on a dead entry's address |")
+            add(f"|---|---|---|---|---|")
+            for what, c in sorted(r.get("traffic", {}).items()):
+                add(f"| {what} | {c.get('kept', 0)} | {c.get('taken', 0)} | "
+                    f"{c.get('orphaned', 0)} | {c.get('collided', 0)} |")
+            add(f"\nOver {r['n_pairs']} proofs with the hand-off on.")
         else:
             add(f"\n{r['guest']}/{r['size']}  ({r['n_pairs']} pairs, {int(r['kept'])} hand-offs a proof)")
             for label, f in (("wall   ", w), ("blocked", b), ("gpu    ", r.get("gpu_s"))):

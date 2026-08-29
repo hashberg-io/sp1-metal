@@ -19,5 +19,6 @@ A run in progress writes to an undated working path — `tools/bench_suite.py` d
 - **`*-bench-{smoke,standard,full,apps}.{jsonl,md}`** — the benchmark suite's tiers. The JSON Lines file is one object per run and is what everything else is derived from; the `.md` beside it is `tools/bench_report.py` output.
 - **`*-comparison.md`** — the two machines against each other.
 - **`*-spotcheck-*.jsonl`** — a handful of points re-taken to check a question about a tier, rather than a tier of its own.
+- **`*-reuse-ab.{jsonl,md}`** — one switch measured against itself, both arms the GPU path through one binary. `tools/reuse_ab.py` takes it, `tools/reuse_ab_report.py` renders it, and each arm records the counters that prove the switch reached the prover.
 - **`*.tsv`, `*.json`** — the probe suite, the scaling ladders, and the phase model's inputs, from the work that preceded the backend.
 - **`*.md` with a defect's name** — a reproduction and what it turned out to be.
