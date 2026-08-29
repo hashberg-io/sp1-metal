@@ -105,7 +105,7 @@ Every switch is read once, on first use. Booleans are on unless the table says o
 | `SP1_METAL_UPLOAD_CACHE` | reuse of device buffers across dispatches | on |
 | `SP1_METAL_UPLOAD_LEND` | lending host pages to the device rather than copying | on |
 | `SP1_METAL_UPLOAD_FRESH` | a private buffer for every upload, sharing nothing | off — a diagnostic |
-| `SP1_METAL_REUSE` | handing a buffer from the kernel that wrote an array to the one that reads it | on |
+| `SP1_METAL_REUSE` | handing a buffer from the kernel that wrote an array to the one that reads it | off — measured, no gain worth its hazard |
 | `SP1_METAL_ZC_ILP` | interleaved constraint bodies in the generated kernel | on |
 | `SP1_METAL_MIN_ENTRIES` | cell count below which work stays on the CPU | 16384 |
 | `SP1_METAL_MIN_LAYER` | GKR layer size below which the layer stays on the CPU | 64 |

@@ -170,7 +170,7 @@ What is still not settled is the consumer's own workload, which has many more sh
 ### What is left
 
 - **Run it on the consumer's statement.** That is the workload the rate was measured on, and it is the only one that can retire the workaround for them.
-- **Decide whether the hand-off is worth keeping at all.** It exists so that the largest allocation in a proof is not wired into a Metal buffer twice, and the module's own note says that effect is "small enough that it needs an A/B on one binary to be seen at all". If that holds, `SP1_METAL_REUSE` defaulting to off would remove this hazard class rather than bound it, which is a better answer than the one above. The A/B needs an idle machine and has not been taken.
+- ~~**Decide whether the hand-off is worth keeping at all.**~~ Decided by measuring it: `SP1_METAL_REUSE` now defaults to off, so the hazard class is removed rather than bounded. Thirty pairs on the three workloads whose mapping wait is the largest share of their proof — where keeping a buffer has the most it could possibly save — left every wall-clock difference inside the scatter of the same arm across repeats, and left the mapping wait itself favouring the hand-off on two of the three and favouring its absence on the third. A saving that changes sign between workloads is not a saving. The module's guess that the effect was "small enough that it needs an A/B on one binary to be seen at all" was generous: it could not be seen with one. `results/2026-08-29-m4-max-reuse-ab.md` is the measurement, and the switch still turns it back on for anyone who wants it.
 
 ## What a fix would need
 

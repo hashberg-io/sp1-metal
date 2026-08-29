@@ -27,7 +27,11 @@
 //! this table, being thread-local, cannot bridge. Both are ordinary, and both
 //! leave an entry sitting on a pointer that will be freed. Measured over twelve
 //! compressed `fib` proofs in one process: 265 hand-offs kept, 261 taken, four
-//! orphaned — about one in seventy, or one every three proofs.
+//! orphaned — about one in seventy, or one every three proofs. That was the
+//! gentler workload: thirty core proofs of larger guests later gave 94 orphans
+//! in 1,560 hand-offs, one in seventeen, and two to four in *every* proof
+//! rather than one in every third. The rate belongs to the workload, and the
+//! reassuring figure was the smallest one measured.
 //!
 //! So three things bound it. A producer replaces any entry with its own key
 //! rather than queueing behind it, [`take`] takes the newest match rather than
@@ -36,6 +40,11 @@
 //! buffer here is immediately followed by the commit that wants it. What
 //! remains is one commitment's worth of exposure rather than an unbounded
 //! amount, which is what the paragraph above used to assert without cause.
+//!
+//! And then a fourth thing: it is off unless asked for. The exposure above was
+//! being bounded on behalf of a saving that turned out not to exist, and the
+//! codeword table produces it at about one hand-off in seventeen. See
+//! [`reusing`] for the measurement that settled it.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -110,13 +119,22 @@ pub static ROUND_ARRAYS: Reuse = Reuse::new();
 
 /// Whether buffers are kept for a second use, read once.
 ///
-/// On so that they are; the switch exists because the effect of not mapping the
-/// same allocation twice is small enough that it needs an A/B on one binary to
-/// be seen at all.
+/// Off, because the A/B the note above used to ask for was taken and found
+/// nothing to keep. Thirty pairs over the three workloads whose mapping wait
+/// is the largest share of their proof — which is where this has the most it
+/// could possibly save — put every wall-clock difference inside the scatter of
+/// the same arm across repeats, and put the mapping wait itself on both sides
+/// of zero: it favoured keeping buffers on two of the three and dropping them
+/// on the third. A saving that changes sign between workloads is not one.
+/// `results/2026-08-29-m4-max-reuse-ab.md` is the measurement.
+///
+/// `SP1_METAL_REUSE=1` still turns it on. Nothing below has changed; what
+/// changed is that the exposure is opt-in rather than paid by default for a
+/// return that could not be measured.
 #[must_use]
 pub fn reusing() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SP1_METAL_REUSE").map(|v| v != "0").unwrap_or(true))
+    *ON.get_or_init(|| std::env::var("SP1_METAL_REUSE").map(|v| v != "0").unwrap_or(false))
 }
 
 /// How many hand-offs may be in flight at once. A commitment encodes several
@@ -134,6 +152,16 @@ pub fn keep(bytes: *const u8, len: usize, buffer: &Buffer) {
     if !reusing() {
         return;
     }
+    keep_now(bytes, len, buffer);
+}
+
+/// The table itself, with the switch already decided.
+///
+/// Split out so the tests below can exercise the eviction and ordering rules
+/// without depending on how [`reusing`] happens to be answering: those rules
+/// are what must hold whenever the table is used at all, and a test that
+/// silently does nothing when the default flips is worse than no test.
+fn keep_now(bytes: *const u8, len: usize, buffer: &Buffer) {
     let key = (bytes as usize, len);
     HANDOFF.with(|h| {
         let mut h = h.borrow_mut();
@@ -197,8 +225,8 @@ mod tests {
         let stale = device.new_buffer(64, MTLResourceOptions::StorageModeShared);
         let live = device.new_buffer(128, MTLResourceOptions::StorageModeShared);
         let addr = 0x4000 as *const u8;
-        keep(addr, 32, &stale);
-        keep(addr, 32, &live);
+        keep_now(addr, 32, &stale);
+        keep_now(addr, 32, &live);
         let got = take(addr, 32).expect("a buffer was kept for these bytes");
         assert_eq!(got.length(), 128, "the stale buffer was handed out");
         assert!(take(addr, 32).is_none(), "the stale buffer outlived the take");
@@ -215,7 +243,7 @@ mod tests {
         };
         clear();
         let buffer = device.new_buffer(64, MTLResourceOptions::StorageModeShared);
-        keep(0x8000 as *const u8, 16, &buffer);
+        keep_now(0x8000 as *const u8, 16, &buffer);
         clear();
         assert!(take(0x8000 as *const u8, 16).is_none(), "an orphan survived the commitment");
     }
@@ -230,13 +258,34 @@ mod tests {
         clear();
         let buffer = device.new_buffer(64, MTLResourceOptions::StorageModeShared);
         for i in 0..SLOTS + 4 {
-            keep((0x10000 + i * PAGE_STRIDE) as *const u8, 16, &buffer);
+            keep_now((0x10000 + i * PAGE_STRIDE) as *const u8, 16, &buffer);
         }
         let newest = (0x10000 + (SLOTS + 3) * PAGE_STRIDE) as *const u8;
         assert!(take(newest, 16).is_some(), "the newest hand-off was evicted");
         let oldest = 0x10000 as *const u8;
         assert!(take(oldest, 16).is_none(), "an entry survived past the table's size");
         clear();
+    }
+
+    /// The hand-off is opt-in, because measurement found it saving nothing that
+    /// could be told from zero while leaving a pointer key on a freed
+    /// allocation about one hand-off in seventeen. This pins the default, which
+    /// is otherwise a single word that any edit could flip back unnoticed.
+    ///
+    /// Skipped where the environment has an opinion, since `reusing` reads it.
+    #[test]
+    fn the_hand_off_is_off_unless_it_is_asked_for() {
+        if std::env::var("SP1_METAL_REUSE").is_ok() {
+            return;
+        }
+        assert!(!reusing(), "the hand-off defaulted back on");
+        let Some(device) = Device::system_default() else {
+            return;
+        };
+        clear();
+        let buffer = device.new_buffer(64, MTLResourceOptions::StorageModeShared);
+        keep(0xc000 as *const u8, 16, &buffer);
+        assert!(take(0xc000 as *const u8, 16).is_none(), "a buffer was kept anyway");
     }
 
     /// Distinct made-up addresses for the eviction test. Nothing dereferences
