@@ -169,7 +169,32 @@ What is still not settled is the consumer's own workload, which has many more sh
 
 ### What is left
 
-- **Run it on the consumer's statement.** That is the workload the rate was measured on, and it is the only one that can retire the workaround for them.
+- ~~**Run it on the consumer's statement.**~~ **Done, 2026-09-08, by the consumer.** Their results are below.
+
+### The consumer's statement, on the fix
+
+The reporter of this defect ran their own workload — the one the 1-in-28 rate was measured on, single-response leaf proofs of a ZKBoo lift, driven as dozens of sequential `prove` calls through one client — against `main` at `cab9ba3`, on the same M4 Max, `RAYON_NUM_THREADS=12 GOMAXPROCS=12`, one run at a time.
+
+| run | configuration | proofs | tree disagreements | mean |
+|---|---|---:|---:|---:|
+| 1 | defaults (`REUSE` off), `MERKLE=check` | 64 | **0** | 59.53 s |
+| 2 | `SP1_METAL_REUSE=1`, `MERKLE=check` | 64 | **0** | 58.66 s |
+
+**Run 2 is the one that tests this fix.** With `REUSE` off the hand-off never happens, so the fault has no supply and a clean run says only that the new default is safe. Run 1 is what retires the workaround for them; run 2 is what exercises the repaired table.
+
+⚠️ **Its power, stated rather than implied.** At 1-in-28, 64 proofs predict 2.29 failures, so seeing none has probability **10.1%** if the fix did nothing. That is evidence at the ten-percent level, not a demonstration; 84 proofs would reach 5% and 129 would reach 1%. It is complementary to the 400-proof soak above rather than a repeat of it: that one is far stronger but on `fib`, and this one is on the workload whose shard count and hand-off rate produced the original report. The two runs must not be pooled — they answer different questions.
+
+They have retired `SP1_METAL_MERKLE=0` and now run the full path. What it was costing them, measured on the same binaries the same day:
+
+| workload | Merkle off | all on | speedup |
+|---|---:|---:|---:|
+| hash-statement leaf | 58.35 s | 23.13 s | 2.52× |
+| elliptic-curve leaf | 3,919.77 s | 1,333.82 s | 2.94× |
+| aggregation root | 15,476.43 s | 5,911.38 s | 2.62× |
+
+🪤 Worth recording for anyone quoting a single number for this backend: **three workloads on one machine and one binary gave three different speedups, a 16% spread.** A speedup here belongs to a workload, not to a machine.
+
+One process note, since it cost them weeks: they were pinned at `v0.1.0` and never re-fetched, so they paid the 2.5× workaround for a defect that had been fixed on `main` for some time — and did not see this file's request addressed to them. A consumer reading their own copy of a defect note will not learn that it has been repaired.
 - ~~**Decide whether the hand-off is worth keeping at all.**~~ Decided by measuring it: `SP1_METAL_REUSE` now defaults to off, so the hazard class is removed rather than bounded. Thirty pairs on the three workloads whose mapping wait is the largest share of their proof — where keeping a buffer has the most it could possibly save — left every wall-clock difference inside the scatter of the same arm across repeats, and left the mapping wait itself favouring the hand-off on two of the three and favouring its absence on the third. A saving that changes sign between workloads is not a saving. The module's guess that the effect was "small enough that it needs an A/B on one binary to be seen at all" was generous: it could not be seen with one. `results/2026-08-29-m4-max-reuse-ab.md` is the measurement, and the switch still turns it back on for anyone who wants it.
 
 ## What a fix would need
@@ -180,10 +205,15 @@ The three below were written before any of the work above. The first and the thi
 - ~~**Look for state carried across `prove` calls**~~, since a single-proof process does not reproduce it. This is where the hand-off table was found. It is thread-local state keyed on a raw pointer, and pointers are precisely what a long-running process hands out again.
 - ~~**Fail loudly.**~~ Done, on the harness side: `--timeout SECS` is a watchdog on its own OS thread, because the runtime is what has stopped turning. Nothing was added inside the backend, which never learns that a proof it contributed to was refused.
 
-What is still open:
+What was still open when that list was written, and what happened to it:
 
-- **Reproduce it here.** 165 compressed proofs at the defaults did not, so the workload has to change rather than the count: more shards, more concurrent threads, or the consumer's own statement.
-- **Run a long soak under `SP1_METAL_MERKLE=check`.** That is the instrument the first item built, and it is the only thing that can say whether the tree is ever wrong rather than whether a proof is ever refused.
+- ~~**Reproduce it here.**~~ Done, and it is [Reproduced, and localised to the leaves](#reproduced-and-localised-to-the-leaves) above. 165 proofs at the defaults had not; 93 under `SP1_METAL_MERKLE=check` did not either, and the 94th disagreed. The count was not the problem — the instrument was.
+- ~~**Run a long soak under `SP1_METAL_MERKLE=check`.**~~ Done twice: the 100-proof run that caught it, and the 400-proof run that showed the fix holding.
+
+🪤 **Both of these were completed by work described earlier in this same file, and this list went
+on saying they were open.** A section headed "what is still open" is a claim about the world, and
+nothing re-checks it; it is worth reading a defect note's own status list against its own body
+before trusting it. Corrected 2026-09-08.
 
 ## Provenance
 
